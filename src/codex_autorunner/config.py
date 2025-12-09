@@ -29,6 +29,11 @@ DEFAULT_CONFIG = {
         "auto_commit": False,
         "commit_message_template": "[codex] run #{run_id}",
     },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 4173,
+        "auth_token": None,
+    },
 }
 
 
@@ -50,6 +55,9 @@ class Config:
     runner_max_wallclock_seconds: Optional[int]
     git_auto_commit: bool
     git_commit_message_template: str
+    server_host: str
+    server_port: int
+    server_auth_token: Optional[str]
 
     def doc_path(self, key: str) -> Path:
         return self.repo_root / self.docs[key]
@@ -98,6 +106,9 @@ def load_config(repo_root: Path) -> Config:
         runner_max_wallclock_seconds=merged["runner"].get("max_wallclock_seconds"),
         git_auto_commit=bool(merged["git"].get("auto_commit", False)),
         git_commit_message_template=str(merged["git"].get("commit_message_template")),
+        server_host=str(merged["server"].get("host")),
+        server_port=int(merged["server"].get("port")),
+        server_auth_token=merged["server"].get("auth_token"),
     )
 
 
@@ -136,3 +147,13 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("git section must be a mapping")
     if not isinstance(git.get("auto_commit", False), bool):
         raise ConfigError("git.auto_commit must be boolean")
+    server = cfg.get("server")
+    if not isinstance(server, dict):
+        raise ConfigError("server section must be a mapping")
+    if not isinstance(server.get("host", ""), str):
+        raise ConfigError("server.host must be a string")
+    if not isinstance(server.get("port", 0), int):
+        raise ConfigError("server.port must be an integer")
+    auth_token = server.get("auth_token")
+    if auth_token is not None and not isinstance(auth_token, str):
+        raise ConfigError("server.auth_token must be a string or null")

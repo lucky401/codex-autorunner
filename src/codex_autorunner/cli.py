@@ -4,9 +4,11 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+import uvicorn
 
 from .config import ConfigError, DEFAULT_CONFIG, load_config
 from .engine import Engine, LockError, doctor
+from .server import create_app, doctor_server
 from .state import load_state
 from .utils import default_editor, find_repo_root, RepoNotFoundError, atomic_write
 
@@ -220,6 +222,25 @@ def doctor_cmd(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo pa
     except (RepoNotFoundError, ConfigError) as exc:
         raise typer.Exit(str(exc))
     typer.echo("Doctor check passed")
+
+
+@app.command()
+def serve(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    host: Optional[str] = typer.Option(None, "--host", help="Host to bind"),
+    port: Optional[int] = typer.Option(None, "--port", help="Port to bind"),
+):
+    """Start the web server and UI API."""
+    try:
+        root = resolve_repo(repo)
+        config = load_config(root)
+    except (RepoNotFoundError, ConfigError) as exc:
+        raise typer.Exit(str(exc))
+    app = create_app(root)
+    bind_host = host or config.server_host
+    bind_port = port or config.server_port
+    typer.echo(f"Serving on http://{bind_host}:{bind_port}")
+    uvicorn.run(app, host=bind_host, port=bind_port)
 
 
 if __name__ == "__main__":

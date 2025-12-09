@@ -6,7 +6,10 @@ authors = [{name = "Codex"}]
 requires-python = ">=3.9"
 dependencies = [
   "typer>=0.9",
+  "click<8.2",
   "pyyaml>=6.0",
+  "fastapi>=0.111",
+  "uvicorn[standard]>=0.30",
 ]
 
 [project.scripts]

@@ -1,3 +1,3 @@
 """Codex autorunner package."""
 
-__all__ = ["engine", "cli"]
+__all__ = ["engine", "cli", "server"]

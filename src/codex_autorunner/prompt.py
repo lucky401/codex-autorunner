@@ -39,6 +39,22 @@ Instructions:
 5) When you are done for this run, print a concise summary of what changed and what remains.
 """
 
+DEFAULT_CHAT_TEMPLATE = """You are Codex, a local coding assistant for this git repository. Provide concise, actionable guidance.
+
+Optional repo context is provided below. Do not make destructive changes unless explicitly asked.
+
+{{DOCS_SECTION}}
+
+<USER_MESSAGE>
+{{USER_MESSAGE}}
+</USER_MESSAGE>
+
+Instructions:
+- Focus on answering the user question with clear next steps.
+- If suggesting file edits, be explicit and minimal.
+- Do not assume you should run the autorunner loop; this is an ad-hoc chat.
+"""
+
 
 def build_prompt(config: Config, docs: DocsManager, prev_run_output: Optional[str]) -> str:
     template_path: Path = config.prompt_template if config.prompt_template else None
@@ -60,3 +76,24 @@ def build_prompt(config: Config, docs: DocsManager, prev_run_output: Optional[st
     for marker, value in replacements.items():
         template = template.replace(marker, value)
     return template
+
+
+def build_chat_prompt(
+    docs: DocsManager,
+    message: str,
+    include_todo: bool = True,
+    include_progress: bool = True,
+    include_opinions: bool = True,
+) -> str:
+    sections = []
+    if include_todo:
+        sections.append("<TODO>\\n" + docs.read_doc("todo") + "\\n</TODO>")
+    if include_progress:
+        sections.append("<PROGRESS>\\n" + docs.read_doc("progress") + "\\n</PROGRESS>")
+    if include_opinions:
+        sections.append("<OPINIONS>\\n" + docs.read_doc("opinions") + "\\n</OPINIONS>")
+
+    docs_block = "\\n\\n".join(sections) if sections else "No docs requested."
+    prompt = DEFAULT_CHAT_TEMPLATE.replace("{{DOCS_SECTION}}", docs_block)
+    prompt = prompt.replace("{{USER_MESSAGE}}", message)
+    return prompt
