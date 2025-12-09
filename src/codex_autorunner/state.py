@@ -14,6 +14,7 @@ class RunnerState:
     last_exit_code: Optional[int]
     last_run_started_at: Optional[str]
     last_run_finished_at: Optional[str]
+    runner_pid: Optional[int] = None
 
     def to_json(self) -> str:
         payload = {
@@ -22,6 +23,7 @@ class RunnerState:
             "last_exit_code": self.last_exit_code,
             "last_run_started_at": self.last_run_started_at,
             "last_run_finished_at": self.last_run_finished_at,
+            "runner_pid": self.runner_pid,
         }
         return json.dumps(payload, indent=2) + "\n"
 
@@ -40,6 +42,7 @@ def load_state(state_path: Path) -> RunnerState:
         last_exit_code=data.get("last_exit_code"),
         last_run_started_at=data.get("last_run_started_at"),
         last_run_finished_at=data.get("last_run_finished_at"),
+        runner_pid=data.get("runner_pid"),
     )
 
 

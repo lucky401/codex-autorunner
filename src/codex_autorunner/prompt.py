@@ -15,6 +15,8 @@ You must:
 - Work through TODO items from top to bottom.
 - Prefer fixing issues over just documenting them.
 - Keep TODO, PROGRESS, and OPINIONS in sync.
+- If you find a single TODO to be too large, you can split it, but clearly delineate each TODO item.
+- The TODO is for high-level tasks and goals, it should not be used for small tasks, you should use your built-in todo list for that.
 - Leave clear handoff notes (tests run, files touched, expected diffs).
 
 <TODO>
@@ -39,20 +41,16 @@ Instructions:
 5) When you are done for this run, print a concise summary of what changed and what remains.
 """
 
-DEFAULT_CHAT_TEMPLATE = """You are Codex, a local coding assistant for this git repository. Provide concise, actionable guidance.
+DEFAULT_CHAT_TEMPLATE = """You are running in a project that uses codex-autorunner.
 
-Optional repo context is provided below. Do not make destructive changes unless explicitly asked.
+The user runs long-horizon tasks using a series of Codex agents that reference TODO/PROGRESS/OPINIONS as context stored under .codex-autorunner/. You can make edits to those docs when the user wants to change or modify the current trajectory.
 
+Here is the contents of those documents:
 {{DOCS_SECTION}}
 
 <USER_MESSAGE>
 {{USER_MESSAGE}}
 </USER_MESSAGE>
-
-Instructions:
-- Focus on answering the user question with clear next steps.
-- If suggesting file edits, be explicit and minimal.
-- Do not assume you should run the autorunner loop; this is an ad-hoc chat.
 """
 
 
@@ -93,7 +91,7 @@ def build_chat_prompt(
     if include_opinions:
         sections.append("<OPINIONS>\\n" + docs.read_doc("opinions") + "\\n</OPINIONS>")
 
-    docs_block = "\\n\\n".join(sections) if sections else "No docs requested."
+    docs_block = "\\n\\n".join(sections) if sections else ""
     prompt = DEFAULT_CHAT_TEMPLATE.replace("{{DOCS_SECTION}}", docs_block)
     prompt = prompt.replace("{{USER_MESSAGE}}", message)
     return prompt

@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from .config import ConfigError, load_config
 from .engine import Engine, doctor
 from .prompt import build_chat_prompt
-from .state import load_state
+from .state import load_state, save_state, RunnerState, now_iso
 from .utils import atomic_write, find_repo_root
 
 
@@ -41,6 +41,13 @@ class RunnerManager:
         with self._lock:
             if self.stop_flag:
                 self.stop_flag.set()
+
+    def kill(self) -> None:
+        with self._lock:
+            self.stop_flag.set()
+            # Best-effort join to allow loop to exit.
+            if self.thread:
+                self.thread.join(timeout=1.0)
 
 
 async def _log_stream(log_path: Path):
@@ -108,6 +115,7 @@ def create_app(repo_root: Path) -> FastAPI:
             "outstanding_count": len(outstanding),
             "done_count": len(done),
             "running": manager.running,
+            "runner_pid": state.runner_pid,
         }
 
     @app.post("/api/run/start", dependencies=[Depends(auth_dep)])
@@ -122,6 +130,36 @@ def create_app(repo_root: Path) -> FastAPI:
     def stop_run():
         manager.stop()
         return {"running": manager.running}
+
+    @app.post("/api/run/kill", dependencies=[Depends(auth_dep)])
+    def kill_run():
+        manager.kill()
+        # mark state as idle/error after kill
+        state = load_state(engine.state_path)
+        new_state = RunnerState(
+            last_run_id=state.last_run_id,
+            status="error",
+            last_exit_code=137,
+            last_run_started_at=state.last_run_started_at,
+            last_run_finished_at=now_iso(),
+            runner_pid=None,
+        )
+        save_state(engine.state_path, new_state)
+        engine.release_lock()
+        return {"running": manager.running}
+
+    @app.post("/api/run/resume", dependencies=[Depends(auth_dep)])
+    def resume_run(payload: Optional[dict] = None):
+        once = False
+        if payload and isinstance(payload, dict):
+            once = bool(payload.get("once", False))
+        # clear stale lock if needed
+        from .engine import clear_stale_lock
+
+        clear_stale_lock(engine.lock_path)
+        manager.stop_flag.clear()
+        manager.start(once=once)
+        return {"running": manager.running, "once": once}
 
     @app.get("/api/logs", dependencies=[Depends(auth_dep)])
     def get_logs(run_id: Optional[int] = None, tail: Optional[int] = None):
@@ -171,4 +209,3 @@ def doctor_server(repo_root: Path) -> None:
     root = find_repo_root(repo_root)
     doctor(root)
     load_config(root)
-

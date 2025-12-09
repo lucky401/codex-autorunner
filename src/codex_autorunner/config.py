@@ -8,9 +8,9 @@ import yaml
 DEFAULT_CONFIG = {
     "version": 1,
     "docs": {
-        "todo": "TODO.md",
-        "progress": "PROGRESS.md",
-        "opinions": "OPINIONS.md",
+        "todo": ".codex-autorunner/TODO.md",
+        "progress": ".codex-autorunner/PROGRESS.md",
+        "opinions": ".codex-autorunner/OPINIONS.md",
     },
     "codex": {
         "binary": "codex",

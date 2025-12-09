@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 import threading
+import json
+import signal
 
 from .config import Config, ConfigError, load_config
 from .docs import DocsManager
@@ -51,6 +53,22 @@ class Engine:
     def release_lock(self) -> None:
         if self.lock_path.exists():
             self.lock_path.unlink()
+
+    def kill_running_process(self) -> Optional[int]:
+        """Force-kill the process holding the lock, if any. Returns pid if killed."""
+        if not self.lock_path.exists():
+            return None
+        pid_text = self.lock_path.read_text(encoding="utf-8").strip()
+        pid = int(pid_text) if pid_text.isdigit() else None
+        if pid and _process_alive(pid):
+            try:
+                os.kill(pid, signal.SIGTERM)
+                return pid
+            except OSError:
+                return None
+        # stale lock
+        self.lock_path.unlink(missing_ok=True)
+        return None
 
     def todos_done(self) -> bool:
         return self.docs.todos_done()
@@ -234,17 +252,21 @@ class Engine:
         current = load_state(self.state_path)
         last_run_started_at = current.last_run_started_at
         last_run_finished_at = current.last_run_finished_at
+        runner_pid = current.runner_pid
         if started:
             last_run_started_at = now_iso()
             last_run_finished_at = None
+            runner_pid = os.getpid()
         if finished:
             last_run_finished_at = now_iso()
+            runner_pid = None
         new_state = RunnerState(
             last_run_id=run_id,
             status=status,
             last_exit_code=exit_code,
             last_run_started_at=last_run_started_at,
             last_run_finished_at=last_run_finished_at,
+            runner_pid=runner_pid,
         )
         save_state(self.state_path, new_state)
 
@@ -255,6 +277,14 @@ def _process_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def clear_stale_lock(lock_path: Path) -> None:
+    if lock_path.exists():
+        pid_text = lock_path.read_text(encoding="utf-8").strip()
+        pid = int(pid_text) if pid_text.isdigit() else None
+        if not pid or not _process_alive(pid):
+            lock_path.unlink(missing_ok=True)
 
 
 def doctor(repo_root: Path) -> None:

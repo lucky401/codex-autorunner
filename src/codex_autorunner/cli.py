@@ -7,9 +7,9 @@ import typer
 import uvicorn
 
 from .config import ConfigError, DEFAULT_CONFIG, load_config
-from .engine import Engine, LockError, doctor
+from .engine import Engine, LockError, clear_stale_lock, doctor
 from .server import create_app, doctor_server
-from .state import load_state
+from .state import load_state, save_state, RunnerState, now_iso
 from .utils import default_editor, find_repo_root, RepoNotFoundError, atomic_write
 
 app = typer.Typer(add_completion=False)
@@ -52,7 +52,7 @@ def init(
 
     state_path = ca_dir / "state.json"
     if not state_path.exists() or force:
-        atomic_write(state_path, "{\n  \"last_run_id\": null,\n  \"status\": \"idle\",\n  \"last_exit_code\": null,\n  \"last_run_started_at\": null,\n  \"last_run_finished_at\": null\n}\n")
+        atomic_write(state_path, "{\n  \"last_run_id\": null,\n  \"status\": \"idle\",\n  \"last_exit_code\": null,\n  \"last_run_started_at\": null,\n  \"last_run_finished_at\": null,\n  \"runner_pid\": null\n}\n")
         typer.echo(f"Initialized {state_path}")
 
     log_path = ca_dir / "codex-autorunner.log"
@@ -60,9 +60,9 @@ def init(
         log_path.write_text("", encoding="utf-8")
         typer.echo(f"Created {log_path}")
 
-    _seed_doc(repo_root / "TODO.md", force, sample_todo())
-    _seed_doc(repo_root / "PROGRESS.md", force, "# Progress\n\n")
-    _seed_doc(repo_root / "OPINIONS.md", force, sample_opinions())
+    _seed_doc(repo_root / ".codex-autorunner" / "TODO.md", force, sample_todo())
+    _seed_doc(repo_root / ".codex-autorunner" / "PROGRESS.md", force, "# Progress\n\n")
+    _seed_doc(repo_root / ".codex-autorunner" / "OPINIONS.md", force, sample_opinions())
 
     typer.echo("Init complete")
 
@@ -98,6 +98,7 @@ def status(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")
     typer.echo(f"Last exit code: {state.last_exit_code}")
     typer.echo(f"Last start: {state.last_run_started_at}")
     typer.echo(f"Last finish: {state.last_run_finished_at}")
+    typer.echo(f"Runner pid: {state.runner_pid}")
     typer.echo(f"Outstanding TODO items: {len(outstanding)}")
 
 
@@ -135,6 +136,56 @@ def once(
         engine = Engine(root)
         engine.acquire_lock(force=force)
         engine.run_once()
+    except (RepoNotFoundError, ConfigError, LockError) as exc:
+        raise typer.Exit(str(exc))
+    finally:
+        if engine:
+            try:
+                engine.release_lock()
+            except Exception:
+                pass
+
+
+@app.command()
+def kill(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")):
+    """Force-kill a running autorunner and clear stale lock/state."""
+    try:
+        root = resolve_repo(repo)
+    except RepoNotFoundError as exc:
+        raise typer.Exit(str(exc))
+    engine = Engine(root)
+    pid = engine.kill_running_process()
+    state = load_state(engine.state_path)
+    new_state = RunnerState(
+        last_run_id=state.last_run_id,
+        status="error",
+        last_exit_code=137,
+        last_run_started_at=state.last_run_started_at,
+        last_run_finished_at=now_iso(),
+        runner_pid=None,
+    )
+    save_state(engine.state_path, new_state)
+    engine.release_lock()
+    if pid:
+        typer.echo(f"Sent SIGTERM to pid {pid}")
+    else:
+        typer.echo("No active autorunner process found; cleared stale lock if any.")
+
+
+@app.command()
+def resume(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    once: bool = typer.Option(False, "--once", help="Resume with a single run"),
+    force: bool = typer.Option(False, "--force", help="Override active lock"),
+):
+    """Resume a stopped/errored autorunner, clearing stale locks if needed."""
+    engine: Optional[Engine] = None
+    try:
+        root = resolve_repo(repo)
+        engine = Engine(root)
+        clear_stale_lock(engine.lock_path)
+        engine.acquire_lock(force=force)
+        engine.run_loop(stop_after_runs=1 if once else None)
     except (RepoNotFoundError, ConfigError, LockError) as exc:
         raise typer.Exit(str(exc))
     finally:
