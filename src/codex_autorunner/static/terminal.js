@@ -1,4 +1,5 @@
 import { flash } from "./utils.js";
+import { CONSTANTS } from "./constants.js";
 
 let term = null;
 let fitAddon = null;
@@ -9,6 +10,9 @@ let connectBtn = null;
 let disconnectBtn = null;
 let resumeBtn = null;
 let inputDisposable = null;
+let intentionalDisconnect = false;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
 
 const textEncoder = new TextEncoder();
 
@@ -40,28 +44,7 @@ function ensureTerminal() {
     cursorBlink: true,
     rows: 24,
     cols: 100,
-    theme: {
-      background: '#0a0c12',
-      foreground: '#e5ecff',
-      cursor: '#6cf5d8',
-      selectionBackground: 'rgba(108, 245, 216, 0.3)',
-      black: '#000000',
-      red: '#ff5566',
-      green: '#6cf5d8',
-      yellow: '#f1fa8c',
-      blue: '#6ca8ff',
-      magenta: '#bd93f9',
-      cyan: '#8be9fd',
-      white: '#e5ecff',
-      brightBlack: '#6272a4',
-      brightRed: '#ff6e6e',
-      brightGreen: '#69ff94',
-      brightYellow: '#ffffa5',
-      brightBlue: '#d6acff',
-      brightMagenta: '#ff92df',
-      brightCyan: '#a4ffff',
-      brightWhite: '#ffffff',
-    },
+    theme: CONSTANTS.THEME.XTERM,
   });
   fitAddon = new window.FitAddon.FitAddon();
   term.loadAddon(fitAddon);
@@ -130,14 +113,23 @@ function connect(options = {}) {
   const resume = Boolean(options.resume);
   if (!ensureTerminal()) return;
   if (socket && socket.readyState === WebSocket.OPEN) return;
+  
+  // cancel any pending reconnect
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
   teardownSocket();
+  intentionalDisconnect = false;
 
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   const query = resume ? "?mode=resume" : "";
-  socket = new WebSocket(`${proto}://${window.location.host}/api/terminal${query}`);
+  socket = new WebSocket(`${proto}://${window.location.host}${CONSTANTS.API.TERMINAL_ENDPOINT}${query}`);
   socket.binaryType = "arraybuffer";
 
   socket.onopen = () => {
+    reconnectAttempts = 0;
     overlayEl?.classList.add("hidden");
     setStatus(resume ? "Connected (resume)" : "Connected");
     updateButtons(true);
@@ -154,9 +146,9 @@ function connect(options = {}) {
         const payload = JSON.parse(event.data);
         if (payload.type === "exit") {
           term?.write(`\r\n[session ended${payload.code !== null ? ` (code ${payload.code})` : ""}] \r\n`);
-          setStatus("Disconnected");
-          updateButtons(false);
-          overlayEl?.classList.remove("hidden");
+          // Treat exit as an intentional disconnect or at least not something to auto-reconnect to immediately
+          intentionalDisconnect = true; 
+          disconnect();
         } else if (payload.type === "error") {
           flash(payload.message || "Terminal error", "error");
         }
@@ -172,17 +164,40 @@ function connect(options = {}) {
 
   socket.onerror = () => {
     setStatus("Connection error");
-    flash("Terminal connection error", "error");
+    // Don't flash here, onclose will handle retry or final error
   };
 
   socket.onclose = () => {
-    setStatus("Disconnected");
-    overlayEl?.classList.remove("hidden");
     updateButtons(false);
+    
+    if (intentionalDisconnect) {
+      setStatus("Disconnected");
+      overlayEl?.classList.remove("hidden");
+      return;
+    }
+
+    // Auto-reconnect logic
+    if (reconnectAttempts < 5) {
+      const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 10000);
+      setStatus(`Reconnecting in ${Math.round(delay / 100)}s...`);
+      reconnectAttempts++;
+      reconnectTimer = setTimeout(() => {
+        connect({ resume: true }); // Always try to resume on reconnect
+      }, delay);
+    } else {
+      setStatus("Disconnected (max retries reached)");
+      overlayEl?.classList.remove("hidden");
+      flash("Terminal connection lost", "error");
+    }
   };
 }
 
 function disconnect() {
+  intentionalDisconnect = true;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   teardownSocket();
   setStatus("Disconnected");
   overlayEl?.classList.remove("hidden");

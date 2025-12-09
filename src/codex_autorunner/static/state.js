@@ -1,11 +1,12 @@
 import { api, flash, createPoller } from "./utils.js";
 import { publish } from "./bus.js";
+import { CONSTANTS } from "./constants.js";
 
 let stopStatePoll = null;
 
 export async function loadState({ notify = true } = {}) {
   try {
-    const data = await api("/api/state");
+    const data = await api(CONSTANTS.API.STATE_ENDPOINT);
     publish("state:update", data);
     return data;
   } catch (err) {
@@ -15,7 +16,7 @@ export async function loadState({ notify = true } = {}) {
   }
 }
 
-export function startStatePolling(intervalMs = 15000) {
+export function startStatePolling(intervalMs = CONSTANTS.UI.POLLING_INTERVAL) {
   if (stopStatePoll) return stopStatePoll;
   stopStatePoll = createPoller(() => loadState({ notify: false }), intervalMs, {
     immediate: false,

@@ -1,5 +1,6 @@
 import { api, flash, streamEvents } from "./utils.js";
 import { publish, subscribe } from "./bus.js";
+import { CONSTANTS } from "./constants.js";
 
 const logRunIdInput = document.getElementById("log-run-id");
 const logTailInput = document.getElementById("log-tail");
@@ -10,15 +11,47 @@ let stopLogStream = null;
 let lastKnownRunId = null;
 let rawLogLines = [];
 
+function processLine(line) {
+  let next = line;
+  // Normalize run markers that include "chat"
+  next = next.replace(/^=== run (\d+)\s+chat(\s|$)/, "=== run $1$2");
+
+  if (!showTimestampToggle.checked) {
+    next = next.replace(/^\[[^\]]*]\s*/, "");
+  }
+  if (!showRunToggle.checked) {
+    if (next.startsWith("[")) {
+      next = next.replace(/^(\[[^\]]+]\s*)run=\d+\s*/, "$1");
+    } else {
+      next = next.replace(/^run=\d+\s*/, "");
+    }
+  }
+  // Remove redundant channel prefix
+  next = next.replace(/^(\[[^\]]+]\s*)?(run=\d+\s*)?chat:\s*/, "$1$2");
+  return next;
+}
+
 function appendLogLine(line) {
   const output = document.getElementById("log-output");
   if (output.dataset.isPlaceholder === "true") {
+    output.textContent = "";
     delete output.dataset.isPlaceholder;
     rawLogLines = [];
   }
+  
   rawLogLines.push(line);
-  renderLogs();
+  if (rawLogLines.length > CONSTANTS.UI.MAX_LOG_LINES_IN_DOM) {
+    rawLogLines.shift();
+    if (output.firstChild) {
+      output.removeChild(output.firstChild);
+    }
+  }
+
+  const processed = processLine(line);
+  output.appendChild(document.createTextNode(processed + "\n"));
+  
   publish("logs:line", line);
+  scrollLogsToBottom();
 }
 
 function scrollLogsToBottom() {
@@ -107,32 +140,13 @@ function syncRunIdPlaceholder(state) {
 
 function renderLogs() {
   const output = document.getElementById("log-output");
-  if (output.dataset.isPlaceholder === "true") return;
-  const showTimestamp = showTimestampToggle.checked;
-  const showRun = showRunToggle.checked;
-  const rendered = rawLogLines
-    .map((line) => {
-      let next = line;
-      // Normalize run markers that include "chat"
-      next = next.replace(/^=== run (\d+)\s+chat(\s|$)/, "=== run $1$2");
-
-      if (!showTimestamp) {
-        next = next.replace(/^\[[^\]]*]\s*/, "");
-      }
-      if (!showRun) {
-        if (next.startsWith("[")) {
-          next = next.replace(/^(\[[^\]]+]\s*)run=\d+\s*/, "$1");
-        } else {
-          next = next.replace(/^run=\d+\s*/, "");
-        }
-      }
-      // Remove redundant channel prefix
-      next = next.replace(/^(\[[^\]]+]\s*)?(run=\d+\s*)?chat:\s*/, "$1$2");
-      return next;
-    })
-    .join("\n");
-  if (rendered) {
-    output.textContent = rendered;
+  if (output.dataset.isPlaceholder === "true" && rawLogLines.length === 0) return;
+  
+  // Full re-render
+  const text = rawLogLines.map(processLine).join("\n");
+  
+  if (text) {
+    output.textContent = text;
     delete output.dataset.isPlaceholder;
   } else {
     output.textContent = "(empty log)";

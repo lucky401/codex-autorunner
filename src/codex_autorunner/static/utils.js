@@ -1,3 +1,5 @@
+import { CONSTANTS } from "./constants.js";
+
 const toast = document.getElementById("toast");
 const decoder = new TextDecoder();
 
@@ -10,7 +12,7 @@ export function flash(message, type = "info") {
   toast.classList.add("show");
   setTimeout(() => {
     toast.classList.remove("show", "error");
-  }, 2200);
+  }, CONSTANTS.UI.TOAST_DURATION);
 }
 
 export function statusPill(el, status) {
