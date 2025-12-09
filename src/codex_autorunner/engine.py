@@ -155,37 +155,6 @@ class Engine:
         proc.wait()
         return proc.returncode
 
-    def run_codex_chat(self, prompt: str, run_id: int) -> tuple[int, str]:
-        """Run Codex once and return exit code and aggregated output."""
-        cmd = [self.config.codex_binary] + self.config.codex_args + [prompt]
-        output_lines = []
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(self.repo_root),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-        except FileNotFoundError:
-            raise ConfigError(f"Codex binary not found: {self.config.codex_binary}")
-
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.log_path.open("a", encoding="utf-8") as f:
-            f.write(f"=== run {run_id} chat start ===\n")
-
-        if proc.stdout:
-            for line in proc.stdout:
-                clean = line.rstrip("\n")
-                output_lines.append(clean)
-                self.log_line(run_id, f"chat: {clean}")
-
-        proc.wait()
-        with self.log_path.open("a", encoding="utf-8") as f:
-            f.write(f"=== run {run_id} chat end (code {proc.returncode}) ===\n")
-        return proc.returncode, "\n".join(output_lines)
-
     def maybe_git_commit(self, run_id: int) -> None:
         msg = self.config.git_commit_message_template.replace(
             "{run_id}", str(run_id)

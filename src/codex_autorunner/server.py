@@ -14,7 +14,6 @@ from fastapi.staticfiles import StaticFiles
 from .config import ConfigError, load_config
 from .engine import Engine, doctor
 from .pty_session import PTYSession
-from .prompt import build_chat_prompt
 from .state import load_state, save_state, RunnerState, now_iso
 from .utils import atomic_write, find_repo_root
 
@@ -194,104 +193,6 @@ def create_app(repo_root: Path) -> FastAPI:
         return StreamingResponse(
             _log_stream(engine.log_path), media_type="text/event-stream"
         )
-
-    @app.post("/api/chat")
-    async def chat(payload: dict):
-        message = payload.get("message")
-        if not message:
-            raise HTTPException(status_code=400, detail="message is required")
-        include_todo = bool(payload.get("include_todo", True))
-        include_progress = bool(payload.get("include_progress", True))
-        include_opinions = bool(payload.get("include_opinions", True))
-        prompt = build_chat_prompt(
-            engine.docs,
-            message,
-            include_todo=include_todo,
-            include_progress=include_progress,
-            include_opinions=include_opinions,
-        )
-        state = load_state(engine.state_path)
-        run_id = (state.last_run_id or 0) + 1
-        exit_code, output = engine.run_codex_chat(prompt, run_id)
-        if exit_code != 0:
-            raise HTTPException(
-                status_code=500,
-                detail="Codex chat failed",
-                headers={"X-Codex-Exit": str(exit_code)},
-            )
-        return {"run_id": run_id, "response": output}
-
-    @app.post("/api/chat/stream")
-    async def chat_stream(payload: dict):
-        message = payload.get("message")
-        if not message:
-            raise HTTPException(status_code=400, detail="message is required")
-        include_todo = bool(payload.get("include_todo", True))
-        include_progress = bool(payload.get("include_progress", True))
-        include_opinions = bool(payload.get("include_opinions", True))
-        prompt = build_chat_prompt(
-            engine.docs,
-            message,
-            include_todo=include_todo,
-            include_progress=include_progress,
-            include_opinions=include_opinions,
-        )
-        state = load_state(engine.state_path)
-        run_id = (state.last_run_id or 0) + 1
-
-        async def event_stream():
-            proc = None
-            started = False
-            end_logged = False
-
-            def log_end(code: str) -> None:
-                nonlocal end_logged
-                if end_logged or not started:
-                    return
-                end_logged = True
-                with engine.log_path.open("a", encoding="utf-8") as f:
-                    f.write(f"=== run {run_id} chat end (code {code}) ===\n")
-
-            try:
-                try:
-                    proc = await create_subprocess_exec(
-                        engine.config.codex_binary,
-                        *engine.config.codex_args,
-                        prompt,
-                        cwd=str(engine.repo_root),
-                        stdout=PIPE,
-                        stderr=STDOUT,
-                    )
-                except FileNotFoundError:
-                    yield f"event: error\ndata: Codex binary not found: {engine.config.codex_binary}\n\n"
-                    return
-
-                engine.log_path.parent.mkdir(parents=True, exist_ok=True)
-                with engine.log_path.open("a", encoding="utf-8") as f:
-                    f.write(f"=== run {run_id} chat start ===\n")
-                started = True
-
-                if proc.stdout:
-                    async for raw in proc.stdout:
-                        clean = raw.decode("utf-8", errors="replace").rstrip("\n")
-                        engine.log_line(run_id, f"chat: {clean}")
-                        yield f"data: {clean}\n\n"
-
-                code = await proc.wait()
-                log_end(str(code))
-                yield f"event: done\ndata: {code}\n\n"
-            finally:
-                if proc and proc.returncode is None:
-                    proc.terminate()
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=2.0)
-                    except asyncio.TimeoutError:
-                        proc.kill()
-                        await proc.wait()
-                if proc and started and not end_logged:
-                    log_end(str(proc.returncode if proc.returncode is not None else "terminated"))
-
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.websocket("/api/terminal")
     async def terminal(ws: WebSocket):

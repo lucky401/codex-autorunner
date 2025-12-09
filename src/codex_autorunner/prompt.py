@@ -41,18 +41,6 @@ Instructions:
 5) When you are done for this run, print a concise summary of what changed and what remains.
 """
 
-DEFAULT_CHAT_TEMPLATE = """You are running in a project that uses codex-autorunner.
-
-The user runs long-horizon tasks using a series of Codex agents that reference TODO/PROGRESS/OPINIONS as context stored under .codex-autorunner/. You can make edits to those docs when the user wants to change or modify the current trajectory.
-
-Here is the contents of those documents:
-{{DOCS_SECTION}}
-
-<USER_MESSAGE>
-{{USER_MESSAGE}}
-</USER_MESSAGE>
-"""
-
 
 def build_prompt(
     config: Config, docs: DocsManager, prev_run_output: Optional[str]
@@ -76,24 +64,3 @@ def build_prompt(
     for marker, value in replacements.items():
         template = template.replace(marker, value)
     return template
-
-
-def build_chat_prompt(
-    docs: DocsManager,
-    message: str,
-    include_todo: bool = True,
-    include_progress: bool = True,
-    include_opinions: bool = True,
-) -> str:
-    sections = []
-    if include_todo:
-        sections.append("<TODO>\\n" + docs.read_doc("todo") + "\\n</TODO>")
-    if include_progress:
-        sections.append("<PROGRESS>\\n" + docs.read_doc("progress") + "\\n</PROGRESS>")
-    if include_opinions:
-        sections.append("<OPINIONS>\\n" + docs.read_doc("opinions") + "\\n</OPINIONS>")
-
-    docs_block = "\\n\\n".join(sections) if sections else ""
-    prompt = DEFAULT_CHAT_TEMPLATE.replace("{{DOCS_SECTION}}", docs_block)
-    prompt = prompt.replace("{{USER_MESSAGE}}", message)
-    return prompt
