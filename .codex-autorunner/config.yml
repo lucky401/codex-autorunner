@@ -3,6 +3,7 @@ docs:
   todo: .codex-autorunner/TODO.md
   progress: .codex-autorunner/PROGRESS.md
   opinions: .codex-autorunner/OPINIONS.md
+  spec: .codex-autorunner/SPEC.md
 codex:
   binary: codex
   args:

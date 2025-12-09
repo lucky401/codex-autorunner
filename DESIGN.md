@@ -1,9 +1,9 @@
 Codex Autorunner – Design
 
-Single-repo autorunner that drives the Codex CLI using three markdown docs (TODO, PROGRESS, OPINIONS) as the control surface. Supports a CLI (V1) and a local web server/UI (V2) built on the same engine.
+Single-repo autorunner that drives the Codex CLI using markdown docs (TODO, PROGRESS, OPINIONS, SPEC) as the control surface. Supports a CLI (V1) and a local web server/UI (V2) built on the same engine.
 
 ## Goals and Non-goals
-- Goals: run Codex autonomously in a loop; keep TODO/PROGRESS/OPINIONS in sync; expose both CLI and local web UI; keep footprint small and repo-local.
+- Goals: run Codex autonomously in a loop; keep TODO/PROGRESS/OPINIONS/SPEC in sync; expose both CLI and local web UI; keep footprint small and repo-local.
 - Non-goals: hosted/cloud service, multi-repo orchestration, SDK-based Codex integration (CLI only), complex plugin systems.
 
 ## Architecture
@@ -18,6 +18,7 @@ Single-repo autorunner that drives the Codex CLI using three markdown docs (TODO
   TODO.md
   PROGRESS.md
   OPINIONS.md
+  SPEC.md
   .codex-autorunner/
     config.yml
     state.json
@@ -26,7 +27,7 @@ Single-repo autorunner that drives the Codex CLI using three markdown docs (TODO
     prompt.txt   # optional template
 ```
 - Config (`.codex-autorunner/config.yml`, versioned):
-  - docs: paths for todo/progress/opinions.
+  - docs: paths for todo/progress/opinions/spec.
   - codex: `binary`, `args` (default `["--yolo","exec","--sandbox","danger-full-access"]`).
   - prompt: `prev_run_max_chars`, optional `template` path.
   - runner: `sleep_seconds`, `stop_after_runs`, `max_wallclock_seconds`.
@@ -38,7 +39,7 @@ Single-repo autorunner that drives the Codex CLI using three markdown docs (TODO
 ## Engine Responsibilities
 - Locking: `.codex-autorunner/lock` stores PID; refuse concurrent runs unless `--force`; clean stale locks via `kill`/`resume`.
 - TODO parsing: `- [ ]` outstanding; `- [x/X]` done; order matters.
-- Prompt: include docs, optional previous run block (clipped), stable instruction block; allow template placeholders `{{TODO}}`, `{{PROGRESS}}`, `{{OPINIONS}}`, `{{PREV_RUN_OUTPUT}}`.
+- Prompt: include docs, optional previous run block (clipped), stable instruction block; allow template placeholders `{{TODO}}`, `{{PROGRESS}}`, `{{OPINIONS}}`, `{{SPEC}}`, `{{PREV_RUN_OUTPUT}}`.
 - Previous output extraction: pull prior run block from log, trim to `prev_run_max_chars`.
 - Codex execution: run subprocess with stdout/stderr streamed; log each line with timestamp/run id.
 - Main loop: update state before/after runs; stop on empty TODOs, non-zero exit, stop_after_runs, wallclock budget, or external stop flag; optional git add/commit when enabled.
@@ -50,18 +51,22 @@ Single-repo autorunner that drives the Codex CLI using three markdown docs (TODO
 - `status` — show state and outstanding TODO count.
 - `log` — show specific run or tail lines.
 - `edit` — open docs in `$EDITOR`.
+- `ingest-spec` — build TODO/PROGRESS/OPINIONS from SPEC via Codex; optional `--force` to overwrite existing docs.
+- `clear-docs` — reset TODO/PROGRESS/OPINIONS to empty templates (confirmation required).
 - `doctor` — validate repo/config/docs/binary.
 - `kill` / `resume` — terminate stuck loop and restart after clearing stale lock/state.
 
 ## Web Server + UI (V2)
 - Process model: FastAPI HTTP server + RunnerManager thread controlling the loop; uses same engine/state files.
 - API (defaults `127.0.0.1:4173`):
-  - GET `/api/docs`, PUT `/api/docs/{todo|progress|opinions}` — atomic doc reads/writes.
+  - GET `/api/docs`, PUT `/api/docs/{todo|progress|opinions|spec}` — atomic doc reads/writes.
+  - POST `/api/ingest-spec` — regenerate TODO/PROGRESS/OPINIONS from SPEC (accepts `{force: bool, spec_path?: str}`).
+  - POST `/api/docs/clear` — reset TODO/PROGRESS/OPINIONS to empty templates.
   - GET `/api/state` — state plus derived fields (e.g., outstanding TODO count).
   - POST `/api/run/start` (optional `{once: true}`), `/api/run/stop`, `/api/run/kill`, `/api/run/resume` — manage loop.
   - GET `/api/logs` (by run_id or tail), GET `/api/logs/stream` — live log SSE.
   - WebSocket `/api/terminal` — PTY-backed Codex CLI (uses `codex.binary` + `codex.terminal_args` or bare binary).
-- UI views: dashboard (status, controls), docs editor (tabs for three docs with checkbox rendering), logs tail/stream, terminal panel (xterm.js) to drive Codex interactively.
+- UI views: dashboard (status, controls), docs editor (tabs for four docs with checkbox rendering), logs tail/stream, terminal panel (xterm.js) to drive Codex interactively.
 - Mobile: simple responsive layout with top/bottom nav; keep bundle small and avoid heavy frameworks.
 
 ## Extensibility and Implementation Notes

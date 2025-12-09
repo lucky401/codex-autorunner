@@ -7,6 +7,7 @@ let docsCache = {
   todo: "",
   progress: "",
   opinions: "",
+  spec: "",
 };
 let activeDoc = "todo";
 
@@ -85,6 +86,64 @@ export function initDocs() {
   document.getElementById("save-doc").addEventListener("click", saveDoc);
   document.getElementById("reload-doc").addEventListener("click", loadDocs);
   document.getElementById("refresh-preview").addEventListener("click", loadDocs);
+  document.getElementById("ingest-spec").addEventListener("click", ingestSpec);
+  document.getElementById("clear-docs").addEventListener("click", clearDocs);
 
   loadDocs();
+}
+
+async function ingestSpec() {
+  const needsForce = ["todo", "progress", "opinions"].some(
+    (k) => (docsCache[k] || "").trim().length > 0
+  );
+  if (needsForce) {
+    const ok = window.confirm(
+      "Overwrite TODO/PROGRESS/OPINIONS from SPEC? Existing content will be replaced."
+    );
+    if (!ok) return;
+  }
+  const button = document.getElementById("ingest-spec");
+  button.disabled = true;
+  try {
+    const data = await api("/api/ingest-spec", {
+      method: "POST",
+      body: { force: needsForce },
+    });
+    docsCache = { ...docsCache, ...data };
+    setDoc(activeDoc);
+    renderTodoPreview(docsCache.todo);
+    publish("docs:updated", { kind: "todo", content: docsCache.todo });
+    publish("docs:updated", { kind: "progress", content: docsCache.progress });
+    publish("docs:updated", { kind: "opinions", content: docsCache.opinions });
+    await loadState({ notify: false });
+    flash("Ingested SPEC into docs");
+  } catch (err) {
+    flash(err.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function clearDocs() {
+  const confirmFirst = window.confirm(
+    "Clear TODO/PROGRESS/OPINIONS? This cannot be undone."
+  );
+  if (!confirmFirst) return;
+  const confirmSecond = window.prompt('Type "CLEAR" to confirm reset');
+  if (!confirmSecond || confirmSecond.trim().toUpperCase() !== "CLEAR") {
+    flash("Clear cancelled");
+    return;
+  }
+  const button = document.getElementById("clear-docs");
+  button.disabled = true;
+  try {
+    const data = await api("/api/docs/clear", { method: "POST" });
+    docsCache = { ...docsCache, ...data };
+    await loadDocs();
+    flash("Cleared TODO/PROGRESS/OPINIONS");
+  } catch (err) {
+    flash(err.message, "error");
+  } finally {
+    button.disabled = false;
+  }
 }

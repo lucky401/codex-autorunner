@@ -11,6 +11,12 @@ from .engine import Engine, LockError, clear_stale_lock, doctor
 from .server import create_app, doctor_server
 from .state import load_state, save_state, RunnerState, now_iso
 from .utils import default_editor, find_repo_root, RepoNotFoundError, atomic_write
+from .spec_ingest import (
+    SpecIngestError,
+    generate_docs_from_spec,
+    write_ingested_docs,
+    clear_work_docs,
+)
 
 app = typer.Typer(add_completion=False)
 
@@ -68,6 +74,7 @@ def init(
     _seed_doc(repo_root / ".codex-autorunner" / "TODO.md", force, sample_todo())
     _seed_doc(repo_root / ".codex-autorunner" / "PROGRESS.md", force, "# Progress\n\n")
     _seed_doc(repo_root / ".codex-autorunner" / "OPINIONS.md", force, sample_opinions())
+    _seed_doc(repo_root / ".codex-autorunner" / "SPEC.md", force, sample_spec())
 
     typer.echo("Init complete")
 
@@ -85,6 +92,10 @@ def sample_todo() -> str:
 
 def sample_opinions() -> str:
     return """# Opinions\n\n- Prefer small, well-tested changes.\n- Keep docs in sync with code.\n- Avoid unnecessary dependencies.\n"""
+
+
+def sample_spec() -> str:
+    return """# Spec\n\n## Context\n- Add project background and goals here.\n\n## Requirements\n- Requirement 1\n- Requirement 2\n\n## Non-goals\n- Out of scope items\n"""
 
 
 @app.command()
@@ -251,7 +262,7 @@ def _print_run_block(log_path: Path, run_id: int) -> None:
 
 @app.command()
 def edit(
-    target: str = typer.Argument(..., help="todo|progress|opinions"),
+    target: str = typer.Argument(..., help="todo|progress|opinions|spec"),
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
 ):
     """Open one of the docs in $EDITOR."""
@@ -261,12 +272,52 @@ def edit(
         raise typer.Exit(str(exc))
     config = load_config(root)
     key = target.lower()
-    if key not in ("todo", "progress", "opinions"):
-        raise typer.Exit("Invalid target; choose todo, progress, or opinions")
+    if key not in ("todo", "progress", "opinions", "spec"):
+        raise typer.Exit("Invalid target; choose todo, progress, opinions, or spec")
     path = config.doc_path(key)
     editor = default_editor()
     typer.echo(f"Opening {path} with {editor}")
     subprocess.run([editor, str(path)])
+
+
+@app.command("ingest-spec")
+def ingest_spec_cmd(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    spec: Optional[Path] = typer.Option(None, "--spec", help="Path to SPEC (defaults to configured docs.spec)"),
+    force: bool = typer.Option(False, "--force", help="Overwrite TODO/PROGRESS/OPINIONS"),
+):
+    """Generate TODO/PROGRESS/OPINIONS from SPEC using Codex."""
+    try:
+        root = resolve_repo(repo)
+        engine = Engine(root)
+        docs = generate_docs_from_spec(engine, spec_path=spec)
+        write_ingested_docs(engine, docs, force=force)
+    except (RepoNotFoundError, ConfigError, SpecIngestError) as exc:
+        raise typer.Exit(str(exc))
+
+    typer.echo("Ingested SPEC into TODO/PROGRESS/OPINIONS.")
+    for key, content in docs.items():
+        lines = len(content.splitlines())
+        typer.echo(f"- {key.upper()}: {lines} lines")
+
+
+@app.command("clear-docs")
+def clear_docs_cmd(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+):
+    """Clear TODO/PROGRESS/OPINIONS to empty templates."""
+    if not yes:
+        confirm = input("Clear TODO/PROGRESS/OPINIONS? Type CLEAR to confirm: ").strip()
+        if confirm.upper() != "CLEAR":
+            raise typer.Exit("Aborted.")
+    try:
+        root = resolve_repo(repo)
+        engine = Engine(root)
+        clear_work_docs(engine)
+    except (RepoNotFoundError, ConfigError) as exc:
+        raise typer.Exit(str(exc))
+    typer.echo("Cleared TODO/PROGRESS/OPINIONS.")
 
 
 @app.command("doctor")

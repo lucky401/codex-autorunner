@@ -16,6 +16,12 @@ from .engine import Engine, doctor
 from .pty_session import PTYSession
 from .state import load_state, save_state, RunnerState, now_iso
 from .utils import atomic_write, find_repo_root
+from .spec_ingest import (
+    SpecIngestError,
+    generate_docs_from_spec,
+    write_ingested_docs,
+    clear_work_docs,
+)
 
 
 class RunnerManager:
@@ -103,16 +109,41 @@ def create_app(repo_root: Path) -> FastAPI:
             "todo": engine.docs.read_doc("todo"),
             "progress": engine.docs.read_doc("progress"),
             "opinions": engine.docs.read_doc("opinions"),
+            "spec": engine.docs.read_doc("spec"),
         }
 
     @app.put("/api/docs/{kind}")
     def put_doc(kind: str, payload: dict):
         key = kind.lower()
-        if key not in ("todo", "progress", "opinions"):
+        if key not in ("todo", "progress", "opinions", "spec"):
             raise HTTPException(status_code=400, detail="invalid doc kind")
         content = payload.get("content", "")
         atomic_write(engine.config.doc_path(key), content)
         return {"kind": key, "content": content}
+
+    @app.post("/api/ingest-spec")
+    def ingest_spec(payload: Optional[dict] = None):
+        force = False
+        spec_override: Optional[Path] = None
+        if payload and isinstance(payload, dict):
+            force = bool(payload.get("force", False))
+            override = payload.get("spec_path")
+            if override:
+                spec_override = Path(str(override))
+        try:
+            docs = generate_docs_from_spec(engine, spec_path=spec_override)
+            write_ingested_docs(engine, docs, force=force)
+        except SpecIngestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return docs
+
+    @app.post("/api/docs/clear")
+    def clear_docs():
+        try:
+            docs = clear_work_docs(engine)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        return docs
 
     @app.get("/api/state")
     def get_state():

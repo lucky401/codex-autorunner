@@ -5,7 +5,7 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 ## Layout and key files
 - Core package code: `src/codex_autorunner/` (engine, CLI, server/API).
 - Runtime/config/state live under `.codex-autorunner/` (not at repo root):
-  - Docs the agent reads/updates: `.codex-autorunner/TODO.md`, `.codex-autorunner/PROGRESS.md`, `.codex-autorunner/OPINIONS.md`.
+  - Docs the agent reads/updates: `.codex-autorunner/TODO.md`, `.codex-autorunner/PROGRESS.md`, `.codex-autorunner/OPINIONS.md`, `.codex-autorunner/SPEC.md`.
   - Config: `.codex-autorunner/config.yml` (docs paths, codex CLI args, server host/port).
   - State/log: `.codex-autorunner/state.json`, `.codex-autorunner/codex-autorunner.log`, `.codex-autorunner/lock`.
 
@@ -15,6 +15,7 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 - `codex-autorunner resume` clears stale locks and restarts; `--once` for a single run.
 - `codex-autorunner kill` sends SIGTERM to a running loop and marks state error.
 - `codex-autorunner log` / `status` / `edit` are self-explanatory.
+- `codex-autorunner ingest-spec` builds TODO/PROGRESS/OPINIONS from SPEC (use `--force` to overwrite); `clear-docs` resets those docs.
 - `codex-autorunner serve` starts the FastAPI server+API (host/port from config).
 
 ## Dogfooding rules: When Using codex-autorunner to develop codex-autorunner

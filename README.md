@@ -1,9 +1,10 @@
 # codex-autorunner
 
-An autorunner that uses the Codex CLI to work on large tasks via a simple loop. On each loop we feed the Codex instance the last one's final output along with 3 documents.
+An autorunner that uses the Codex CLI to work on large tasks via a simple loop. On each loop we feed the Codex instance the last one's final output along with core documents.
 1. TODO - Tracks long-horizon tasks
 2. PROGRESS - High level overview of what's been done already that may be relevant for future agents
 3. OPINIONS - Guidelines for how we should approach implementation
+4. SPEC - Source-of-truth requirements and scope for large features/projects
 
 ## What it does
 - Initializes a repo with Codex-friendly docs and config.
@@ -39,5 +40,7 @@ CLI commands are available as `codex-autorunner` or the shorter `car`.
 - `kill` — SIGTERM the running loop and mark state error.
 - `status` — show current state and outstanding TODO count.
 - `log` — view logs (tail or specific run).
-- `edit` — open TODO/PROGRESS/OPINIONS in `$EDITOR`.
+- `edit` — open TODO/PROGRESS/OPINIONS/SPEC in `$EDITOR`.
+- `ingest-spec` — generate TODO/PROGRESS/OPINIONS from SPEC using Codex (use `--force` to overwrite).
+- `clear-docs` — reset TODO/PROGRESS/OPINIONS to empty templates (type CLEAR to confirm).
 - `serve` — start the HTTP API (FastAPI) on host/port from config (defaults 127.0.0.1:4173).

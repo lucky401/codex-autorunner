@@ -11,6 +11,7 @@ DEFAULT_CONFIG = {
         "todo": ".codex-autorunner/TODO.md",
         "progress": ".codex-autorunner/PROGRESS.md",
         "opinions": ".codex-autorunner/OPINIONS.md",
+        "spec": ".codex-autorunner/SPEC.md",
     },
     "codex": {
         "binary": "codex",
@@ -88,6 +89,7 @@ def load_config(repo_root: Path) -> Config:
         "todo": Path(merged["docs"]["todo"]),
         "progress": Path(merged["docs"]["progress"]),
         "opinions": Path(merged["docs"]["opinions"]),
+        "spec": Path(merged["docs"]["spec"]),
     }
 
     template_val = merged["prompt"].get("template")
@@ -120,7 +122,7 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
     docs = cfg.get("docs")
     if not isinstance(docs, dict):
         raise ConfigError("docs must be a mapping")
-    for key in ("todo", "progress", "opinions"):
+    for key in ("todo", "progress", "opinions", "spec"):
         if not isinstance(docs.get(key), str) or not docs[key]:
             raise ConfigError(f"docs.{key} must be a non-empty string path")
     codex = cfg.get("codex")

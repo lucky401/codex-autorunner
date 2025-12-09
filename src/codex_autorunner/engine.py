@@ -163,6 +163,7 @@ class Engine:
             self.config.doc_path("todo"),
             self.config.doc_path("progress"),
             self.config.doc_path("opinions"),
+            self.config.doc_path("spec"),
         ]
         add_cmd = ["git", "add"] + [
             str(p.relative_to(self.repo_root)) for p in paths if p.exists()
