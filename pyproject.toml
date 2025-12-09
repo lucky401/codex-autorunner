@@ -1,0 +1,23 @@
+[project]
+name = "codex-autorunner"
+version = "0.1.0"
+description = "Codex autorunner CLI per DESIGN-V1"
+authors = [{name = "Codex"}]
+requires-python = ">=3.9"
+dependencies = [
+  "typer>=0.9",
+  "pyyaml>=6.0",
+]
+
+[project.scripts]
+codex-autorunner = "codex_autorunner.cli:app"
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.typer]
+completions = true

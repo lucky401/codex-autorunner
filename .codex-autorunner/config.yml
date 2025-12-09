@@ -1,0 +1,22 @@
+version: 1
+docs:
+  todo: TODO.md
+  progress: PROGRESS.md
+  opinions: OPINIONS.md
+codex:
+  binary: codex
+  args:
+  - --yolo
+  - exec
+  - --sandbox
+  - danger-full-access
+prompt:
+  prev_run_max_chars: 6000
+  template: .codex-autorunner/prompt.txt
+runner:
+  sleep_seconds: 5
+  stop_after_runs: null
+  max_wallclock_seconds: null
+git:
+  auto_commit: false
+  commit_message_template: '[codex] run #{run_id}'

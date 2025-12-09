@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+venv/
+.envrc
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# IDE/editor
+.idea/
+.vscode/
+.DS_Store
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Codex autorunner runtime
+.codex-autorunner/codex-autorunner.log
+.codex-autorunner/lock
+.codex-autorunner/state.json
