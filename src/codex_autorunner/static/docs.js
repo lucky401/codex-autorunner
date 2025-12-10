@@ -731,6 +731,7 @@ async function saveDoc() {
   const content = document.getElementById("doc-content").value;
   const saveBtn = document.getElementById("save-doc");
   saveBtn.disabled = true;
+  saveBtn.classList.add("loading");
   try {
     await api(`/api/docs/${activeDoc}`, { method: "PUT", body: { content } });
     docsCache[activeDoc] = content;
@@ -744,6 +745,7 @@ async function saveDoc() {
     flash(err.message);
   } finally {
     saveBtn.disabled = false;
+    saveBtn.classList.remove("loading");
   }
 }
 
@@ -812,6 +814,7 @@ async function ingestSpec() {
   }
   const button = document.getElementById("ingest-spec");
   button.disabled = true;
+  button.classList.add("loading");
   try {
     const data = await api("/api/ingest-spec", {
       method: "POST",
@@ -829,6 +832,7 @@ async function ingestSpec() {
     flash(err.message, "error");
   } finally {
     button.disabled = false;
+    button.classList.remove("loading");
   }
 }
 
@@ -846,6 +850,7 @@ async function clearDocs() {
   }
   const button = document.getElementById("clear-docs");
   button.disabled = true;
+  button.classList.add("loading");
   try {
     const data = await api("/api/docs/clear", { method: "POST" });
     docsCache = { ...docsCache, ...data };
@@ -860,6 +865,7 @@ async function clearDocs() {
     flash(err.message, "error");
   } finally {
     button.disabled = false;
+    button.classList.remove("loading");
   }
 }
 

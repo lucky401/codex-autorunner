@@ -18,12 +18,14 @@ function bindAction(buttonId, action) {
   const btn = document.getElementById(buttonId);
   btn.addEventListener("click", async () => {
     btn.disabled = true;
+    btn.classList.add("loading");
     try {
       await action();
     } catch (err) {
       flash(err.message);
     } finally {
       btn.disabled = false;
+      btn.classList.remove("loading");
     }
   });
 }
