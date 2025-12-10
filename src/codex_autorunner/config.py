@@ -1,12 +1,16 @@
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
 
-DEFAULT_CONFIG = {
-    "version": 1,
+CONFIG_FILENAME = ".codex-autorunner/config.yml"
+CONFIG_VERSION = 2
+
+DEFAULT_REPO_CONFIG: Dict[str, Any] = {
+    "version": CONFIG_VERSION,
+    "mode": "repo",
     "docs": {
         "todo": ".codex-autorunner/TODO.md",
         "progress": ".codex-autorunner/PROGRESS.md",
@@ -35,7 +39,35 @@ DEFAULT_CONFIG = {
         "host": "127.0.0.1",
         "port": 4173,
     },
+    "log": {
+        "path": ".codex-autorunner/codex-autorunner.log",
+        "max_bytes": 10_000_000,
+        "backup_count": 3,
+    },
 }
+
+DEFAULT_HUB_CONFIG: Dict[str, Any] = {
+    "version": CONFIG_VERSION,
+    "mode": "hub",
+    "hub": {
+        "repos_root": ".",
+        "manifest": ".codex-autorunner/manifest.yml",
+        "discover_depth": 1,
+        "auto_init_missing": True,
+        "log": {
+            "path": ".codex-autorunner/codex-autorunner-hub.log",
+            "max_bytes": 10_000_000,
+            "backup_count": 3,
+        },
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 4173,
+    },
+}
+
+# Backwards-compatible alias for repo defaults
+DEFAULT_CONFIG = DEFAULT_REPO_CONFIG
 
 
 class ConfigError(Exception):
@@ -43,9 +75,18 @@ class ConfigError(Exception):
 
 
 @dataclasses.dataclass
-class Config:
+class LogConfig:
+    path: Path
+    max_bytes: int
+    backup_count: int
+
+
+@dataclasses.dataclass
+class RepoConfig:
     raw: Dict[str, Any]
-    repo_root: Path
+    root: Path
+    version: int
+    mode: str
     docs: Dict[str, Path]
     codex_binary: str
     codex_args: List[str]
@@ -59,9 +100,29 @@ class Config:
     git_commit_message_template: str
     server_host: str
     server_port: int
+    log: LogConfig
 
     def doc_path(self, key: str) -> Path:
-        return self.repo_root / self.docs[key]
+        return self.root / self.docs[key]
+
+
+@dataclasses.dataclass
+class HubConfig:
+    raw: Dict[str, Any]
+    root: Path
+    version: int
+    mode: str
+    repos_root: Path
+    manifest_path: Path
+    discover_depth: int
+    auto_init_missing: bool
+    server_host: str
+    server_port: int
+    log: LogConfig
+
+
+# Alias used by existing code paths that only support repo mode
+Config = RepoConfig
 
 
 def _merge_defaults(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
@@ -74,51 +135,114 @@ def _merge_defaults(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str
     return merged
 
 
-def load_config(repo_root: Path) -> Config:
-    config_path = repo_root / ".codex-autorunner" / "config.yml"
-    if not config_path.exists():
-        raise ConfigError(f"Missing config file at {config_path}")
+def find_nearest_config_path(start: Path) -> Optional[Path]:
+    """Return the closest .codex-autorunner/config.yml walking upward from start."""
+    start = start.resolve()
+    search_dir = start if start.is_dir() else start.parent
+    for current in [search_dir] + list(search_dir.parents):
+        candidate = current / CONFIG_FILENAME
+        if candidate.exists():
+            return candidate
+    return None
 
+
+def load_config(start: Path) -> Union[RepoConfig, HubConfig]:
+    """
+    Load the nearest config walking upward from the provided path.
+    Returns a RepoConfig or HubConfig depending on the mode.
+    """
+    config_path = find_nearest_config_path(start)
+    if not config_path:
+        raise ConfigError(
+            f"Missing config file; expected to find {CONFIG_FILENAME} in {start} or parents"
+        )
     with config_path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
-    merged = _merge_defaults(DEFAULT_CONFIG, data)
-    _validate_config(merged)
+    mode = data.get("mode", "repo")
+    if mode == "hub":
+        merged = _merge_defaults(DEFAULT_HUB_CONFIG, data)
+        _validate_hub_config(merged)
+        return _build_hub_config(config_path, merged)
+    if mode == "repo":
+        merged = _merge_defaults(DEFAULT_REPO_CONFIG, data)
+        _validate_repo_config(merged)
+        return _build_repo_config(config_path, merged)
+    raise ConfigError(f"Invalid mode '{mode}'; expected 'hub' or 'repo'")
 
+
+def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
+    root = config_path.parent.parent.resolve()
     docs = {
-        "todo": Path(merged["docs"]["todo"]),
-        "progress": Path(merged["docs"]["progress"]),
-        "opinions": Path(merged["docs"]["opinions"]),
-        "spec": Path(merged["docs"]["spec"]),
+        "todo": Path(cfg["docs"]["todo"]),
+        "progress": Path(cfg["docs"]["progress"]),
+        "opinions": Path(cfg["docs"]["opinions"]),
+        "spec": Path(cfg["docs"]["spec"]),
     }
-
-    template_val = merged["prompt"].get("template")
-    template = repo_root / template_val if template_val else None
-    term_args = merged["codex"].get("terminal_args")
-    terminal_args = list(term_args) if isinstance(term_args, list) else []
-
-    return Config(
-        raw=merged,
-        repo_root=repo_root,
+    template_val = cfg["prompt"].get("template")
+    template = root / template_val if template_val else None
+    term_args = cfg["codex"].get("terminal_args") or []
+    log_cfg = cfg.get("log", {})
+    return RepoConfig(
+        raw=cfg,
+        root=root,
+        version=int(cfg["version"]),
+        mode="repo",
         docs=docs,
-        codex_binary=merged["codex"]["binary"],
-        codex_args=list(merged["codex"].get("args", [])),
-        codex_terminal_args=terminal_args,
-        prompt_prev_run_max_chars=int(merged["prompt"]["prev_run_max_chars"]),
+        codex_binary=cfg["codex"]["binary"],
+        codex_args=list(cfg["codex"].get("args", [])),
+        codex_terminal_args=list(term_args) if isinstance(term_args, list) else [],
+        prompt_prev_run_max_chars=int(cfg["prompt"]["prev_run_max_chars"]),
         prompt_template=template,
-        runner_sleep_seconds=int(merged["runner"]["sleep_seconds"]),
-        runner_stop_after_runs=merged["runner"].get("stop_after_runs"),
-        runner_max_wallclock_seconds=merged["runner"].get("max_wallclock_seconds"),
-        git_auto_commit=bool(merged["git"].get("auto_commit", False)),
-        git_commit_message_template=str(merged["git"].get("commit_message_template")),
-        server_host=str(merged["server"].get("host")),
-        server_port=int(merged["server"].get("port")),
+        runner_sleep_seconds=int(cfg["runner"]["sleep_seconds"]),
+        runner_stop_after_runs=cfg["runner"].get("stop_after_runs"),
+        runner_max_wallclock_seconds=cfg["runner"].get("max_wallclock_seconds"),
+        git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
+        git_commit_message_template=str(cfg["git"].get("commit_message_template")),
+        server_host=str(cfg["server"].get("host")),
+        server_port=int(cfg["server"].get("port")),
+        log=LogConfig(
+            path=root / log_cfg.get("path", DEFAULT_REPO_CONFIG["log"]["path"]),
+            max_bytes=int(log_cfg.get("max_bytes", DEFAULT_REPO_CONFIG["log"]["max_bytes"])),
+            backup_count=int(
+                log_cfg.get("backup_count", DEFAULT_REPO_CONFIG["log"]["backup_count"])
+            ),
+        ),
     )
 
 
-def _validate_config(cfg: Dict[str, Any]) -> None:
-    if cfg.get("version") != 1:
-        raise ConfigError("Unsupported config version; expected 1")
+def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
+    root = config_path.parent.parent.resolve()
+    hub_cfg = cfg["hub"]
+    log_cfg = hub_cfg["log"]
+    return HubConfig(
+        raw=cfg,
+        root=root,
+        version=int(cfg["version"]),
+        mode="hub",
+        repos_root=(root / hub_cfg["repos_root"]).resolve(),
+        manifest_path=root / hub_cfg["manifest"],
+        discover_depth=int(hub_cfg["discover_depth"]),
+        auto_init_missing=bool(hub_cfg["auto_init_missing"]),
+        server_host=str(cfg["server"]["host"]),
+        server_port=int(cfg["server"]["port"]),
+        log=LogConfig(
+            path=root / log_cfg["path"],
+            max_bytes=int(log_cfg["max_bytes"]),
+            backup_count=int(log_cfg["backup_count"]),
+        ),
+    )
+
+
+def _validate_version(cfg: Dict[str, Any]) -> None:
+    if cfg.get("version") != CONFIG_VERSION:
+        raise ConfigError(f"Unsupported config version; expected {CONFIG_VERSION}")
+
+
+def _validate_repo_config(cfg: Dict[str, Any]) -> None:
+    _validate_version(cfg)
+    if cfg.get("mode") != "repo":
+        raise ConfigError("Repo config must set mode: repo")
     docs = cfg.get("docs")
     if not isinstance(docs, dict):
         raise ConfigError("docs must be a mapping")
@@ -153,6 +277,48 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("git section must be a mapping")
     if not isinstance(git.get("auto_commit", False), bool):
         raise ConfigError("git.auto_commit must be boolean")
+    server = cfg.get("server")
+    if not isinstance(server, dict):
+        raise ConfigError("server section must be a mapping")
+    if not isinstance(server.get("host", ""), str):
+        raise ConfigError("server.host must be a string")
+    if not isinstance(server.get("port", 0), int):
+        raise ConfigError("server.port must be an integer")
+    log_cfg = cfg.get("log")
+    if not isinstance(log_cfg, dict):
+        raise ConfigError("log section must be a mapping")
+    for key in ("path",):
+        if not isinstance(log_cfg.get(key, ""), str):
+            raise ConfigError(f"log.{key} must be a string path")
+    for key in ("max_bytes", "backup_count"):
+        if not isinstance(log_cfg.get(key, 0), int):
+            raise ConfigError(f"log.{key} must be an integer")
+
+
+def _validate_hub_config(cfg: Dict[str, Any]) -> None:
+    _validate_version(cfg)
+    if cfg.get("mode") != "hub":
+        raise ConfigError("Hub config must set mode: hub")
+    hub_cfg = cfg.get("hub")
+    if not isinstance(hub_cfg, dict):
+        raise ConfigError("hub section must be a mapping")
+    if not isinstance(hub_cfg.get("repos_root", ""), str):
+        raise ConfigError("hub.repos_root must be a string path")
+    if not isinstance(hub_cfg.get("manifest", ""), str):
+        raise ConfigError("hub.manifest must be a string path")
+    if hub_cfg.get("discover_depth") not in (None, 1):
+        raise ConfigError("hub.discover_depth is fixed to 1 for now")
+    if not isinstance(hub_cfg.get("auto_init_missing", True), bool):
+        raise ConfigError("hub.auto_init_missing must be boolean")
+    log_cfg = hub_cfg.get("log")
+    if not isinstance(log_cfg, dict):
+        raise ConfigError("hub.log section must be a mapping")
+    for key in ("path",):
+        if not isinstance(log_cfg.get(key, ""), str):
+            raise ConfigError(f"hub.log.{key} must be a string path")
+    for key in ("max_bytes", "backup_count"):
+        if not isinstance(log_cfg.get(key, 0), int):
+            raise ConfigError(f"hub.log.{key} must be an integer")
     server = cfg.get("server")
     if not isinstance(server, dict):
         raise ConfigError("server section must be a mapping")

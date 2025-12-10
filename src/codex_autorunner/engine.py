@@ -26,12 +26,12 @@ def timestamp() -> str:
 
 class Engine:
     def __init__(self, repo_root: Path):
-        self.repo_root = repo_root
         self.config = load_config(repo_root)
+        self.repo_root = self.config.root
         self.docs = DocsManager(self.config)
-        self.state_path = repo_root / ".codex-autorunner" / "state.json"
-        self.log_path = repo_root / ".codex-autorunner" / "codex-autorunner.log"
-        self.lock_path = repo_root / ".codex-autorunner" / "lock"
+        self.state_path = self.repo_root / ".codex-autorunner" / "state.json"
+        self.log_path = self.config.log.path
+        self.lock_path = self.repo_root / ".codex-autorunner" / "lock"
 
     @staticmethod
     def from_cwd(repo: Optional[Path] = None) -> "Engine":
@@ -126,10 +126,38 @@ class Engine:
         return "\n".join(lines[-tail:])
 
     def log_line(self, run_id: int, message: str) -> None:
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_log_path()
+        self._maybe_rotate_log()
         line = f"[{timestamp()}] run={run_id} {message}\n"
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(line)
+
+    def _ensure_log_path(self) -> None:
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _rotated_log_path(self, index: int) -> Path:
+        return self.log_path.with_name(f"{self.log_path.name}.{index}")
+
+    def _maybe_rotate_log(self) -> None:
+        max_bytes = getattr(self.config.log, "max_bytes", None) or 0
+        backup_count = getattr(self.config.log, "backup_count", 0) or 0
+        if max_bytes <= 0:
+            return
+        if not self.log_path.exists():
+            return
+        if self.log_path.stat().st_size < max_bytes:
+            return
+
+        self._ensure_log_path()
+        for idx in range(backup_count, 0, -1):
+            rotated = self._rotated_log_path(idx)
+            rotated.unlink(missing_ok=True)
+            source = self._rotated_log_path(idx - 1) if idx > 1 else self.log_path
+            if source.exists():
+                source.replace(rotated)
+
+        # Truncate the active log after rotation
+        self.log_path.write_text("", encoding="utf-8")
 
     def run_codex_cli(self, prompt: str, run_id: int) -> int:
         cmd = [self.config.codex_binary] + self.config.codex_args + [prompt]
@@ -210,7 +238,8 @@ class Engine:
             prompt = build_prompt(self.config, self.docs, prev_output)
 
             self._update_state("running", run_id, None, started=True)
-            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._ensure_log_path()
+            self._maybe_rotate_log()
             with self.log_path.open("a", encoding="utf-8") as f:
                 f.write(f"=== run {run_id} start ===\n")
 

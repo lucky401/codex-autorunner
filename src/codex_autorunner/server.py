@@ -11,8 +11,9 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import ConfigError, load_config
-from .engine import Engine, doctor
+from .config import ConfigError, HubConfig, load_config
+from .engine import Engine, LockError, doctor
+from .logging_utils import setup_rotating_logger
 from .doc_chat import (
     DocChatBusyError,
     DocChatError,
@@ -20,6 +21,7 @@ from .doc_chat import (
     DocChatValidationError,
     _normalize_kind,
 )
+from .hub import HubSupervisor
 from .pty_session import PTYSession
 from .state import load_state, save_state, RunnerState, now_iso
 from .utils import atomic_write, find_repo_root
@@ -124,6 +126,10 @@ def create_app(repo_root: Optional[Path] = None) -> FastAPI:
     terminal_lock = asyncio.Lock()
 
     app = FastAPI()
+    app.state.logger = setup_rotating_logger(
+        f"repo[{engine.repo_root}]", engine.config.log
+    )
+    app.state.logger.info("Repo server ready at %s", engine.repo_root)
     static_dir = _static_dir()
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -277,16 +283,28 @@ def create_app(repo_root: Optional[Path] = None) -> FastAPI:
         once = False
         if payload and isinstance(payload, dict):
             once = bool(payload.get("once", False))
+        try:
+            app.state.logger.info("run/start once=%s", once)
+        except Exception:
+            pass
         manager.start(once=once)
         return {"running": manager.running, "once": once}
 
     @app.post("/api/run/stop")
     def stop_run():
+        try:
+            app.state.logger.info("run/stop requested")
+        except Exception:
+            pass
         manager.stop()
         return {"running": manager.running}
 
     @app.post("/api/run/kill")
     def kill_run():
+        try:
+            app.state.logger.info("run/kill requested")
+        except Exception:
+            pass
         manager.kill()
         # mark state as idle/error after kill
         state = load_state(engine.state_path)
@@ -308,6 +326,10 @@ def create_app(repo_root: Optional[Path] = None) -> FastAPI:
         if payload and isinstance(payload, dict):
             once = bool(payload.get("once", False))
         # clear stale lock if needed
+        try:
+            app.state.logger.info("run/resume once=%s", once)
+        except Exception:
+            pass
         from .engine import clear_stale_lock
 
         clear_stale_lock(engine.lock_path)
@@ -322,6 +344,10 @@ def create_app(repo_root: Optional[Path] = None) -> FastAPI:
             raise HTTPException(
                 status_code=409, detail="Cannot reset while runner is active"
             )
+        try:
+            app.state.logger.info("run/reset requested")
+        except Exception:
+            pass
         # Clear stale lock
         engine.lock_path.unlink(missing_ok=True)
         # Reset state to initial values
@@ -470,6 +496,150 @@ def create_app(repo_root: Optional[Path] = None) -> FastAPI:
             for session in terminal_sessions.values():
                 session.terminate()
             terminal_sessions.clear()
+
+    return app
+
+
+def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
+    config = load_config(hub_root or Path.cwd())
+    if not isinstance(config, HubConfig):
+        raise ConfigError("Hub app requires hub mode configuration")
+    supervisor = HubSupervisor(config)
+    app = FastAPI()
+    app.state.logger = setup_rotating_logger(f"hub[{config.root}]", config.log)
+    try:
+        app.state.logger.info("Hub app ready at %s", config.root)
+    except Exception:
+        pass
+    static_dir = _static_dir()
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    mounted_repos: set[str] = set()
+
+    def _mount_repo(prefix: str, repo_path: Path) -> None:
+        if prefix in mounted_repos:
+            return
+        try:
+            sub_app = create_app(repo_path)
+        except Exception:
+            return
+        app.mount(f"/repos/{prefix}", sub_app)
+        mounted_repos.add(prefix)
+
+    def _refresh_mounts(snapshots):
+        for snap in snapshots:
+            if snap.initialized and snap.exists_on_disk:
+                _mount_repo(snap.id, snap.path)
+
+    initial_snapshots = supervisor.scan()
+    _refresh_mounts(initial_snapshots)
+
+    @app.get("/hub/repos")
+    def list_repos():
+        try:
+            app.state.logger.info("Hub list_repos")
+        except Exception:
+            pass
+        snapshots = supervisor.list_repos()
+        _refresh_mounts(snapshots)
+        return {
+            "last_scan_at": supervisor.state.last_scan_at,
+            "repos": [repo.to_dict(config.root) for repo in snapshots],
+        }
+
+    @app.post("/hub/repos/scan")
+    def scan_repos():
+        try:
+            app.state.logger.info("Hub scan_repos")
+        except Exception:
+            pass
+        snapshots = supervisor.scan()
+        _refresh_mounts(snapshots)
+        return {
+            "last_scan_at": supervisor.state.last_scan_at,
+            "repos": [repo.to_dict(config.root) for repo in snapshots],
+        }
+
+    @app.post("/hub/repos/{repo_id}/run")
+    def run_repo(repo_id: str, payload: Optional[dict] = None):
+        once = False
+        if payload and isinstance(payload, dict):
+            once = bool(payload.get("once", False))
+        try:
+            app.state.logger.info("Hub run %s once=%s", repo_id, once)
+        except Exception:
+            pass
+        try:
+            snapshot = supervisor.run_repo(repo_id, once=once)
+        except LockError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        _refresh_mounts([snapshot])
+        return snapshot.to_dict(config.root)
+
+    @app.post("/hub/repos/{repo_id}/stop")
+    def stop_repo(repo_id: str):
+        try:
+            app.state.logger.info("Hub stop %s", repo_id)
+        except Exception:
+            pass
+        try:
+            snapshot = supervisor.stop_repo(repo_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return snapshot.to_dict(config.root)
+
+    @app.post("/hub/repos/{repo_id}/resume")
+    def resume_repo(repo_id: str, payload: Optional[dict] = None):
+        once = False
+        if payload and isinstance(payload, dict):
+            once = bool(payload.get("once", False))
+        try:
+            app.state.logger.info("Hub resume %s once=%s", repo_id, once)
+        except Exception:
+            pass
+        try:
+            snapshot = supervisor.resume_repo(repo_id, once=once)
+        except LockError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        _refresh_mounts([snapshot])
+        return snapshot.to_dict(config.root)
+
+    @app.post("/hub/repos/{repo_id}/kill")
+    def kill_repo(repo_id: str):
+        try:
+            app.state.logger.info("Hub kill %s", repo_id)
+        except Exception:
+            pass
+        try:
+            snapshot = supervisor.kill_repo(repo_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return snapshot.to_dict(config.root)
+
+    @app.post("/hub/repos/{repo_id}/init")
+    def init_repo(repo_id: str):
+        try:
+            app.state.logger.info("Hub init %s", repo_id)
+        except Exception:
+            pass
+        try:
+            snapshot = supervisor.init_repo(repo_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        _refresh_mounts([snapshot])
+        return snapshot.to_dict(config.root)
+
+    @app.get("/", include_in_schema=False)
+    def hub_index():
+        index_path = static_dir / "index.html"
+        if not index_path.exists():
+            raise HTTPException(
+                status_code=500, detail="Static UI assets missing; reinstall package"
+            )
+        return FileResponse(index_path)
 
     return app
 

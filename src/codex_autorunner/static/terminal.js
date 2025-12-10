@@ -1,4 +1,4 @@
-import { flash } from "./utils.js";
+import { flash, buildWsUrl } from "./utils.js";
 import { CONSTANTS } from "./constants.js";
 
 let term = null;
@@ -223,9 +223,9 @@ function connect(options = {}) {
   teardownSocket();
   intentionalDisconnect = false;
 
-  const proto = window.location.protocol === "https:" ? "wss" : "ws";
   const query = resume ? "?mode=resume" : "";
-  socket = new WebSocket(`${proto}://${window.location.host}${CONSTANTS.API.TERMINAL_ENDPOINT}${query}`);
+  const wsUrl = buildWsUrl(CONSTANTS.API.TERMINAL_ENDPOINT, query);
+  socket = new WebSocket(wsUrl);
   socket.binaryType = "arraybuffer";
 
   socket.onopen = () => {

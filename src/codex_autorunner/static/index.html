@@ -11,7 +11,54 @@
     <link rel="stylesheet" href="/static/vendor/xterm.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <div id="hub-shell" class="hub-shell hidden">
+      <header class="hub-hero">
+        <div class="hub-hero-text">
+          <p class="muted small">Supervisor</p>
+          <h1>Codex Autorunner Hub</h1>
+          <p class="muted">Coordinate multiple repos from a single console.</p>
+          <div class="hub-hero-meta">
+            <span id="hub-last-scan" class="pill pill-small pill-idle">Last scan: –</span>
+          </div>
+        </div>
+        <div class="hub-hero-actions">
+          <button id="hub-scan" class="primary">Scan &amp; seed</button>
+          <button id="hub-refresh" class="ghost">Refresh</button>
+        </div>
+      </header>
+
+      <section class="hub-stats">
+        <div class="hub-stat">
+          <p class="muted small">Repos</p>
+          <div id="hub-count-total" class="hub-stat-value">–</div>
+        </div>
+        <div class="hub-stat">
+          <p class="muted small">Running</p>
+          <div id="hub-count-running" class="hub-stat-value">–</div>
+        </div>
+        <div class="hub-stat">
+          <p class="muted small">Missing</p>
+          <div id="hub-count-missing" class="hub-stat-value">–</div>
+        </div>
+      </section>
+
+      <section class="hub-repo-panel">
+        <div class="hub-panel-header">
+          <div>
+            <span class="label">Repos</span>
+            <p class="muted small">Run and resume repos discovered under this hub.</p>
+          </div>
+          <div class="hub-panel-actions">
+            <button id="hub-quick-scan" class="ghost sm">Rescan</button>
+          </div>
+        </div>
+        <div id="hub-repo-list" class="hub-repo-list">
+          <div class="muted">Loading…</div>
+        </div>
+      </section>
+    </div>
+
+    <div id="repo-shell" class="app-shell">
       <nav class="nav-bar">
         <span class="nav-brand">CAR</span>
         <div class="tabs">

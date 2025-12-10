@@ -1,7 +1,36 @@
 import { CONSTANTS } from "./constants.js";
+import { BASE_PATH } from "./env.js";
 
 const toast = document.getElementById("toast");
 const decoder = new TextDecoder();
+
+export function resolvePath(path) {
+  if (!path) return path;
+  const absolutePrefixes = ["http://", "https://", "ws://", "wss://"];
+  if (absolutePrefixes.some((prefix) => path.startsWith(prefix))) {
+    return path;
+  }
+  if (path.startsWith("/hub")) {
+    return path;
+  }
+  if (!BASE_PATH) {
+    return path;
+  }
+  if (path.startsWith(BASE_PATH)) {
+    return path;
+  }
+  if (path.startsWith("/")) {
+    return `${BASE_PATH}${path}`;
+  }
+  return `${BASE_PATH}/${path}`;
+}
+
+export function buildWsUrl(path, query = "") {
+  const resolved = resolvePath(path);
+  const normalized = resolved.startsWith("/") ? resolved : `/${resolved}`;
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${window.location.host}${normalized}${query}`;
+}
 
 export function flash(message, type = "info") {
   toast.textContent = message;
@@ -16,12 +45,17 @@ export function flash(message, type = "info") {
 }
 
 export function statusPill(el, status) {
-  el.textContent = status || "idle";
-  el.classList.remove("pill-idle", "pill-running", "pill-error");
-  if (status === "running") {
+  const normalized = status || "idle";
+  el.textContent = normalized;
+  el.classList.remove("pill-idle", "pill-running", "pill-error", "pill-warn");
+  const errorStates = ["error", "init_error"];
+  const warnStates = ["locked", "missing", "uninitialized", "initializing"];
+  if (normalized === "running") {
     el.classList.add("pill-running");
-  } else if (status === "error") {
+  } else if (errorStates.includes(normalized)) {
     el.classList.add("pill-error");
+  } else if (warnStates.includes(normalized)) {
+    el.classList.add("pill-warn");
   } else {
     el.classList.add("pill-idle");
   }
@@ -30,11 +64,12 @@ export function statusPill(el, status) {
 export async function api(path, options = {}) {
   const headers = options.headers ? { ...options.headers } : {};
   const opts = { ...options, headers };
+  const target = resolvePath(path);
   if (opts.body && typeof opts.body === "object" && !(opts.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(opts.body);
   }
-  const res = await fetch(path, opts);
+  const res = await fetch(target, opts);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `Request failed (${res.status})`);
@@ -52,12 +87,13 @@ export function streamEvents(
 ) {
   const controller = new AbortController();
   let fetchBody = body;
+  const target = resolvePath(path);
   const headers = {};
   if (fetchBody && typeof fetchBody === "object" && !(fetchBody instanceof FormData)) {
     headers["Content-Type"] = "application/json";
     fetchBody = JSON.stringify(fetchBody);
   }
-  fetch(path, { method, body: fetchBody, headers, signal: controller.signal })
+  fetch(target, { method, body: fetchBody, headers, signal: controller.signal })
     .then(async (res) => {
       if (!res.ok) {
         const text = await res.text();

@@ -1,4 +1,4 @@
-import { api, flash, statusPill, confirmModal } from "./utils.js";
+import { api, flash, statusPill, confirmModal, resolvePath } from "./utils.js";
 import { loadState } from "./state.js";
 import { publish } from "./bus.js";
 
@@ -462,7 +462,7 @@ async function sendDocChat() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function performDocChatRequest(kind, entry, state) {
-  const endpoint = `/api/docs/${kind}/chat`;
+  const endpoint = resolvePath(`/api/docs/${kind}/chat`);
   const res = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
