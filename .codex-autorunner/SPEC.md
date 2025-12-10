@@ -31,7 +31,7 @@
   - Request is rejected with 400 for unknown doc kinds or empty messages; 409 if another doc chat is already running for the same doc (prevent overlapping edits).
 - **Agent behavior**
   - Builds prompt with: target doc full text, other work docs (TODO/PROGRESS/OPINIONS/SPEC), recent run summary if available (last run block clipped), and user message.
-  - Clear instructions: edit only the target doc, keep markdown structure/checkbox syntax intact, and respond with the fully rewritten doc (not a diff).
+  - Clear instructions: edit only the target doc, keep markdown structure/checkbox syntax intact, and respond with the fully rewritten doc (not a diff); may optionally prefix the doc with one short `Agent:` summary line.
   - Runs via Codex CLI in a bounded mode (e.g., single `exec` command) with time and token limits; captures stdout/stderr into the log with a distinct “doc-chat” marker.
   - Validates output: must be non-empty string; may optionally parse TODO checkboxes to ensure format; rejects obviously malformed output.
   - On success, writes the updated doc atomically to disk and returns it; on validation failure, surfaces an error without writing.

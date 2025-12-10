@@ -28,7 +28,31 @@ function processLine(line) {
   }
   // Remove redundant channel prefix
   next = next.replace(/^(\[[^\]]+]\s*)?(run=\d+\s*)?chat:\s*/, "$1$2");
-  return next;
+  // Strip stdout/stderr markers that make logs noisy
+  next = next.replace(
+    /^(\[[^\]]+]\s*)?(run=\d+\s*)?(stdout|stderr):\s*/,
+    "$1$2"
+  );
+  return next.trimEnd();
+}
+
+function formatLogLines(lines) {
+  const cleaned = [];
+  for (const raw of lines) {
+    const processed = processLine(raw).trimEnd();
+    const isRunBoundary = /^=== run \d+/.test(processed);
+    if (isRunBoundary && cleaned.length && cleaned[cleaned.length - 1] !== "") {
+      cleaned.push("");
+    }
+    const isBlank = processed.trim() === "";
+    if (isBlank) {
+      if (cleaned.length && cleaned[cleaned.length - 1] === "") continue;
+      cleaned.push("");
+      continue;
+    }
+    cleaned.push(processed);
+  }
+  return cleaned.join("\n");
 }
 
 function appendLogLine(line) {
@@ -38,18 +62,21 @@ function appendLogLine(line) {
     delete output.dataset.isPlaceholder;
     rawLogLines = [];
   }
-  
+
   rawLogLines.push(line);
   if (rawLogLines.length > CONSTANTS.UI.MAX_LOG_LINES_IN_DOM) {
     rawLogLines.shift();
-    if (output.firstChild) {
-      output.removeChild(output.firstChild);
-    }
   }
 
-  const processed = processLine(line);
-  output.appendChild(document.createTextNode(processed + "\n"));
-  
+  const text = formatLogLines(rawLogLines);
+  if (text) {
+    output.textContent = text;
+    delete output.dataset.isPlaceholder;
+  } else {
+    output.textContent = "(empty log)";
+    output.dataset.isPlaceholder = "true";
+  }
+
   publish("logs:line", line);
   scrollLogsToBottom();
 }
@@ -75,12 +102,14 @@ async function loadLogs() {
   } else if (tail) {
     params.set("tail", tail);
   }
-  const path = params.toString() ? `/api/logs?${params.toString()}` : "/api/logs";
+  const path = params.toString()
+    ? `/api/logs?${params.toString()}`
+    : "/api/logs";
   try {
     const data = await api(path);
     const text = typeof data === "string" ? data : data.log || "";
     const output = document.getElementById("log-output");
-    
+
     if (text) {
       rawLogLines = text.split("\n");
       delete output.dataset.isPlaceholder;
@@ -90,7 +119,7 @@ async function loadLogs() {
       output.dataset.isPlaceholder = "true";
       rawLogLines = [];
     }
-    
+
     flash("Logs loaded");
     publish("logs:loaded", { runId, tail, text });
   } catch (err) {
@@ -113,7 +142,7 @@ function startLogStreaming() {
   output.textContent = "(listening...)";
   output.dataset.isPlaceholder = "true";
   rawLogLines = [];
-  
+
   stopLogStream = streamEvents("/api/logs/stream", {
     onMessage: (data) => {
       appendLogLine(data || "");
@@ -135,16 +164,19 @@ function startLogStreaming() {
 
 function syncRunIdPlaceholder(state) {
   lastKnownRunId = state?.last_run_id ?? null;
-  logRunIdInput.placeholder = lastKnownRunId ? `latest (${lastKnownRunId})` : "latest";
+  logRunIdInput.placeholder = lastKnownRunId
+    ? `latest (${lastKnownRunId})`
+    : "latest";
 }
 
 function renderLogs() {
   const output = document.getElementById("log-output");
-  if (output.dataset.isPlaceholder === "true" && rawLogLines.length === 0) return;
-  
+  if (output.dataset.isPlaceholder === "true" && rawLogLines.length === 0)
+    return;
+
   // Full re-render
-  const text = rawLogLines.map(processLine).join("\n");
-  
+  const text = formatLogLines(rawLogLines);
+
   if (text) {
     output.textContent = text;
     delete output.dataset.isPlaceholder;

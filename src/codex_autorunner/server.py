@@ -13,6 +13,11 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import ConfigError, load_config
 from .engine import Engine, doctor
+from .doc_chat import (
+    DocChatBusyError,
+    DocChatService,
+    DocChatValidationError,
+)
 from .pty_session import PTYSession
 from .state import load_state, save_state, RunnerState, now_iso
 from .utils import atomic_write, find_repo_root
@@ -86,6 +91,7 @@ def create_app(repo_root: Path) -> FastAPI:
     repo_root = find_repo_root(repo_root)
     engine = Engine(repo_root)
     manager = RunnerManager(engine)
+    doc_chat = DocChatService(engine)
     terminal_sessions: dict[str, PTYSession] = {}
     terminal_max_idle_seconds = 3600
     terminal_lock = asyncio.Lock()
@@ -120,6 +126,39 @@ def create_app(repo_root: Path) -> FastAPI:
         content = payload.get("content", "")
         atomic_write(engine.config.doc_path(key), content)
         return {"kind": key, "content": content}
+
+    @app.post("/api/docs/{kind}/chat")
+    async def chat_doc(kind: str, payload: Optional[dict] = None):
+        try:
+            request = doc_chat.parse_request(kind, payload)
+        except DocChatValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        repo_blocked = doc_chat.repo_blocked_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
+
+        if doc_chat.doc_busy(request.kind):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Doc chat already running for {request.kind}",
+            )
+
+        if request.stream:
+            return StreamingResponse(
+                doc_chat.stream(request), media_type="text/event-stream"
+            )
+
+        try:
+            async with doc_chat.doc_lock(request.kind):
+                result = await doc_chat.execute(request)
+        except DocChatBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+        if result.get("status") != "ok":
+            detail = result.get("detail") or "Doc chat failed"
+            raise HTTPException(status_code=500, detail=detail)
+        return result
 
     @app.post("/api/ingest-spec")
     def ingest_spec(payload: Optional[dict] = None):

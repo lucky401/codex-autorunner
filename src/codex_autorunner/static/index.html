@@ -90,6 +90,35 @@
               <button id="ingest-spec" class="ghost">Ingest SPEC → Docs</button>
               <button id="clear-docs" class="danger">Clear TODO/PROGRESS/OPINIONS</button>
             </div>
+            <div class="doc-chat-panel">
+              <div class="doc-chat-compose">
+                <div class="doc-chat-input-row">
+                  <textarea
+                    id="doc-chat-input"
+                    rows="1"
+                    placeholder="Chat with this doc..."
+                    spellcheck="false"
+                  ></textarea>
+                  <button id="doc-chat-send" class="primary sm" title="Send (Shift+Enter)">↑</button>
+                  <button id="doc-chat-cancel" class="ghost sm hidden" title="Cancel">✕</button>
+                </div>
+                <div class="doc-chat-meta">
+                  <span class="muted small" id="doc-chat-hint">Shift+Enter to send</span>
+                  <span id="doc-chat-status" class="pill pill-idle">idle</span>
+                </div>
+              </div>
+              <div id="doc-chat-response-wrapper" class="doc-chat-response-wrapper hidden">
+                <div id="doc-chat-response" class="doc-chat-response"></div>
+                <div id="doc-chat-error" class="doc-chat-error hidden"></div>
+              </div>
+              <details class="doc-chat-history-details" id="doc-chat-history-details">
+                <summary class="doc-chat-history-toggle">
+                  <span>History</span>
+                  <span class="doc-chat-history-count" id="doc-chat-history-count">0</span>
+                </summary>
+                <div class="doc-chat-history" id="doc-chat-history"></div>
+              </details>
+            </div>
           </div>
         </section>
 

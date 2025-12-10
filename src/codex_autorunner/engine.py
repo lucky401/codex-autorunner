@@ -150,7 +150,6 @@ class Engine:
                 self.log_line(
                     run_id, f"stdout: {line.rstrip()}" if line else "stdout: "
                 )
-                print(line, end="")
 
         proc.wait()
         return proc.returncode

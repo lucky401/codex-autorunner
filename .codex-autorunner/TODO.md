@@ -1,7 +1,7 @@
-- [ ] Add Docs tab UI chat panel per doc with input, send/Enter handling, history, streaming display, and error states
-- [ ] Wire chat panel to new backend API, updating editor/preview on success and guarding against unsaved edits overwrite
-- [ ] Implement POST /api/docs/{kind}/chat with validation, doc-kind routing, optional SSE streaming, and concurrency guard (repo lock / per-doc 409)
-- [ ] Build doc-focused agent runner: assemble prompt from work docs + recent run summary, invoke Codex CLI bounded mode, log with doc-chat marker
-- [ ] Validate agent output (non-empty, markdown/checkbox sanity), write doc atomically, and return updated content or surfaced errors
-- [ ] Add logging/telemetry for doc chat runs (run id/time, kind, message, success/error, file pointer)
-- [ ] Create backend tests: API validation, prompt assembly, happy-path write, validation failures, lock conflicts; add lightweight UI test for chat flow (mocked fetch/stream)
+- [x] Add Docs tab UI chat panel per doc with input, send/Enter handling, history, streaming display, and error states
+- [x] Wire chat panel to new backend API, updating editor/preview on success and guarding against unsaved edits overwrite
+- [x] Implement POST /api/docs/{kind}/chat with validation, doc-kind routing, optional SSE streaming, and concurrency guard (repo lock / per-doc 409)
+- [x] Build doc-focused agent runner: assemble prompt from work docs + recent run summary, invoke Codex CLI bounded mode, log with doc-chat marker
+- [x] Harden doc chat output validation (markdown/checkbox sanity), keep atomic writes, and return updated content or surfaced errors
+- [x] Add logging/telemetry for doc chat runs (run id/time, kind, message, success/error, file pointer)
+- [x] Create backend tests: API validation, prompt assembly, happy-path write, validation failures, lock conflicts; add lightweight UI test for chat flow (mocked fetch/stream)

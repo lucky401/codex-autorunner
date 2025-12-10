@@ -1,0 +1,135 @@
+import asyncio
+import json
+import os
+from pathlib import Path
+
+import pytest
+import yaml
+from fastapi.testclient import TestClient
+
+from codex_autorunner.config import DEFAULT_CONFIG
+from codex_autorunner.doc_chat import DocChatRequest, DocChatService
+from codex_autorunner.engine import Engine
+from codex_autorunner.server import create_app
+
+
+def _write_default_config(repo_root: Path) -> None:
+    data = json.loads(json.dumps(DEFAULT_CONFIG))
+    config_path = repo_root / ".codex-autorunner" / "config.yml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+
+def _seed_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    _write_default_config(repo)
+    work = repo / ".codex-autorunner"
+    work.mkdir(exist_ok=True)
+    (work / "TODO.md").write_text("- [ ] first task\n- [x] done task\n", encoding="utf-8")
+    (work / "PROGRESS.md").write_text("progress body\n", encoding="utf-8")
+    (work / "OPINIONS.md").write_text("opinions body\n", encoding="utf-8")
+    (work / "SPEC.md").write_text("spec body\n", encoding="utf-8")
+    return repo
+
+
+@pytest.fixture()
+def repo(tmp_path: Path) -> Path:
+    return _seed_repo(tmp_path)
+
+
+def _client(repo_root: Path) -> TestClient:
+    app = create_app(repo_root)
+    return TestClient(app)
+
+
+def test_chat_rejects_invalid_payload(repo: Path):
+    client = _client(repo)
+    res = client.post("/api/docs/unknown/chat", json={"message": "hi"})
+    assert res.status_code == 400
+    assert res.json()["detail"] == "invalid doc kind"
+
+    res = client.post("/api/docs/todo/chat", json={"message": ""})
+    assert res.status_code == 400
+    assert res.json()["detail"] == "message is required"
+
+    res = client.post("/api/docs/todo/chat", json=None)
+    assert res.status_code == 400
+    assert res.json()["detail"] == "invalid payload"
+
+
+def test_chat_repo_lock_conflict(repo: Path):
+    lock_path = repo / ".codex-autorunner" / "lock"
+    lock_path.write_text(str(os.getpid()), encoding="utf-8")
+    client = _client(repo)
+    res = client.post("/api/docs/todo/chat", json={"message": "run it"})
+    assert res.status_code == 409
+    assert "Autorunner is running" in res.json()["detail"]
+
+
+def test_chat_busy_conflict(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(DocChatService, "doc_busy", lambda self, kind: True)
+    client = _client(repo)
+    res = client.post("/api/docs/todo/chat", json={"message": "hi"})
+    assert res.status_code == 409
+    assert "already running" in res.json()["detail"]
+
+
+def test_chat_success_writes_doc_and_returns_agent_message(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    prompts: list[str] = []
+
+    async def fake_run(self, prompt: str, chat_id: str) -> str:  # type: ignore[override]
+        prompts.append(prompt)
+        return "Agent: cleaned\n- [ ] rewritten task"
+
+    monkeypatch.setattr(DocChatService, "_run_codex_cli", fake_run)
+    monkeypatch.setattr(DocChatService, "_recent_run_summary", lambda self: "last run summary")
+
+    client = _client(repo)
+    res = client.post("/api/docs/todo/chat", json={"message": "rewrite the todo"})
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["status"] == "ok"
+    assert data["agent_message"] == "cleaned"
+    assert data["content"].strip() == "- [ ] rewritten task"
+
+    doc_path = repo / ".codex-autorunner" / "TODO.md"
+    assert doc_path.read_text(encoding="utf-8").strip() == "- [ ] rewritten task"
+
+    prompt = prompts[0]
+    assert "User request: rewrite the todo" in prompt
+    assert "<TARGET_DOC>" in prompt and "</TARGET_DOC>" in prompt
+    assert "last run summary" in prompt
+
+
+def test_chat_validation_failure_does_not_write(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    existing = (repo / ".codex-autorunner" / "TODO.md").read_text(encoding="utf-8")
+
+    async def fake_run(self, prompt: str, chat_id: str) -> str:  # type: ignore[override]
+        return "Agent: nope\nThis is not a todo list."
+
+    monkeypatch.setattr(DocChatService, "_run_codex_cli", fake_run)
+    client = _client(repo)
+    res = client.post("/api/docs/todo/chat", json={"message": "break it"})
+    assert res.status_code == 500
+    assert "checkbox items" in res.json()["detail"]
+    assert (repo / ".codex-autorunner" / "TODO.md").read_text(encoding="utf-8") == existing
+
+
+def test_prompt_includes_all_docs_and_recent_run(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    engine = Engine(repo)
+    service = DocChatService(engine)
+    monkeypatch.setattr(service, "_recent_run_summary", lambda: "recent notes")
+    request = DocChatRequest(kind="progress", message="summarize", stream=False)
+    prompt = service._build_prompt(request)
+    assert "Target doc: PROGRESS" in prompt
+    assert "User request: summarize" in prompt
+    assert "<RECENT_RUN>\nrecent notes\n</RECENT_RUN>" in prompt
+    assert "first task" in prompt
+    assert "progress body" in prompt
+    assert "opinions body" in prompt
+    assert "spec body" in prompt
+    assert "<TARGET_DOC>" in prompt and "</TARGET_DOC>" in prompt
