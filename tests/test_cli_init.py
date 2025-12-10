@@ -47,3 +47,19 @@ def test_init_walks_nested_child_git_repos(tmp_path: Path):
 
     assert result.exit_code == 0
     assert (workspace / ".codex-autorunner" / "config.yml").exists()
+
+
+def test_create_app_allows_parent_without_git(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    nested_repo = workspace / "projects" / "demo"
+    nested_repo.mkdir(parents=True)
+    (nested_repo / ".git").mkdir()
+
+    init_result = runner.invoke(app, ["init", str(workspace)])
+    assert init_result.exit_code == 0
+
+    # Should not raise even though workspace has no .git
+    from codex_autorunner.server import create_app
+
+    app_instance = create_app(workspace)
+    assert app_instance is not None

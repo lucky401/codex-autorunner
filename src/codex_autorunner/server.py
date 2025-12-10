@@ -117,8 +117,10 @@ def _static_dir() -> Path:
 
 
 def create_app(repo_root: Optional[Path] = None) -> FastAPI:
-    repo_root = find_repo_root(repo_root or Path.cwd())
-    engine = Engine(repo_root)
+    config = load_config(repo_root or Path.cwd())
+    if isinstance(config, HubConfig):
+        raise ConfigError("create_app requires repo mode configuration")
+    engine = Engine(config.root)
     manager = RunnerManager(engine)
     doc_chat = DocChatService(engine)
     terminal_sessions: dict[str, PTYSession] = {}
