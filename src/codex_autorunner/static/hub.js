@@ -1,4 +1,6 @@
 import { api, flash, statusPill } from "./utils.js";
+import { registerAutoRefresh } from "./autoRefresh.js";
+import { CONSTANTS } from "./constants.js";
 
 let hubData = { repos: [], last_scan_at: null };
 
@@ -436,8 +438,40 @@ function attachHubHandlers() {
   });
 }
 
+/**
+ * Silent refresh for auto-refresh - doesn't show loading state on buttons.
+ */
+async function silentRefreshHub() {
+  try {
+    const data = await api("/hub/repos", { method: "GET" });
+    hubData = data;
+    renderSummary(data.repos || []);
+    renderRepos(data.repos || []);
+    // Also refresh usage silently
+    try {
+      const usageData = await api("/hub/usage");
+      renderHubUsage(usageData);
+    } catch (err) {
+      // Silently ignore usage errors
+    }
+  } catch (err) {
+    // Silently fail for background refresh
+    console.error("Auto-refresh hub failed:", err);
+  }
+}
+
 export function initHub() {
   if (!repoListEl) return;
   attachHubHandlers();
   refreshHub();
+
+  // Register auto-refresh for hub repo list
+  // Hub is a top-level page so we use tabId: null (global)
+  registerAutoRefresh("hub-repos", {
+    callback: silentRefreshHub,
+    tabId: null, // Hub is the main page, not a tab
+    interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
+    refreshOnActivation: true,
+    immediate: false, // Already called refreshHub() above
+  });
 }

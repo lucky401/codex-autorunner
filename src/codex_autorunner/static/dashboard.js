@@ -1,6 +1,8 @@
 import { api, flash, statusPill, confirmModal } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { loadState, startRun, stopRun, resumeRun, killRun, resetRunner, startStatePolling } from "./state.js";
+import { registerAutoRefresh } from "./autoRefresh.js";
+import { CONSTANTS } from "./constants.js";
 
 function renderState(state) {
   if (!state) return;
@@ -116,6 +118,16 @@ export function initDashboard() {
   bindAction("refresh-state", loadState);
   bindAction("usage-refresh", loadUsage);
 
+  // Initial load
   loadUsage();
   startStatePolling();
+
+  // Register auto-refresh for usage data (every 60s, only when dashboard tab is active)
+  registerAutoRefresh("dashboard-usage", {
+    callback: loadUsage,
+    tabId: "dashboard",
+    interval: CONSTANTS.UI.AUTO_REFRESH_USAGE_INTERVAL,
+    refreshOnActivation: true,
+    immediate: false, // Already called loadUsage() above
+  });
 }

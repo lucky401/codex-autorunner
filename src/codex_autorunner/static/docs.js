@@ -1,6 +1,8 @@
 import { api, flash, statusPill, confirmModal, resolvePath } from "./utils.js";
 import { loadState } from "./state.js";
 import { publish } from "./bus.js";
+import { registerAutoRefresh } from "./autoRefresh.js";
+import { CONSTANTS } from "./constants.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants & State
@@ -736,6 +738,41 @@ async function loadDocs() {
   }
 }
 
+/**
+ * Safe auto-refresh for docs that skips if there are unsaved changes.
+ * This prevents overwriting user edits during background refresh.
+ */
+async function safeLoadDocs() {
+  const textarea = getDocTextarea();
+  if (textarea) {
+    const currentValue = textarea.value;
+    const cachedValue = docsCache[activeDoc] || "";
+    // Skip refresh if there are unsaved local changes
+    if (currentValue !== cachedValue) {
+      return;
+    }
+  }
+  // Also skip if a chat operation is in progress
+  const state = getChatState(activeDoc);
+  if (state.status === "running") {
+    return;
+  }
+  try {
+    const data = await api("/api/docs");
+    // Check again after fetch - user might have started editing
+    if (textarea && textarea.value !== (docsCache[activeDoc] || "")) {
+      return;
+    }
+    docsCache = { ...docsCache, ...data };
+    setDoc(activeDoc);
+    renderTodoPreview(docsCache.todo);
+    publish("docs:loaded", docsCache);
+  } catch (err) {
+    // Silently fail for background refresh
+    console.error("Auto-refresh docs failed:", err);
+  }
+}
+
 function setDoc(kind) {
   activeDoc = kind;
   docButtons.forEach((btn) =>
@@ -882,6 +919,16 @@ export function initDocs() {
 
   loadDocs();
   renderChat(activeDoc);
+
+  // Register auto-refresh for docs (only when docs tab is active)
+  // Uses a smart refresh that checks for unsaved changes
+  registerAutoRefresh("docs-content", {
+    callback: safeLoadDocs,
+    tabId: "docs",
+    interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
+    refreshOnActivation: true,
+    immediate: false, // Already called loadDocs() above
+  });
 }
 
 async function ingestSpec() {
