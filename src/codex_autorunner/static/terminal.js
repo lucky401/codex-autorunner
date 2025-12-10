@@ -14,7 +14,107 @@ let intentionalDisconnect = false;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
 
+// Mobile controls state
+let mobileControlsEl = null;
+let ctrlActive = false;
+let altActive = false;
+
 const textEncoder = new TextEncoder();
+
+// Check if device has touch capability
+function isTouchDevice() {
+  return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+}
+
+// Send a key sequence to the terminal
+function sendKey(seq) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  
+  // If ctrl modifier is active, convert to ctrl code
+  if (ctrlActive && seq.length === 1) {
+    const char = seq.toUpperCase();
+    const code = char.charCodeAt(0) - 64;
+    if (code >= 1 && code <= 26) {
+      seq = String.fromCharCode(code);
+    }
+  }
+  
+  socket.send(textEncoder.encode(seq));
+  
+  // Reset modifiers after sending (unless it was just a modifier toggle)
+  ctrlActive = false;
+  altActive = false;
+  updateModifierButtons();
+}
+
+// Send Ctrl+key combo
+function sendCtrl(char) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  const code = char.toUpperCase().charCodeAt(0) - 64;
+  socket.send(textEncoder.encode(String.fromCharCode(code)));
+}
+
+// Update modifier button visual states
+function updateModifierButtons() {
+  const ctrlBtn = document.getElementById('tmb-ctrl');
+  const altBtn = document.getElementById('tmb-alt');
+  if (ctrlBtn) ctrlBtn.classList.toggle('active', ctrlActive);
+  if (altBtn) altBtn.classList.toggle('active', altActive);
+}
+
+// Initialize mobile controls
+function initMobileControls() {
+  mobileControlsEl = document.getElementById('terminal-mobile-controls');
+  if (!mobileControlsEl) return;
+  
+  // Only show on touch devices
+  if (!isTouchDevice()) {
+    mobileControlsEl.style.display = 'none';
+    return;
+  }
+  
+  // Handle all key buttons
+  mobileControlsEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('.tmb-key');
+    if (!btn) return;
+    
+    e.preventDefault();
+    
+    // Handle modifier toggles
+    const modKey = btn.dataset.key;
+    if (modKey === 'ctrl') {
+      ctrlActive = !ctrlActive;
+      updateModifierButtons();
+      return;
+    }
+    if (modKey === 'alt') {
+      altActive = !altActive;
+      updateModifierButtons();
+      return;
+    }
+    
+    // Handle Ctrl+X combos
+    const ctrlChar = btn.dataset.ctrl;
+    if (ctrlChar) {
+      sendCtrl(ctrlChar);
+      return;
+    }
+    
+    // Handle direct sequences (arrows, esc, tab)
+    const seq = btn.dataset.seq;
+    if (seq) {
+      sendKey(seq);
+      return;
+    }
+  });
+  
+  // Add haptic feedback on touch if available
+  mobileControlsEl.addEventListener('touchstart', (e) => {
+    if (e.target.closest('.tmb-key') && navigator.vibrate) {
+      navigator.vibrate(10);
+    }
+  }, { passive: true });
+}
 
 function setStatus(message) {
   if (statusEl) {
@@ -220,4 +320,7 @@ export function initTerminal() {
   setStatus("Disconnected");
 
   window.addEventListener("resize", handleResize);
+  
+  // Initialize mobile touch controls
+  initMobileControls();
 }

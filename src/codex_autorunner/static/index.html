@@ -182,6 +182,26 @@
               <p class="muted">Press Connect or Resume to launch Codex TUI</p>
             </div>
           </div>
+          <!-- Mobile control bar - touch-friendly special keys -->
+          <div id="terminal-mobile-controls" class="terminal-mobile-controls">
+            <div class="tmb-row">
+              <button class="tmb-key tmb-mod" data-key="ctrl" id="tmb-ctrl">Ctrl</button>
+              <button class="tmb-key tmb-mod" data-key="alt" id="tmb-alt">Alt</button>
+              <button class="tmb-key" data-seq="&#x1b;">Esc</button>
+              <button class="tmb-key" data-seq="&#x09;">Tab</button>
+              <button class="tmb-key tmb-primary" data-seq="&#x0d;">Enter</button>
+            </div>
+            <div class="tmb-row">
+              <button class="tmb-key tmb-arrow" data-seq="&#x1b;[D">←</button>
+              <button class="tmb-key tmb-arrow" data-seq="&#x1b;[A">↑</button>
+              <button class="tmb-key tmb-arrow" data-seq="&#x1b;[B">↓</button>
+              <button class="tmb-key tmb-arrow" data-seq="&#x1b;[C">→</button>
+              <button class="tmb-key" data-seq="&#x7f;">Bksp</button>
+              <button class="tmb-key tmb-ctrl-combo" data-ctrl="c">^C</button>
+              <button class="tmb-key tmb-ctrl-combo" data-ctrl="d">^D</button>
+              <button class="tmb-key tmb-ctrl-combo" data-ctrl="z">^Z</button>
+            </div>
+          </div>
         </section>
       </main>
     </div>
