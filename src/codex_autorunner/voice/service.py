@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import Callable, Optional
+
+from .capture import CaptureCallbacks, CaptureState, PushToTalkCapture
+from .config import VoiceConfig
+from .provider import SpeechSessionMetadata
+from .resolver import resolve_speech_provider
+
+
+class VoiceServiceError(Exception):
+    """Raised when voice transcription fails at the service boundary."""
+
+    def __init__(self, reason: str, detail: str):
+        super().__init__(detail)
+        self.reason = reason
+        self.detail = detail
+
+
+class VoiceService:
+    """
+    Thin wrapper that wires the shared PushToTalkCapture into HTTP handlers.
+    This keeps raw audio in-memory only and enforces opt-in for remote APIs.
+    """
+
+    def __init__(
+        self,
+        config: VoiceConfig,
+        logger: Optional[logging.Logger] = None,
+        provider_resolver: Callable[[VoiceConfig], object] = resolve_speech_provider,
+        provider: Optional[object] = None,
+    ) -> None:
+        self.config = config
+        self._logger = logger or logging.getLogger(__name__)
+        self._provider_resolver = provider_resolver
+        self._provider = provider
+
+    def config_payload(self) -> dict:
+        """Expose safe config fields to the UI."""
+        return {
+            "enabled": self.config.enabled,
+            "provider": self.config.provider,
+            "latency_mode": self.config.latency_mode,
+            "chunk_ms": self.config.chunk_ms,
+            "sample_rate": self.config.sample_rate,
+            "warn_on_remote_api": self.config.warn_on_remote_api,
+            "push_to_talk": {
+                "max_ms": self.config.push_to_talk.max_ms,
+                "silence_auto_stop_ms": self.config.push_to_talk.silence_auto_stop_ms,
+                "min_hold_ms": self.config.push_to_talk.min_hold_ms,
+            },
+        }
+
+    def transcribe(
+        self,
+        audio_bytes: bytes,
+        *,
+        client: str = "web",
+        user_agent: Optional[str] = None,
+        language: Optional[str] = None,
+        opt_in: bool = False,
+    ) -> dict:
+        if not self.config.enabled:
+            raise VoiceServiceError("disabled", "Voice is disabled")
+        if not audio_bytes:
+            raise VoiceServiceError("empty_audio", "No audio received")
+
+        provider = self._resolve_provider()
+        buffer = _TranscriptionBuffer()
+        capture = PushToTalkCapture(
+            provider=provider,
+            config=self.config,
+            callbacks=buffer.callbacks,
+            permission_requester=lambda: True,
+            client=client,
+            logger=self._logger,
+            session_builder=lambda: self._build_session_metadata(
+                provider_name=provider.name,
+                language=language,
+                client=client,
+                user_agent=user_agent,
+            ),
+        )
+        if opt_in:
+            capture.acknowledge_remote_opt_in()
+
+        capture.begin_capture()
+        if capture.state == CaptureState.ERROR:
+            reason = buffer.error_reason or "capture_failed"
+            raise VoiceServiceError(reason, reason.replace("_", " "))
+
+        try:
+            capture.handle_chunk(audio_bytes)
+            capture.end_capture("client_stop")
+        except Exception as exc:
+            raise VoiceServiceError("provider_error", str(exc)) from exc
+
+        if buffer.error_reason:
+            raise VoiceServiceError(buffer.error_reason, buffer.error_reason.replace("_", " "))
+
+        transcript = buffer.final_text or buffer.partial_text or ""
+        return {
+            "text": transcript,
+            "warnings": buffer.warnings,
+        }
+
+    def _resolve_provider(self):
+        if self._provider is None:
+            try:
+                self._provider = self._provider_resolver(self.config, logger=self._logger)
+            except TypeError:
+                self._provider = self._provider_resolver(self.config)
+        return self._provider
+
+    def _build_session_metadata(
+        self,
+        *,
+        provider_name: str,
+        language: Optional[str],
+        client: Optional[str],
+        user_agent: Optional[str],
+    ) -> SpeechSessionMetadata:
+        return SpeechSessionMetadata(
+            session_id=str(uuid.uuid4()),
+            provider=provider_name,
+            latency_mode=self.config.latency_mode,
+            language=language,
+            client=client,
+            user_agent=user_agent,
+        )
+
+
+class _TranscriptionBuffer:
+    def __init__(self) -> None:
+        self.partial_text = ""
+        self.final_text = ""
+        self.warnings: list[str] = []
+        self.error_reason: Optional[str] = None
+        self.callbacks = CaptureCallbacks(
+            on_partial=self._on_partial,
+            on_final=self._on_final,
+            on_warning=self._on_warning,
+            on_error=self._on_error,
+        )
+
+    def _on_partial(self, text: str) -> None:
+        if text:
+            self.partial_text = text
+
+    def _on_final(self, text: str) -> None:
+        if text:
+            self.final_text = text
+
+    def _on_warning(self, message: str) -> None:
+        if message:
+            self.warnings.append(message)
+
+    def _on_error(self, reason: str) -> None:
+        self.error_reason = reason

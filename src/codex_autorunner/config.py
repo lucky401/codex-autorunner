@@ -40,6 +40,29 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "port": 4173,
         "base_path": "",
     },
+    "voice": {
+        "enabled": False,
+        "provider": "openai_whisper",
+        "latency_mode": "balanced",
+        "chunk_ms": 600,
+        "sample_rate": 16_000,
+        "warn_on_remote_api": True,
+        "push_to_talk": {
+            "max_ms": 15_000,
+            "silence_auto_stop_ms": 1_200,
+            "min_hold_ms": 150,
+        },
+        "providers": {
+            "openai_whisper": {
+                "api_key_env": "OPENAI_API_KEY",
+                "model": "whisper-1",
+                "base_url": None,
+                "temperature": 0,
+                "language": None,
+                "redact_request": True,
+            }
+        },
+    },
     "log": {
         "path": ".codex-autorunner/codex-autorunner.log",
         "max_bytes": 10_000_000,
@@ -104,6 +127,7 @@ class RepoConfig:
     server_port: int
     server_base_path: str
     log: LogConfig
+    voice: Dict[str, Any]
 
     def doc_path(self, key: str) -> Path:
         return self.root / self.docs[key]
@@ -194,6 +218,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         "opinions": Path(cfg["docs"]["opinions"]),
         "spec": Path(cfg["docs"]["spec"]),
     }
+    voice_cfg = cfg.get("voice") if isinstance(cfg.get("voice"), dict) else {}
     template_val = cfg["prompt"].get("template")
     template = root / template_val if template_val else None
     term_args = cfg["codex"].get("terminal_args") or []
@@ -224,6 +249,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
                 log_cfg.get("backup_count", DEFAULT_REPO_CONFIG["log"]["backup_count"])
             ),
         ),
+        voice=voice_cfg,
     )
 
 
@@ -312,6 +338,9 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
     for key in ("max_bytes", "backup_count"):
         if not isinstance(log_cfg.get(key, 0), int):
             raise ConfigError(f"log.{key} must be an integer")
+    voice_cfg = cfg.get("voice", {})
+    if voice_cfg is not None and not isinstance(voice_cfg, dict):
+        raise ConfigError("voice section must be a mapping if provided")
 
 
 def _validate_hub_config(cfg: Dict[str, Any]) -> None:

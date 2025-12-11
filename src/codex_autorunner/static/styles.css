@@ -1217,6 +1217,49 @@ button:disabled {
   font-size: 12px;
 }
 
+.voice-button {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.voice-button.voice-recording {
+  background: #b3261e;
+  color: #fff;
+  border-color: #b3261e;
+  box-shadow: 0 0 0 2px rgba(179, 38, 30, 0.2);
+}
+
+.voice-button.voice-sending {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.voice-button.voice-error {
+  border-color: #d35400;
+  color: #d35400;
+}
+
+.voice-button.voice-retry {
+  background: #fff7e6;
+  border-color: #e0c080;
+  color: #8c5b00;
+}
+
+.voice-button.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.voice-button.voice-disconnected {
+  opacity: 0.65;
+}
+
+.voice-status {
+  color: var(--muted);
+}
+
 .doc-chat-meta {
   display: flex;
   align-items: center;
@@ -1583,6 +1626,23 @@ label {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   margin-bottom: 6px;
+}
+
+.inline-toolbar .terminal-voice {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inline-toolbar .terminal-voice .voice-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.inline-toolbar .terminal-voice .voice-status {
+  white-space: nowrap;
 }
 
 /* Log viewer - maximize height (accounts for nav + toolbar + legend) */

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import threading
 import uuid
 from importlib import resources
@@ -7,7 +8,16 @@ from pathlib import Path
 from typing import Optional
 from asyncio.subprocess import PIPE, STDOUT, create_subprocess_exec
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -39,6 +49,7 @@ from .usage import (
     summarize_repo_usage,
 )
 from .manifest import load_manifest
+from .voice import VoiceConfig, VoiceService, VoiceServiceError
 
 
 class BasePathRouterMiddleware:
@@ -228,6 +239,7 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
     engine = Engine(config.root)
     manager = RunnerManager(engine)
     doc_chat = DocChatService(engine)
+    voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
     terminal_sessions: dict[str, PTYSession] = {}
     terminal_max_idle_seconds = 3600
     terminal_lock: Optional[asyncio.Lock] = None
@@ -238,12 +250,31 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
             terminal_lock = asyncio.Lock()
         return terminal_lock
 
+    def _voice_config_payload() -> dict:
+        service = voice_service or VoiceService(voice_config, logger=app.state.logger)
+        return service.config_payload()
+
+    def _require_voice_service() -> VoiceService:
+        if not voice_service or not voice_config.enabled:
+            raise HTTPException(status_code=400, detail="Voice is disabled")
+        return voice_service
+
+    async def _read_audio_payload(file: Optional[UploadFile], request: Request) -> bytes:
+        if file is not None:
+            return await file.read()
+        return await request.body()
+
     app = FastAPI(redirect_slashes=False)
     app.state.base_path = base_path
     app.state.logger = setup_rotating_logger(
         f"repo[{engine.repo_root}]", engine.config.log
     )
     app.state.logger.info("Repo server ready at %s", engine.repo_root)
+    try:
+        voice_service = VoiceService(voice_config, logger=app.state.logger)
+    except Exception as exc:
+        voice_service = None
+        app.state.logger.warning("Voice service unavailable: %s", exc, exc_info=False)
     static_dir = _static_dir()
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -345,6 +376,33 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
         if not pending:
             raise HTTPException(status_code=404, detail="No pending patch")
         return pending
+
+    @app.get("/api/voice/config")
+    def get_voice_config():
+        return _voice_config_payload()
+
+    @app.post("/api/voice/transcribe")
+    async def transcribe_voice(
+        request: Request,
+        file: Optional[UploadFile] = File(None),
+        opt_in: bool = Form(False),
+        language: Optional[str] = Form(None),
+    ):
+        service = _require_voice_service()
+        audio_bytes = await _read_audio_payload(file, request)
+        try:
+            result = await asyncio.to_thread(
+                service.transcribe,
+                audio_bytes,
+                client="web",
+                user_agent=request.headers.get("user-agent"),
+                language=language,
+                opt_in=opt_in,
+            )
+        except VoiceServiceError as exc:
+            status = 400 if exc.reason in ("disabled", "empty_audio", "opt_in_required") else 502
+            raise HTTPException(status_code=status, detail=exc.detail)
+        return {"status": "ok", **result}
 
     @app.post("/api/ingest-spec")
     def ingest_spec(payload: Optional[dict] = None):

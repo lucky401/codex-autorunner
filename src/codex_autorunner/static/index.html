@@ -229,11 +229,13 @@
                     placeholder="Chat with this doc..."
                     spellcheck="false"
                   ></textarea>
+                  <button id="doc-chat-voice" class="ghost sm voice-button" title="Hold to talk">🎤</button>
                   <button id="doc-chat-send" class="primary sm" title="Send (Shift+Enter)">↑</button>
                   <button id="doc-chat-cancel" class="ghost sm hidden" title="Cancel">✕</button>
                 </div>
                 <div class="doc-chat-meta">
                   <span class="muted small" id="doc-chat-hint">Shift+Enter to send</span>
+                  <span class="muted small hidden voice-status" id="doc-chat-voice-status"></span>
                   <span id="doc-chat-status" class="pill pill-idle">idle</span>
                 </div>
               </div>
@@ -288,6 +290,10 @@
             <button id="terminal-connect" class="primary sm">Connect</button>
             <button id="terminal-resume" class="ghost sm">Resume</button>
             <button id="terminal-disconnect" class="ghost sm">Disconnect</button>
+            <div class="terminal-voice">
+              <button id="terminal-voice" class="ghost sm voice-button" title="Hold to talk">🎤</button>
+              <span class="muted small hidden voice-status" id="terminal-voice-status"></span>
+            </div>
           </div>
           <div id="terminal-container" class="terminal-container">
             <div class="terminal-overlay" id="terminal-overlay">
