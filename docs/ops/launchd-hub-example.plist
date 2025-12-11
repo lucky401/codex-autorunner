@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.codex.autorunner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-lc</string>
+    <string>codex-autorunner hub serve --host 0.0.0.0 --port 4173 --path /Users/you/car-workspace</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/you/car-workspace</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/you/car-workspace/.codex-autorunner/codex-autorunner-hub.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/car-workspace/.codex-autorunner/codex-autorunner-hub.log</string>
+</dict>
+</plist>

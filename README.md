@@ -28,6 +28,14 @@ CLI commands are available as `codex-autorunner` or the shorter `car`.
 3) Open `http://127.0.0.1:4173` to use the UI, or call the FastAPI endpoints under `/api/*`.
    - The Terminal tab launches the configured Codex binary inside a PTY via websocket; it uses `codex.terminal_args` (defaults empty, so it runs `codex` bare unless you override). xterm.js assets are vendored under `static/vendor`.
 
+## Local install (macOS headless hub at `~/car-workspace`)
+- One-shot setup (user scope): `scripts/install-local-mac-hub.sh`. It pipx-installs this repo, creates/initializes `~/car-workspace` as a hub, writes a launchd agent plist, and loads it. Defaults: host `0.0.0.0`, port `4173`, label `com.codex.autorunner`. Override via env (`WORKSPACE`, `HOST`, `PORT`, `LABEL`, `PLIST_PATH`, `PACKAGE_SRC`).
+- Manual path if you prefer:
+  - `pipx install .`
+  - `car init --mode hub --path ~/car-workspace`
+  - Copy `docs/ops/launchd-hub-example.plist` to `~/Library/LaunchAgents/com.codex.autorunner.plist`, replace `/Users/you` with your home, adjust host/port if desired, then `launchctl load -w ~/Library/LaunchAgents/com.codex.autorunner.plist`.
+- The hub serves the UI/API from `http://<host>:<port>` and writes logs to `~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`. Each repo under `~/car-workspace` should be a git repo with its own `.codex-autorunner/` (run `car init` in each).
+
 ## Git hooks
 - Install dev tools: `pip install -e .[dev]`
 - Point Git to the repo hooks: `git config core.hooksPath .githooks`
