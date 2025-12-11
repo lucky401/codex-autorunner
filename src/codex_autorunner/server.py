@@ -121,11 +121,6 @@ class BasePathRouterMiddleware:
                 raw_path = scope.get("raw_path")
                 if raw_path:
                     scope["raw_path"] = raw_path[len(self.base_path_bytes) :] or b"/"
-            if root_path:
-                if not root_path.startswith(self.base_path):
-                    scope["root_path"] = f"{self.base_path}{root_path}"
-            else:
-                scope["root_path"] = self.base_path
             return await self.app(scope, receive, send)
 
         if self._should_redirect(path, root_path):
@@ -243,7 +238,7 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
             terminal_lock = asyncio.Lock()
         return terminal_lock
 
-    app = FastAPI()
+    app = FastAPI(redirect_slashes=False)
     app.state.base_path = base_path
     app.state.logger = setup_rotating_logger(
         f"repo[{engine.repo_root}]", engine.config.log
@@ -652,7 +647,7 @@ def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = N
         _normalize_base_path(base_path) if base_path is not None else config.server_base_path
     )
     supervisor = HubSupervisor(config)
-    app = FastAPI()
+    app = FastAPI(redirect_slashes=False)
     app.state.base_path = base_path
     app.state.logger = setup_rotating_logger(f"hub[{config.root}]", config.log)
     try:
@@ -670,7 +665,8 @@ def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = N
         if prefix in mount_errors:
             return False
         try:
-            sub_app = create_app(repo_path, base_path=base_path)
+            # Hub already handles the base path; avoid reapplying it in child apps.
+            sub_app = create_app(repo_path, base_path="")
         except ConfigError as exc:
             mount_errors[prefix] = str(exc)
             try:
