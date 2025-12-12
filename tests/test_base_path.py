@@ -40,7 +40,7 @@ def test_strips_base_and_sets_root_path():
     resp = client.get("/car/api/ping")
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["path"] == "/api/ping"
+    assert payload["path"] == "/car/api/ping"
     assert payload["root_path"] == "/car"
 
 
@@ -79,7 +79,7 @@ def test_respects_existing_root_path_with_base_prefix():
         return messages
 
     messages = anyio.run(_run)
-    assert captured["path"] == "/api/ping"
+    assert captured["path"] == "/car/repos/demo/api/ping"
     assert captured["root_path"] == "/car/repos/demo"
     assert messages and messages[0]["status"] == 200
 
@@ -120,3 +120,19 @@ def test_websocket_redirects_to_canonical_base():
     assert messages[0]["status"] == 308
     headers = dict(messages[0].get("headers") or [])
     assert headers.get(b"location") == b"/car/api/terminal"
+
+
+def test_mounted_apps_work_under_base_path():
+    app = FastAPI()
+    sub_app = FastAPI()
+
+    @sub_app.get("/api/ping")
+    def ping():
+        return {"ok": True}
+
+    app.mount("/repos/demo", sub_app)
+    wrapped = BasePathRouterMiddleware(app, "/car")
+    client = TestClient(wrapped)
+    resp = client.get("/car/repos/demo/api/ping")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}

@@ -57,7 +57,7 @@ from .voice import VoiceConfig, VoiceService, VoiceServiceError
 class BasePathRouterMiddleware:
     """
     Middleware that keeps the app mounted at / while enforcing a canonical base path.
-    - Requests that already include the base path are stripped so routing stays rooted at /.
+    - Requests that already include the base path are routed via root_path so routing stays rooted at /.
     - Requests missing the base path but pointing at known CAR prefixes are redirected to the
       canonical location (HTTP 308). WebSocket handshakes get the same redirect response.
     """
@@ -125,29 +125,25 @@ class BasePathRouterMiddleware:
 
         if self._has_base(path, root_path):
             scope = dict(scope)
-            if path == self.base_path:
-                scope["path"] = "/"
+            # Preserve the base path for downstream routing + URL generation.
+            if not root_path:
+                scope["root_path"] = self.base_path
+                root_path = self.base_path
+
+            # Starlette expects scope["path"] to include scope["root_path"] for
+            # mounted sub-apps (including /repos/* and /static/*). If we detect
+            # an already-stripped path (e.g., behind a proxy), re-prefix it.
+            if root_path and not path.startswith(root_path):
+                if path == "/":
+                    scope["path"] = root_path
+                else:
+                    scope["path"] = f"{root_path}{path}"
                 raw_path = scope.get("raw_path")
-                if raw_path:
-                    scope["raw_path"] = b"/"
-                # Preserve the base path for downstream routing helpers.
-                if not root_path:
-                    scope["root_path"] = self.base_path
-            elif path.startswith(f"{self.base_path}/"):
-                trimmed = path[len(self.base_path) :] or "/"
-                # Special case: Starlette static file mounts behave best when
-                # scope["path"] still includes scope["root_path"].
-                is_static = trimmed == "/static" or trimmed.startswith("/static/")
-                if not is_static:
-                    scope["path"] = trimmed
-                    raw_path = scope.get("raw_path")
-                    if raw_path:
-                        scope["raw_path"] = (
-                            raw_path[len(self.base_path_bytes) :] or b"/"
-                        )
-                # Preserve the base path for downstream routing helpers.
-                if not root_path:
-                    scope["root_path"] = self.base_path
+                if raw_path and not raw_path.startswith(self.base_path_bytes):
+                    if raw_path == b"/":
+                        scope["raw_path"] = self.base_path_bytes
+                    else:
+                        scope["raw_path"] = self.base_path_bytes + raw_path
             return await self.app(scope, receive, send)
 
         if self._should_redirect(path, root_path):

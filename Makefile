@@ -72,7 +72,7 @@ launchd-hub:
 .PHONY: refresh-launchd
 refresh-launchd:
 	@echo "Reinstalling codex-autorunner into pipx venv at $(PIPX_VENV)..."
-	$(PIPX_PYTHON) -m pip install --force-reinstall --no-deps $(CURDIR)
+	$(PIPX_PYTHON) -m pip install --force-reinstall $(CURDIR)
 	@echo "Reloading launchd agent $(LAUNCH_AGENT)..."
 	launchctl unload $(LAUNCH_AGENT) >/dev/null 2>&1 || true
 	launchctl load -w $(LAUNCH_AGENT)

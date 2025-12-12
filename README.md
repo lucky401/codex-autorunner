@@ -41,7 +41,7 @@ CLI commands are available as `codex-autorunner` or the shorter `car`.
 When you change code in this repo and want the launchd-managed hub to run it:
 1) Reinstall into the launchd venv (pipx default paths shown; adjust if your label/paths differ):
 ```
-$HOME/.local/pipx/venvs/codex-autorunner/bin/python -m pip install --force-reinstall --no-deps /path/to/your/codex-autorunner
+$HOME/.local/pipx/venvs/codex-autorunner/bin/python -m pip install --force-reinstall /path/to/your/codex-autorunner
 ```
 2) Restart the agent so it picks up the new bits (default label is `com.codex.autorunner`; default plist `~/Library/LaunchAgents/com.codex.autorunner.plist`):
 ```
