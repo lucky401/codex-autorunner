@@ -4,6 +4,7 @@ import dataclasses
 import logging
 import os
 import time
+import json
 from io import BytesIO
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
@@ -20,6 +21,91 @@ from ..provider import (
 
 RequestFn = Callable[[bytes, Mapping[str, Any]], Dict[str, Any]]
 
+_EXT_TO_CONTENT_TYPE: dict[str, str] = {
+    # Keep these aligned with OpenAI's documented accepted formats for /audio/transcriptions.
+    "webm": "audio/webm",
+    "ogg": "audio/ogg",
+    "wav": "audio/wav",
+    "mp3": "audio/mpeg",
+    "mpeg": "audio/mpeg",
+    "mpga": "audio/mpeg",
+    "m4a": "audio/mp4",
+    "mp4": "audio/mp4",
+}
+
+
+def _normalize_content_type(raw: Optional[str]) -> Optional[str]:
+    """
+    Normalize potentially noisy MIME types.
+
+    - Browsers may include codec parameters (e.g. "audio/webm;codecs=opus")
+    - Python's mimetypes may emit unusual values (e.g. "audio/mp4a-latm" for .m4a)
+    """
+
+    if not raw:
+        return None
+    base = raw.split(";", 1)[0].strip().lower()
+    if not base:
+        return None
+
+    # Map common-but-unhelpful values to canonical ones OpenAI reliably accepts.
+    if base == "video/webm":
+        return "audio/webm"
+    if base in ("audio/mp4a-latm", "audio/x-m4a"):
+        return "audio/mp4"
+    if base == "audio/x-wav":
+        return "audio/wav"
+    if base == "video/mp4":
+        return "audio/mp4"
+
+    return base
+
+
+def _content_type_from_filename(filename: str) -> str:
+    lower = (filename or "").lower()
+    if "." in lower:
+        ext = lower.rsplit(".", 1)[-1]
+        if ext in _EXT_TO_CONTENT_TYPE:
+            return _EXT_TO_CONTENT_TYPE[ext]
+    return "application/octet-stream"
+
+
+def _pick_upload_content_type(filename: str, provided: Optional[str]) -> str:
+    normalized = _normalize_content_type(provided)
+    return normalized or _content_type_from_filename(filename)
+
+
+def _extract_http_error_detail(
+    exc: Exception,
+) -> tuple[Optional[int], Optional[str]]:
+    if not isinstance(exc, httpx.HTTPStatusError) or exc.response is None:
+        return None, None
+
+    status_code = exc.response.status_code
+    detail: Optional[str] = None
+    try:
+        payload = exc.response.json()
+        # OpenAI typically returns {"error": {"message": "...", "type": "...", ...}}
+        if isinstance(payload, dict):
+            err = payload.get("error")
+            if isinstance(err, dict) and err.get("message"):
+                detail = str(err["message"])
+            else:
+                detail = json.dumps(payload, ensure_ascii=False)
+        else:
+            detail = json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        try:
+            detail = exc.response.text
+        except Exception:
+            detail = None
+
+    if detail is not None:
+        detail = detail.strip()
+        if len(detail) > 600:
+            detail = f"{detail[:600]}…"
+    return status_code, detail
+
 
 @dataclasses.dataclass
 class OpenAIWhisperSettings:
@@ -29,6 +115,7 @@ class OpenAIWhisperSettings:
     temperature: float = 0.0
     language: Optional[str] = None
     redact_request: bool = True
+    timeout_s: float = 60.0
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "OpenAIWhisperSettings":
@@ -39,6 +126,7 @@ class OpenAIWhisperSettings:
             temperature=float(raw.get("temperature", 0.0)),
             language=raw.get("language"),
             redact_request=bool(raw.get("redact_request", True)),
+            timeout_s=float(raw.get("timeout_s", 60.0)),
         )
 
 
@@ -100,9 +188,21 @@ class OpenAIWhisperProvider(SpeechProvider):
             data["language"] = payload["language"]
 
         filename = payload.get("filename", "audio.webm")
-        files = {"file": (filename, BytesIO(audio_bytes), "application/octet-stream")}
+        content_type = _pick_upload_content_type(
+            filename, payload.get("content_type")  # type: ignore[arg-type]
+        )
+        files = {
+            "file": (
+                filename,
+                BytesIO(audio_bytes),
+                content_type,
+            )
+        }
 
-        response = httpx.post(url, headers=headers, data=data, files=files, timeout=30)
+        timeout_s = float(payload.get("timeout_s", 60.0))
+        response = httpx.post(
+            url, headers=headers, data=data, files=files, timeout=timeout_s
+        )
         response.raise_for_status()
         return response.json()
 
@@ -149,6 +249,7 @@ class _OpenAIWhisperStream(TranscriptionStream):
 
         payload = self._build_payload()
         status_code: Optional[int] = None
+        error_detail: Optional[str] = None
         try:
             started = time.monotonic()
             result = self._request_fn(audio_bytes, payload)
@@ -156,13 +257,23 @@ class _OpenAIWhisperStream(TranscriptionStream):
             text = (result or {}).get("text", "") if isinstance(result, Mapping) else ""
             return [TranscriptionEvent(text=text, is_final=True, latency_ms=latency_ms)]
         except Exception as exc:
-            if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
-                status_code = exc.response.status_code
+            status_code, error_detail = _extract_http_error_detail(exc)
+            if status_code is None and isinstance(exc, httpx.HTTPStatusError):
+                status_code = (
+                    exc.response.status_code if exc.response is not None else None
+                )
+
+            if error_detail:
+                self._logger.error(
+                    "OpenAI Whisper transcription failed (HTTP %s): %s",
+                    status_code if status_code is not None else "n/a",
+                    error_detail,
+                    exc_info=False,
+                )
             else:
-                status_code = None
-            self._logger.error(
-                "OpenAI Whisper transcription failed: %s", exc, exc_info=False
-            )
+                self._logger.error(
+                    "OpenAI Whisper transcription failed: %s", exc, exc_info=False
+                )
             # Avoid retry loops for credential errors; surface explicit reasons.
             if status_code == 401:
                 return [
@@ -170,6 +281,19 @@ class _OpenAIWhisperStream(TranscriptionStream):
                 ]
             if status_code == 403:
                 return [TranscriptionEvent(text="", is_final=True, error="forbidden")]
+            if status_code == 400:
+                # Usually indicates invalid/unsupported audio format or malformed params.
+                return [
+                    TranscriptionEvent(text="", is_final=True, error="invalid_audio")
+                ]
+            if status_code == 413:
+                return [
+                    TranscriptionEvent(text="", is_final=True, error="audio_too_large")
+                ]
+            if status_code == 429:
+                return [
+                    TranscriptionEvent(text="", is_final=True, error="rate_limited")
+                ]
             return [TranscriptionEvent(text="", is_final=True, error="provider_error")]
         finally:
             # Release buffered bytes to avoid accidental reuse.
@@ -189,9 +313,12 @@ class _OpenAIWhisperStream(TranscriptionStream):
             "model": self._settings.model,
             "temperature": self._settings.temperature,
             "language": self._settings.language or self._session.language,
+            "timeout_s": self._settings.timeout_s,
         }
         if self._session.filename:
             payload["filename"] = self._session.filename
+        if self._session.content_type:
+            payload["content_type"] = self._session.content_type
 
         if not self._settings.redact_request:
             payload.update(
