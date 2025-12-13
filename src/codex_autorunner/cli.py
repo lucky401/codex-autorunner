@@ -373,22 +373,6 @@ def log(
         typer.echo(block)
 
 
-def _print_run_block(log_path: Path, run_id: int) -> None:
-    start = f"=== run {run_id} start ==="
-    end = f"=== run {run_id} end"
-    printing = False
-    for line in log_path.read_text(encoding="utf-8").splitlines():
-        if line.strip() == start:
-            printing = True
-            typer.echo(line)
-            continue
-        if printing and line.startswith(end):
-            typer.echo(line)
-            break
-        if printing:
-            typer.echo(line)
-
-
 @app.command()
 def edit(
     target: str = typer.Argument(..., help="todo|progress|opinions|spec"),

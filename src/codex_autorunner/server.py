@@ -538,9 +538,3 @@ def create_hub_app(
         app = BasePathRouterMiddleware(app, base_path)
 
     return app
-
-
-def doctor_server(repo_root: Path) -> None:
-    root = find_repo_root(repo_root)
-    doctor(root)
-    load_config(root)

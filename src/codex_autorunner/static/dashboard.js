@@ -16,13 +16,6 @@ function renderState(state) {
   document.getElementById("runner-pid").textContent = `Runner pid: ${state.runner_pid ?? "–"}`;
 }
 
-function formatTokens(val) {
-  if (val === null || val === undefined) return "–";
-  const num = Number(val);
-  if (Number.isNaN(num)) return val;
-  return num.toLocaleString();
-}
-
 function setUsageLoading(loading) {
   const btn = document.getElementById("usage-refresh");
   if (!btn) return;

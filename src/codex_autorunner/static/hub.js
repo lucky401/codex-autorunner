@@ -13,13 +13,6 @@ const hubUsageList = document.getElementById("hub-usage-list");
 const hubUsageMeta = document.getElementById("hub-usage-meta");
 const hubUsageRefresh = document.getElementById("hub-usage-refresh");
 
-function formatTime(isoString) {
-  if (!isoString) return "never";
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) return isoString;
-  return date.toLocaleString();
-}
-
 function formatRunSummary(repo) {
   if (!repo.initialized) return "Not initialized";
   if (!repo.exists_on_disk) return "Missing on disk";
