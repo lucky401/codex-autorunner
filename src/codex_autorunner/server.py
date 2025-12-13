@@ -1,14 +1,9 @@
 import asyncio
-import collections
-import json
 import os
 import threading
-import time
-import uuid
 from importlib import resources
 from pathlib import Path
 from typing import Optional
-from asyncio.subprocess import PIPE, STDOUT, create_subprocess_exec
 
 from fastapi import (
     File,
@@ -30,23 +25,10 @@ from fastapi.staticfiles import StaticFiles
 from .config import ConfigError, HubConfig, _normalize_base_path, load_config
 from .engine import Engine, LockError, doctor
 from .logging_utils import setup_rotating_logger
-from .doc_chat import (
-    DocChatBusyError,
-    DocChatError,
-    DocChatService,
-    DocChatValidationError,
-    _normalize_kind,
-)
+from .doc_chat import DocChatService
 from .hub import HubSupervisor
-from .pty_session import PTYSession
 from .state import load_state, save_state, RunnerState, now_iso
-from .utils import atomic_write, find_repo_root
-from .spec_ingest import (
-    SpecIngestError,
-    generate_docs_from_spec,
-    write_ingested_docs,
-    clear_work_docs,
-)
+from .utils import find_repo_root
 from .usage import (
     UsageError,
     default_codex_home,
@@ -56,6 +38,7 @@ from .usage import (
 )
 from .manifest import load_manifest
 from .voice import VoiceConfig, VoiceService, VoiceServiceError
+from .api_routes import build_repo_router, ActiveSession
 
 
 class BasePathRouterMiddleware:
@@ -177,10 +160,13 @@ class RunnerManager:
         with self._lock:
             if self.running:
                 return
+            # Own the repo lock for the duration of the background runner.
+            # This matches CLI/Hub semantics and prevents concurrent runners.
+            self.engine.acquire_lock(force=False)
             self.stop_flag.clear()
             target_runs = 1 if once else None
             self.thread = threading.Thread(
-                target=self.engine.run_loop,
+                target=self._run_loop,
                 kwargs={
                     "stop_after_runs": target_runs,
                     "external_stop_flag": self.stop_flag,
@@ -188,6 +174,21 @@ class RunnerManager:
                 daemon=True,
             )
             self.thread.start()
+
+    def _run_loop(
+        self,
+        stop_after_runs: Optional[int] = None,
+        external_stop_flag: Optional[threading.Event] = None,
+    ) -> None:
+        try:
+            self.engine.run_loop(
+                stop_after_runs=stop_after_runs, external_stop_flag=external_stop_flag
+            )
+        finally:
+            try:
+                self.engine.release_lock()
+            except Exception:
+                pass
 
     def stop(self) -> None:
         with self._lock:
@@ -200,107 +201,6 @@ class RunnerManager:
             # Best-effort join to allow loop to exit.
             if self.thread:
                 self.thread.join(timeout=1.0)
-
-
-class ActiveSession:
-    def __init__(
-        self, session_id: str, pty: PTYSession, loop: asyncio.AbstractEventLoop
-    ):
-        self.id = session_id
-        self.pty = pty
-        self.buffer = collections.deque(maxlen=1000)
-        self.subscribers: set[asyncio.Queue] = set()
-        self.lock = asyncio.Lock()
-        self.loop = loop
-        self._setup_reader()
-
-    def _setup_reader(self):
-        self.loop.add_reader(self.pty.fd, self._read_callback)
-
-    def _read_callback(self):
-        try:
-            # If we are closed, do nothing (should be removed from reader though)
-            if self.pty.closed:
-                return
-
-            # Read directly
-            data = os.read(self.pty.fd, 4096)
-            if data:
-                self.pty.last_active = time.time()
-                self.buffer.append(data)
-                for queue in list(self.subscribers):
-                    try:
-                        queue.put_nowait(data)
-                    except asyncio.QueueFull:
-                        pass
-            else:
-                # EOF
-                self.close()
-        except OSError:
-            self.close()
-
-    def add_subscriber(self) -> asyncio.Queue:
-        q = asyncio.Queue()
-        # Replay buffer
-        for chunk in self.buffer:
-            q.put_nowait(chunk)
-        self.subscribers.add(q)
-        return q
-
-    def remove_subscriber(self, q: asyncio.Queue):
-        if q in self.subscribers:
-            self.subscribers.remove(q)
-
-    def close(self):
-        if not self.pty.closed:
-            self.loop.remove_reader(self.pty.fd)
-            self.pty.terminate()
-        # Notify subscribers of exit?
-        # We can put None or a special sentinel
-        for queue in list(self.subscribers):
-            try:
-                queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
-
-
-async def _log_stream(log_path: Path):
-    if not log_path.exists():
-        yield "data: log file not found\n\n"
-        return
-    with log_path.open("r", encoding="utf-8") as f:
-        f.seek(0, 2)
-        while True:
-            line = f.readline()
-            if line:
-                yield f"data: {line.rstrip()}\n\n"
-            else:
-                await asyncio.sleep(0.5)
-
-
-async def _state_stream(engine: Engine, manager: RunnerManager):
-    last_payload = None
-    while True:
-        try:
-            state = await asyncio.to_thread(load_state, engine.state_path)
-            outstanding, done = await asyncio.to_thread(engine.docs.todos)
-            payload = {
-                "last_run_id": state.last_run_id,
-                "status": state.status,
-                "last_exit_code": state.last_exit_code,
-                "last_run_started_at": state.last_run_started_at,
-                "last_run_finished_at": state.last_run_finished_at,
-                "outstanding_count": len(outstanding),
-                "done_count": len(done),
-                "running": manager.running,
-                "runner_pid": state.runner_pid,
-            }
-            if payload != last_payload:
-                yield f"data: {json.dumps(payload)}\n\n"
-                last_payload = payload
-        except Exception:
-            pass
-        await asyncio.sleep(1.0)
 
 
 def _static_dir() -> Path:
@@ -322,20 +222,14 @@ def create_app(
     manager = RunnerManager(engine)
     doc_chat = DocChatService(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
-    terminal_sessions: dict[str, ActiveSession] = {}
     terminal_max_idle_seconds = 3600
-    terminal_lock: Optional[asyncio.Lock] = None
-
-    def _terminal_lock() -> asyncio.Lock:
-        nonlocal terminal_lock
-        if terminal_lock is None:
-            terminal_lock = asyncio.Lock()
-        return terminal_lock
+    terminal_lock = asyncio.Lock()
 
     app = FastAPI(redirect_slashes=False)
     app.state.base_path = base_path
+    # IMPORTANT: keep server/system logs separate from the agent execution trace.
     app.state.logger = setup_rotating_logger(
-        f"repo[{engine.repo_root}]", engine.config.log
+        f"repo[{engine.repo_root}]", engine.config.server_log
     )
     app.state.logger.info("Repo server ready at %s", engine.repo_root)
     voice_service: Optional[VoiceService]
@@ -344,473 +238,21 @@ def create_app(
     except Exception as exc:
         voice_service = None
         app.state.logger.warning("Voice service unavailable: %s", exc, exc_info=False)
-
-    def _voice_config_payload() -> dict:
-        service = voice_service or VoiceService(voice_config, logger=app.state.logger)
-        return service.config_payload()
-
-    def _require_voice_service() -> VoiceService:
-        if not voice_service or not voice_config.enabled:
-            raise HTTPException(status_code=400, detail="Voice is disabled")
-        return voice_service
+    # Store shared state for routers/handlers.
+    app.state.engine = engine
+    app.state.manager = manager
+    app.state.doc_chat = doc_chat
+    app.state.voice_config = voice_config
+    # Optional: if initialization failed, API handlers should degrade gracefully.
+    app.state.voice_service = voice_service
+    app.state.terminal_sessions = {}
+    app.state.terminal_max_idle_seconds = terminal_max_idle_seconds
+    app.state.terminal_lock = terminal_lock
 
     static_dir = _static_dir()
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
-    @app.get("/", include_in_schema=False)
-    def index():
-        index_path = static_dir / "index.html"
-        if not index_path.exists():
-            raise HTTPException(
-                status_code=500, detail="Static UI assets missing; reinstall package"
-            )
-        return FileResponse(index_path)
-
-    @app.get("/api/docs")
-    def get_docs():
-        return {
-            "todo": engine.docs.read_doc("todo"),
-            "progress": engine.docs.read_doc("progress"),
-            "opinions": engine.docs.read_doc("opinions"),
-            "spec": engine.docs.read_doc("spec"),
-        }
-
-    @app.put("/api/docs/{kind}")
-    def put_doc(kind: str, payload: dict):
-        key = kind.lower()
-        if key not in ("todo", "progress", "opinions", "spec"):
-            raise HTTPException(status_code=400, detail="invalid doc kind")
-        content = payload.get("content", "")
-        atomic_write(engine.config.doc_path(key), content)
-        return {"kind": key, "content": content}
-
-    @app.post("/api/docs/{kind}/chat")
-    async def chat_doc(kind: str, payload: Optional[dict] = None):
-        try:
-            request = doc_chat.parse_request(kind, payload)
-        except DocChatValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-        repo_blocked = doc_chat.repo_blocked_reason()
-        if repo_blocked:
-            raise HTTPException(status_code=409, detail=repo_blocked)
-
-        if doc_chat.doc_busy(request.kind):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Doc chat already running for {request.kind}",
-            )
-
-        if request.stream:
-            return StreamingResponse(
-                doc_chat.stream(request), media_type="text/event-stream"
-            )
-
-        try:
-            async with doc_chat.doc_lock(request.kind):
-                result = await doc_chat.execute(request)
-        except DocChatBusyError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
-
-        if result.get("status") != "ok":
-            detail = result.get("detail") or "Doc chat failed"
-            raise HTTPException(status_code=500, detail=detail)
-        return result
-
-    @app.post("/api/docs/{kind}/chat/apply")
-    async def apply_chat_patch(kind: str):
-        key = _normalize_kind(kind)
-        repo_blocked = doc_chat.repo_blocked_reason()
-        if repo_blocked:
-            raise HTTPException(status_code=409, detail=repo_blocked)
-
-        try:
-            async with doc_chat.doc_lock(key):
-                content = doc_chat.apply_saved_patch(key)
-        except DocChatBusyError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
-        except DocChatError as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
-        return {
-            "status": "ok",
-            "kind": key,
-            "content": content,
-            "agent_message": doc_chat.last_agent_message
-            or f"Updated {key.upper()} via doc chat.",
-        }
-
-    @app.post("/api/docs/{kind}/chat/discard")
-    async def discard_chat_patch(kind: str):
-        key = _normalize_kind(kind)
-        try:
-            async with doc_chat.doc_lock(key):
-                content = doc_chat.discard_patch(key)
-        except DocChatError as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
-        return {"status": "ok", "kind": key, "content": content}
-
-    @app.get("/api/docs/{kind}/chat/pending")
-    async def pending_chat_patch(kind: str):
-        key = _normalize_kind(kind)
-        pending = doc_chat.pending_patch(key)
-        if not pending:
-            raise HTTPException(status_code=404, detail="No pending patch")
-        return pending
-
-    @app.get("/api/voice/config")
-    def get_voice_config():
-        return _voice_config_payload()
-
-    @app.post("/api/voice/transcribe")
-    async def transcribe_voice(
-        request: Request,
-        file: Optional[UploadFile] = File(None),
-        language: Optional[str] = None,
-    ):
-        service = _require_voice_service()
-        filename: Optional[str] = None
-        content_type: Optional[str] = None
-        if file is not None:
-            filename = file.filename
-            content_type = file.content_type
-            try:
-                audio_bytes = await file.read()
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=400, detail="Unable to read audio upload"
-                ) from exc
-        else:
-            # Backwards compatibility for older clients that POST raw bytes.
-            audio_bytes = await request.body()
-        try:
-            result = await asyncio.to_thread(
-                service.transcribe,
-                audio_bytes,
-                client="web",
-                user_agent=request.headers.get("user-agent"),
-                language=language,
-                filename=filename,
-                content_type=content_type,
-            )
-        except VoiceServiceError as exc:
-            if exc.reason == "unauthorized":
-                status = 401
-            elif exc.reason == "forbidden":
-                status = 403
-            elif exc.reason == "audio_too_large":
-                status = 413
-            elif exc.reason == "rate_limited":
-                status = 429
-            else:
-                status = (
-                    400
-                    if exc.reason in ("disabled", "empty_audio", "invalid_audio")
-                    else 502
-                )
-            raise HTTPException(status_code=status, detail=exc.detail)
-        return {"status": "ok", **result}
-
-    @app.post("/api/ingest-spec")
-    def ingest_spec(payload: Optional[dict] = None):
-        force = False
-        spec_override: Optional[Path] = None
-        if payload and isinstance(payload, dict):
-            force = bool(payload.get("force", False))
-            override = payload.get("spec_path")
-            if override:
-                spec_override = Path(str(override))
-        try:
-            docs = generate_docs_from_spec(engine, spec_path=spec_override)
-            write_ingested_docs(engine, docs, force=force)
-        except SpecIngestError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        return docs
-
-    @app.post("/api/docs/clear")
-    def clear_docs():
-        try:
-            docs = clear_work_docs(engine)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
-        return docs
-
-    @app.get("/api/usage")
-    def get_usage(since: Optional[str] = None, until: Optional[str] = None):
-        try:
-            since_dt = parse_iso_datetime(since)
-            until_dt = parse_iso_datetime(until)
-        except UsageError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        summary = summarize_repo_usage(
-            engine.repo_root,
-            default_codex_home(),
-            since=since_dt,
-            until=until_dt,
-        )
-        return {
-            "mode": "repo",
-            "repo": str(engine.repo_root),
-            "codex_home": str(default_codex_home()),
-            "since": since,
-            "until": until,
-            **summary.to_dict(),
-        }
-
-    @app.get("/api/state")
-    def get_state():
-        state = load_state(engine.state_path)
-        outstanding, done = engine.docs.todos()
-        return {
-            "last_run_id": state.last_run_id,
-            "status": state.status,
-            "last_exit_code": state.last_exit_code,
-            "last_run_started_at": state.last_run_started_at,
-            "last_run_finished_at": state.last_run_finished_at,
-            "outstanding_count": len(outstanding),
-            "done_count": len(done),
-            "running": manager.running,
-            "runner_pid": state.runner_pid,
-        }
-
-    @app.get("/api/state/stream")
-    async def stream_state():
-        return StreamingResponse(
-            _state_stream(engine, manager), media_type="text/event-stream"
-        )
-
-    @app.post("/api/run/start")
-    def start_run(payload: Optional[dict] = None):
-        once = False
-        if payload and isinstance(payload, dict):
-            once = bool(payload.get("once", False))
-        try:
-            app.state.logger.info("run/start once=%s", once)
-        except Exception:
-            pass
-        manager.start(once=once)
-        return {"running": manager.running, "once": once}
-
-    @app.post("/api/run/stop")
-    def stop_run():
-        try:
-            app.state.logger.info("run/stop requested")
-        except Exception:
-            pass
-        manager.stop()
-        return {"running": manager.running}
-
-    @app.post("/api/run/kill")
-    def kill_run():
-        try:
-            app.state.logger.info("run/kill requested")
-        except Exception:
-            pass
-        manager.kill()
-        # mark state as idle/error after kill
-        state = load_state(engine.state_path)
-        new_state = RunnerState(
-            last_run_id=state.last_run_id,
-            status="error",
-            last_exit_code=137,
-            last_run_started_at=state.last_run_started_at,
-            last_run_finished_at=now_iso(),
-            runner_pid=None,
-        )
-        save_state(engine.state_path, new_state)
-        engine.release_lock()
-        return {"running": manager.running}
-
-    @app.post("/api/run/resume")
-    def resume_run(payload: Optional[dict] = None):
-        once = False
-        if payload and isinstance(payload, dict):
-            once = bool(payload.get("once", False))
-        # clear stale lock if needed
-        try:
-            app.state.logger.info("run/resume once=%s", once)
-        except Exception:
-            pass
-        from .engine import clear_stale_lock
-
-        clear_stale_lock(engine.lock_path)
-        manager.stop_flag.clear()
-        manager.start(once=once)
-        return {"running": manager.running, "once": once}
-
-    @app.post("/api/run/reset")
-    def reset_runner():
-        """Reset runner metadata: clear state, logs, and locks."""
-        if manager.running:
-            raise HTTPException(
-                status_code=409, detail="Cannot reset while runner is active"
-            )
-        try:
-            app.state.logger.info("run/reset requested")
-        except Exception:
-            pass
-        # Clear stale lock
-        engine.lock_path.unlink(missing_ok=True)
-        # Reset state to initial values
-        initial_state = RunnerState(
-            last_run_id=None,
-            status="idle",
-            last_exit_code=None,
-            last_run_started_at=None,
-            last_run_finished_at=None,
-            runner_pid=None,
-        )
-        save_state(engine.state_path, initial_state)
-        # Clear logs
-        if engine.log_path.exists():
-            engine.log_path.unlink()
-        return {"status": "ok", "message": "Runner reset complete"}
-
-    @app.get("/api/logs")
-    def get_logs(run_id: Optional[int] = None, tail: Optional[int] = None):
-        if run_id is not None:
-            block = engine.read_run_block(run_id)
-            if not block:
-                raise HTTPException(status_code=404, detail="run not found")
-            return JSONResponse({"run_id": run_id, "log": block})
-        if tail is not None:
-            return JSONResponse({"tail": tail, "log": engine.tail_log(tail)})
-        state = load_state(engine.state_path)
-        if state.last_run_id is None:
-            return JSONResponse({"log": ""})
-        block = engine.read_run_block(state.last_run_id) or ""
-        return JSONResponse({"run_id": state.last_run_id, "log": block})
-
-    @app.get("/api/logs/stream")
-    async def stream_logs():
-        return StreamingResponse(
-            _log_stream(engine.log_path), media_type="text/event-stream"
-        )
-
-    @app.websocket("/api/terminal")
-    async def terminal(ws: WebSocket):
-        await ws.accept()
-        client_session_id = ws.query_params.get("session_id")
-        session_id = None
-        active_session: Optional[ActiveSession] = None
-
-        async with _terminal_lock():
-            if client_session_id and client_session_id in terminal_sessions:
-                active_session = terminal_sessions[client_session_id]
-                if not active_session.pty.isalive():
-                    active_session.close()
-                    terminal_sessions.pop(client_session_id, None)
-                    active_session = None
-                else:
-                    session_id = client_session_id
-
-            if not active_session:
-                session_id = str(uuid.uuid4())
-                resume_mode = ws.query_params.get("mode") == "resume"
-                if resume_mode:
-                    cmd = [
-                        engine.config.codex_binary,
-                        "--yolo",
-                        "resume",
-                        *engine.config.codex_terminal_args,
-                    ]
-                else:
-                    cmd = [
-                        engine.config.codex_binary,
-                        *engine.config.codex_terminal_args,
-                    ]
-                try:
-                    pty = PTYSession(cmd, cwd=str(engine.repo_root))
-                    active_session = ActiveSession(
-                        session_id, pty, asyncio.get_running_loop()
-                    )
-                    terminal_sessions[session_id] = active_session
-                except FileNotFoundError:
-                    await ws.send_text(
-                        json.dumps(
-                            {
-                                "type": "error",
-                                "message": f"Codex binary not found: {engine.config.codex_binary}",
-                            }
-                        )
-                    )
-                    await ws.close()
-                    return
-
-        # Send hello with session_id
-        await ws.send_text(json.dumps({"type": "hello", "session_id": session_id}))
-
-        queue = active_session.add_subscriber()
-
-        async def pty_to_ws():
-            try:
-                while True:
-                    data = await queue.get()
-                    if data is None:
-                        # Session ended
-                        if active_session:
-                            exit_code = active_session.pty.exit_code()
-                            await ws.send_text(
-                                json.dumps(
-                                    {
-                                        "type": "exit",
-                                        "code": exit_code,
-                                        "session_id": session_id,
-                                    }
-                                )
-                            )
-                        break
-                    await ws.send_bytes(data)
-            except Exception:
-                pass
-
-        async def ws_to_pty():
-            try:
-                while True:
-                    msg = await ws.receive()
-                    if msg["type"] == "websocket.disconnect":
-                        break
-                    if msg.get("bytes") is not None:
-                        active_session.pty.write(msg["bytes"])
-                        continue
-                    text = msg.get("text")
-                    if not text:
-                        continue
-                    try:
-                        payload = json.loads(text)
-                    except json.JSONDecodeError:
-                        continue
-                    if payload.get("type") == "resize":
-                        cols = int(payload.get("cols", 0))
-                        rows = int(payload.get("rows", 0))
-                        if cols > 0 and rows > 0:
-                            active_session.pty.resize(cols, rows)
-                    elif payload.get("type") == "ping":
-                        await ws.send_text(json.dumps({"type": "pong"}))
-            except WebSocketDisconnect:
-                pass
-            except Exception:
-                pass
-
-        forward_task = asyncio.create_task(pty_to_ws())
-        input_task = asyncio.create_task(ws_to_pty())
-        await asyncio.wait(
-            [forward_task, input_task], return_when=asyncio.FIRST_COMPLETED
-        )
-
-        # Cleanup subscription
-        if active_session:
-            active_session.remove_subscriber(queue)
-            # If session is dead, remove from map
-            if not active_session.pty.isalive():
-                async with _terminal_lock():
-                    terminal_sessions.pop(session_id, None)
-
-        forward_task.cancel()
-        input_task.cancel()
-        try:
-            await ws.close()
-        except Exception:
-            pass
+    # Route handlers
+    app.include_router(build_repo_router(static_dir))
 
     @app.on_event("startup")
     async def start_cleanup_task():
@@ -818,17 +260,16 @@ def create_app(
             while True:
                 await asyncio.sleep(600)  # Check every 10 mins
                 try:
-                    async with _terminal_lock():
+                    async with app.state.terminal_lock:
                         to_remove = []
-                        for sid, session in terminal_sessions.items():
-                            # If no subscribers and stale, kill it.
-                            # If subscribers exist, maybe don't kill? Or use strict idle?
-                            # Original used strict idle (activity based).
-                            if session.pty.is_stale(terminal_max_idle_seconds):
+                        for sid, session in app.state.terminal_sessions.items():
+                            if session.pty.is_stale(
+                                app.state.terminal_max_idle_seconds
+                            ):
                                 session.close()
                                 to_remove.append(sid)
                         for sid in to_remove:
-                            terminal_sessions.pop(sid, None)
+                            app.state.terminal_sessions.pop(sid, None)
                 except Exception:
                     pass
 
@@ -836,10 +277,10 @@ def create_app(
 
     @app.on_event("shutdown")
     async def shutdown_terminal_sessions():
-        async with _terminal_lock():
-            for session in terminal_sessions.values():
+        async with app.state.terminal_lock:
+            for session in app.state.terminal_sessions.values():
                 session.close()
-            terminal_sessions.clear()
+            app.state.terminal_sessions.clear()
 
     if base_path:
         app = BasePathRouterMiddleware(app, base_path)
@@ -861,7 +302,8 @@ def create_hub_app(
     supervisor = HubSupervisor(config)
     app = FastAPI(redirect_slashes=False)
     app.state.base_path = base_path
-    app.state.logger = setup_rotating_logger(f"hub[{config.root}]", config.log)
+    # Hub server/system logs (separate from any repo agent logs).
+    app.state.logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)
     try:
         app.state.logger.info("Hub app ready at %s", config.root)
     except Exception:
@@ -1010,6 +452,69 @@ def create_hub_app(
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(config.root))
 
+    @app.post("/hub/worktrees/create")
+    def create_worktree(payload: Optional[dict] = None):
+        if not payload or not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
+        base_repo_id = payload.get("base_repo_id") or payload.get("baseRepoId")
+        branch = payload.get("branch")
+        force = bool(payload.get("force", False))
+        if not base_repo_id or not branch:
+            raise HTTPException(
+                status_code=400, detail="Missing base_repo_id or branch"
+            )
+        try:
+            app.state.logger.info(
+                "Hub create worktree base=%s branch=%s force=%s",
+                base_repo_id,
+                branch,
+                force,
+            )
+        except Exception:
+            pass
+        try:
+            snapshot = supervisor.create_worktree(
+                base_repo_id=str(base_repo_id), branch=str(branch), force=force
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        _refresh_mounts([snapshot])
+        return _add_mount_info(snapshot.to_dict(config.root))
+
+    @app.post("/hub/worktrees/cleanup")
+    def cleanup_worktree(payload: Optional[dict] = None):
+        if not payload or not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
+        worktree_repo_id = payload.get("worktree_repo_id") or payload.get(
+            "worktreeRepoId"
+        )
+        if not worktree_repo_id:
+            raise HTTPException(status_code=400, detail="Missing worktree_repo_id")
+        delete_branch = bool(payload.get("delete_branch", False))
+        delete_remote = bool(payload.get("delete_remote", False))
+        try:
+            app.state.logger.info(
+                "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s",
+                worktree_repo_id,
+                delete_branch,
+                delete_remote,
+            )
+        except Exception:
+            pass
+        try:
+            supervisor.cleanup_worktree(
+                worktree_repo_id=str(worktree_repo_id),
+                delete_branch=delete_branch,
+                delete_remote=delete_remote,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"status": "ok"}
+
     @app.post("/hub/repos/{repo_id}/run")
     def run_repo(repo_id: str, payload: Optional[dict] = None):
         once = False
@@ -1096,9 +601,3 @@ def create_hub_app(
         app = BasePathRouterMiddleware(app, base_path)
 
     return app
-
-
-def doctor_server(repo_root: Path) -> None:
-    root = find_repo_root(repo_root)
-    doctor(root)
-    load_config(root)

@@ -122,6 +122,13 @@ body {
   z-index: 1501;
 }
 
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .tab {
   flex: 1;
   padding: 6px 10px;
@@ -454,6 +461,30 @@ main {
   gap: 4px;
 }
 
+/* Hub worktrees (worktree repos grouped under a base repo) */
+.hub-worktree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+  margin-top: 4px;
+  margin-bottom: 6px;
+}
+
+.hub-worktree-row-inner {
+  display: block;
+}
+
+.hub-worktree-card {
+  padding-left: 8px;
+}
+
+.hub-worktree-orphans {
+  margin: 8px 0 4px;
+}
+
 /* Legacy hub-usage-list styles removed - using hub-usage-grid now */
 
 /* Repo card - compact single-row layout */
@@ -530,6 +561,24 @@ main {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.hub-repo-subline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+a.hub-pr-pill {
+  text-decoration: none;
+  border-color: rgba(108, 245, 216, 0.35);
+  color: var(--accent);
+}
+
+a.hub-pr-pill:hover {
+  border-color: var(--accent);
 }
 
 .hub-repo-open-indicator {
@@ -851,12 +900,97 @@ button.icon-btn {
   font-weight: 700;
 }
 
+/* GitHub card */
+.github-card .github-grid {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 6px;
+}
+
+.github-card .github-row {
+  display: grid;
+  grid-template-columns: 50px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.github-card .github-link {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github-card .github-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 12px;
+}
+
+.github-card .github-pr-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.github-card .icon-btn-inline {
+  padding: 2px 4px;
+  min-width: unset;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.github-card .icon-btn-inline:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.github-card .icon-btn-inline:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.github-card .github-actions {
+  margin-top: 10px;
+}
+
 /* Docs nav */
 .doc-nav {
   display: flex;
   align-items: center;
   gap: 4px;
   margin-bottom: 8px;
+}
+
+.spec-issue-import {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 8px;
+  flex-wrap: wrap;
+}
+
+.spec-issue-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.spec-issue-input-row.hidden {
+  display: none;
+}
+
+.spec-issue-import input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  min-width: 200px;
 }
 
 .doc-editor {
@@ -2229,6 +2363,36 @@ label {
 
 .modal-actions button {
   min-width: 80px;
+}
+
+/* Input modal */
+.modal-input {
+  max-width: 420px;
+}
+
+.modal-input p {
+  margin: 0 0 12px;
+}
+
+.modal-input input[type="text"] {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 13px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  margin-bottom: 16px;
+  box-sizing: border-box;
+}
+
+.modal-input input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.modal-input input[type="text"]::placeholder {
+  color: var(--muted);
 }
 
 /* Create repo modal */

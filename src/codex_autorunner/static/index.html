@@ -183,6 +183,39 @@
               </div>
               <ul id="todo-preview-list" class="checklist"></ul>
             </div>
+
+            <div class="card github-card" id="github-card">
+              <div class="card-header">
+                <span class="label">GitHub</span>
+                <span id="github-status-pill" class="pill pill-idle">–</span>
+              </div>
+              <div class="github-grid">
+                <div class="github-row">
+                  <span class="muted">Repo</span>
+                  <a id="github-repo-link" class="github-link muted">–</a>
+                </div>
+                <div class="github-row">
+                  <span class="muted">Branch</span>
+                  <span id="github-branch" class="github-mono">–</span>
+                </div>
+                <div class="github-row">
+                  <span class="muted">Issue</span>
+                  <a id="github-issue-link" class="github-link muted">–</a>
+                </div>
+                <div class="github-row">
+                  <span class="muted">PR</span>
+                  <span class="github-pr-group">
+                    <a id="github-pr-link" class="github-link muted">–</a>
+                    <button id="github-open-pr-files" class="ghost icon-btn-inline" disabled title="View changed files">📄</button>
+                    <button id="github-copy-pr" class="ghost icon-btn-inline" disabled title="Copy PR link">📋</button>
+                  </span>
+                </div>
+              </div>
+              <div class="actions github-actions">
+                <button id="github-sync-pr" class="primary sm">Sync PR</button>
+              </div>
+              <p id="github-note" class="muted small">–</p>
+            </div>
           </div>
         </section>
 
@@ -193,6 +226,19 @@
             <button class="chip" data-doc="opinions">OPINIONS</button>
             <button class="chip" data-doc="spec">SPEC</button>
             <span class="muted" id="doc-status"></span>
+          </div>
+          <div id="spec-issue-import" class="spec-issue-import hidden">
+            <button id="spec-issue-import-toggle" class="ghost sm">Import Issue → SPEC</button>
+            <div id="spec-issue-input-row" class="spec-issue-input-row hidden">
+              <input
+                id="spec-issue-input"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="Issue number or URL (e.g. 123 or https://github.com/org/repo/issues/123)"
+              />
+              <button id="spec-issue-import-btn" class="primary sm">Import</button>
+            </div>
           </div>
           <div class="doc-editor">
             <div id="doc-patch-main" class="doc-patch-main hidden">
@@ -333,6 +379,18 @@
         <div class="modal-actions">
           <button id="confirm-modal-cancel" class="ghost">Cancel</button>
           <button id="confirm-modal-ok" class="danger">Confirm</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Input Modal -->
+    <div id="input-modal" class="modal-overlay" hidden>
+      <div class="modal-dialog modal-input">
+        <p id="input-modal-message"></p>
+        <input type="text" id="input-modal-input" autocomplete="off" spellcheck="false" />
+        <div class="modal-actions">
+          <button id="input-modal-cancel" class="ghost">Cancel</button>
+          <button id="input-modal-ok" class="primary">OK</button>
         </div>
       </div>
     </div>

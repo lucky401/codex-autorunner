@@ -23,6 +23,13 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "binary": "codex",
         "args": ["--yolo", "exec", "--sandbox", "danger-full-access"],
         "terminal_args": ["--yolo"],
+        # Optional model tiers for different Codex invocations.
+        # If codex.models.large is unset/null, callers should avoid passing --model
+        # so Codex uses the user's default/global profile model.
+        "models": {
+            "small": "gpt-5.1-codex-mini",
+            "large": None,
+        },
     },
     "prompt": {
         "prev_run_max_chars": 6000,
@@ -36,6 +43,13 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "git": {
         "auto_commit": False,
         "commit_message_template": "[codex] run #{run_id}",
+    },
+    "github": {
+        "enabled": True,
+        "pr_draft_default": True,
+        "sync_commit_mode": "auto",  # none|auto|always
+        # Bounds the agentic sync step in GitHubService.sync_pr (seconds).
+        "sync_agent_timeout_seconds": 1800,
     },
     "server": {
         "host": "127.0.0.1",
@@ -70,6 +84,11 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "max_bytes": 10_000_000,
         "backup_count": 3,
     },
+    "server_log": {
+        "path": ".codex-autorunner/codex-server.log",
+        "max_bytes": 10_000_000,
+        "backup_count": 3,
+    },
 }
 
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
@@ -77,6 +96,8 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "mode": "hub",
     "hub": {
         "repos_root": ".",
+        # Hub-managed git worktrees live here (depth=1 scan). Each worktree is treated as a repo.
+        "worktrees_root": "worktrees",
         "manifest": ".codex-autorunner/manifest.yml",
         "discover_depth": 1,
         "auto_init_missing": True,
@@ -91,6 +112,8 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "port": 4173,
         "base_path": "",
     },
+    # Hub already has hub.log, but we still support an explicit server_log for consistency.
+    "server_log": None,
 }
 
 # Backwards-compatible alias for repo defaults
@@ -129,6 +152,7 @@ class RepoConfig:
     server_port: int
     server_base_path: str
     log: LogConfig
+    server_log: LogConfig
     voice: Dict[str, Any]
 
     def doc_path(self, key: str) -> Path:
@@ -142,6 +166,7 @@ class HubConfig:
     version: int
     mode: str
     repos_root: Path
+    worktrees_root: Path
     manifest_path: Path
     discover_depth: int
     auto_init_missing: bool
@@ -149,6 +174,7 @@ class HubConfig:
     server_port: int
     server_base_path: str
     log: LogConfig
+    server_log: LogConfig
 
 
 # Alias used by existing code paths that only support repo mode
@@ -250,6 +276,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     template = root / template_val if template_val else None
     term_args = cfg["codex"].get("terminal_args") or []
     log_cfg = cfg.get("log", {})
+    server_log_cfg = cfg.get("server_log", {}) or {}
     return RepoConfig(
         raw=cfg,
         root=root,
@@ -278,6 +305,23 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
                 log_cfg.get("backup_count", DEFAULT_REPO_CONFIG["log"]["backup_count"])
             ),
         ),
+        server_log=LogConfig(
+            path=root
+            / server_log_cfg.get(
+                "path", DEFAULT_REPO_CONFIG["server_log"]["path"]  # type: ignore[index]
+            ),
+            max_bytes=int(
+                server_log_cfg.get(
+                    "max_bytes", DEFAULT_REPO_CONFIG["server_log"]["max_bytes"]  # type: ignore[index]
+                )
+            ),
+            backup_count=int(
+                server_log_cfg.get(
+                    "backup_count",
+                    DEFAULT_REPO_CONFIG["server_log"]["backup_count"],  # type: ignore[index]
+                )
+            ),
+        ),
         voice=voice_cfg,
     )
 
@@ -286,12 +330,21 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
     root = config_path.parent.parent.resolve()
     hub_cfg = cfg["hub"]
     log_cfg = hub_cfg["log"]
+    server_log_cfg = cfg.get("server_log")
+    # Default to hub log if server_log is not configured.
+    if not isinstance(server_log_cfg, dict):
+        server_log_cfg = {
+            "path": log_cfg["path"],
+            "max_bytes": log_cfg["max_bytes"],
+            "backup_count": log_cfg["backup_count"],
+        }
     return HubConfig(
         raw=cfg,
         root=root,
         version=int(cfg["version"]),
         mode="hub",
         repos_root=(root / hub_cfg["repos_root"]).resolve(),
+        worktrees_root=(root / hub_cfg["worktrees_root"]).resolve(),
         manifest_path=root / hub_cfg["manifest"],
         discover_depth=int(hub_cfg["discover_depth"]),
         auto_init_missing=bool(hub_cfg["auto_init_missing"]),
@@ -302,6 +355,13 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
             path=root / log_cfg["path"],
             max_bytes=int(log_cfg["max_bytes"]),
             backup_count=int(log_cfg["backup_count"]),
+        ),
+        server_log=LogConfig(
+            path=root / str(server_log_cfg.get("path", log_cfg["path"])),
+            max_bytes=int(server_log_cfg.get("max_bytes", log_cfg["max_bytes"])),
+            backup_count=int(
+                server_log_cfg.get("backup_count", log_cfg["backup_count"])
+            ),
         ),
     )
 
@@ -332,6 +392,18 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         codex.get("terminal_args", []), list
     ):
         raise ConfigError("codex.terminal_args must be a list if provided")
+    if "models" in codex:
+        models = codex.get("models")
+        if models is not None and not isinstance(models, dict):
+            raise ConfigError("codex.models must be a mapping or null if provided")
+        if isinstance(models, dict):
+            for key in ("small", "large"):
+                if (
+                    key in models
+                    and models.get(key) is not None
+                    and not isinstance(models.get(key), str)
+                ):
+                    raise ConfigError(f"codex.models.{key} must be a string or null")
     prompt = cfg.get("prompt")
     if not isinstance(prompt, dict):
         raise ConfigError("prompt section must be a mapping")
@@ -351,6 +423,24 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("git section must be a mapping")
     if not isinstance(git.get("auto_commit", False), bool):
         raise ConfigError("git.auto_commit must be boolean")
+    github = cfg.get("github", {})
+    if github is not None and not isinstance(github, dict):
+        raise ConfigError("github section must be a mapping if provided")
+    if isinstance(github, dict):
+        if "enabled" in github and not isinstance(github.get("enabled"), bool):
+            raise ConfigError("github.enabled must be boolean")
+        if "pr_draft_default" in github and not isinstance(
+            github.get("pr_draft_default"), bool
+        ):
+            raise ConfigError("github.pr_draft_default must be boolean")
+        if "sync_commit_mode" in github and not isinstance(
+            github.get("sync_commit_mode"), str
+        ):
+            raise ConfigError("github.sync_commit_mode must be a string")
+        if "sync_agent_timeout_seconds" in github and not isinstance(
+            github.get("sync_agent_timeout_seconds"), int
+        ):
+            raise ConfigError("github.sync_agent_timeout_seconds must be an integer")
     server = cfg.get("server")
     if not isinstance(server, dict):
         raise ConfigError("server section must be a mapping")
@@ -369,6 +459,17 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
     for key in ("max_bytes", "backup_count"):
         if not isinstance(log_cfg.get(key, 0), int):
             raise ConfigError(f"log.{key} must be an integer")
+    server_log_cfg = cfg.get("server_log", {})
+    if server_log_cfg is not None and not isinstance(server_log_cfg, dict):
+        raise ConfigError("server_log section must be a mapping or null")
+    if isinstance(server_log_cfg, dict):
+        if "path" in server_log_cfg and not isinstance(
+            server_log_cfg.get("path", ""), str
+        ):
+            raise ConfigError("server_log.path must be a string path")
+        for key in ("max_bytes", "backup_count"):
+            if key in server_log_cfg and not isinstance(server_log_cfg.get(key), int):
+                raise ConfigError(f"server_log.{key} must be an integer")
     voice_cfg = cfg.get("voice", {})
     if voice_cfg is not None and not isinstance(voice_cfg, dict):
         raise ConfigError("voice section must be a mapping if provided")
@@ -383,6 +484,8 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("hub section must be a mapping")
     if not isinstance(hub_cfg.get("repos_root", ""), str):
         raise ConfigError("hub.repos_root must be a string path")
+    if not isinstance(hub_cfg.get("worktrees_root", ""), str):
+        raise ConfigError("hub.worktrees_root must be a string path")
     if not isinstance(hub_cfg.get("manifest", ""), str):
         raise ConfigError("hub.manifest must be a string path")
     if hub_cfg.get("discover_depth") not in (None, 1):
@@ -407,3 +510,14 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("server.port must be an integer")
     if "base_path" in server and not isinstance(server.get("base_path", ""), str):
         raise ConfigError("server.base_path must be a string if provided")
+    server_log_cfg = cfg.get("server_log")
+    if server_log_cfg is not None and not isinstance(server_log_cfg, dict):
+        raise ConfigError("server_log section must be a mapping or null")
+    if isinstance(server_log_cfg, dict):
+        if "path" in server_log_cfg and not isinstance(
+            server_log_cfg.get("path", ""), str
+        ):
+            raise ConfigError("server_log.path must be a string path")
+        for key in ("max_bytes", "backup_count"):
+            if key in server_log_cfg and not isinstance(server_log_cfg.get(key), int):
+                raise ConfigError(f"server_log.{key} must be an integer")

@@ -28,4 +28,7 @@ python -m black --check "${paths[@]}"
 echo "Running tests (pytest)..."
 python -m pytest
 
+echo "Dead-code check (heuristic)..."
+python scripts/deadcode.py --check
+
 echo "Checks passed."

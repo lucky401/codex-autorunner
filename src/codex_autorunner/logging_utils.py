@@ -1,11 +1,13 @@
+import collections
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Dict
+from typing import OrderedDict
 
 from .config import LogConfig
 
-_LOGGER_CACHE: Dict[str, logging.Logger] = {}
+_MAX_CACHED_LOGGERS = 64
+_LOGGER_CACHE: "OrderedDict[str, logging.Logger]" = collections.OrderedDict()
 
 
 def setup_rotating_logger(name: str, log_config: LogConfig) -> logging.Logger:
@@ -13,8 +15,11 @@ def setup_rotating_logger(name: str, log_config: LogConfig) -> logging.Logger:
     Configure (or retrieve) an isolated rotating logger for the given name.
     Each logger owns a single handler to avoid shared handlers across hub/repos.
     """
-    if name in _LOGGER_CACHE:
-        return _LOGGER_CACHE[name]
+    existing = _LOGGER_CACHE.get(name)
+    if existing is not None:
+        # Keep cache bounded and prefer most-recently-used.
+        _LOGGER_CACHE.move_to_end(name)
+        return existing
 
     log_path: Path = log_config.path
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -33,4 +38,17 @@ def setup_rotating_logger(name: str, log_config: LogConfig) -> logging.Logger:
     logger.propagate = False
 
     _LOGGER_CACHE[name] = logger
+    _LOGGER_CACHE.move_to_end(name)
+    # Bounded cache to avoid unbounded growth in long-lived hub processes.
+    while len(_LOGGER_CACHE) > _MAX_CACHED_LOGGERS:
+        _, evicted = _LOGGER_CACHE.popitem(last=False)
+        try:
+            for h in list(evicted.handlers):
+                try:
+                    h.close()
+                except Exception:
+                    pass
+            evicted.handlers.clear()
+        except Exception:
+            pass
     return logger

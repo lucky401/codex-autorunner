@@ -6,6 +6,7 @@ import { initDocs } from "./docs.js";
 import { initLogs } from "./logs.js";
 import { initTerminal } from "./terminal.js";
 import { loadState } from "./state.js";
+import { initGitHub } from "./github.js";
 
 function initRepoShell() {
   // If this is a repo under a hub, show back button and repo name
@@ -36,6 +37,7 @@ function initRepoShell() {
 
   initTabs();
   initDashboard();
+  initGitHub();
   initDocs();
   initLogs();
   initTerminal();

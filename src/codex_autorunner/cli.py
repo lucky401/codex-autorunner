@@ -352,36 +352,25 @@ def log(
         raise typer.Exit("Log file not found; run init")
 
     if run_id is not None:
-        _print_run_block(engine.log_path, run_id)
+        block = engine.read_run_block(run_id)
+        if not block:
+            raise typer.Exit("run not found")
+        typer.echo(block)
         return
 
-    lines = engine.log_path.read_text(encoding="utf-8").splitlines()
     if tail is not None:
-        for line in lines[-tail:]:
-            typer.echo(line)
+        typer.echo(engine.tail_log(tail))
     else:
         state = load_state(engine.state_path)
         last_id = state.last_run_id
         if last_id is None:
             typer.echo("No runs recorded yet")
             return
-        _print_run_block(engine.log_path, last_id)
-
-
-def _print_run_block(log_path: Path, run_id: int) -> None:
-    start = f"=== run {run_id} start ==="
-    end = f"=== run {run_id} end"
-    printing = False
-    for line in log_path.read_text(encoding="utf-8").splitlines():
-        if line.strip() == start:
-            printing = True
-            typer.echo(line)
-            continue
-        if printing and line.startswith(end):
-            typer.echo(line)
-            break
-        if printing:
-            typer.echo(line)
+        block = engine.read_run_block(last_id)
+        if not block:
+            typer.echo("No run block found (log may have rotated)")
+            return
+        typer.echo(block)
 
 
 @app.command()
