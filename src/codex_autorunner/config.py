@@ -70,6 +70,11 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "max_bytes": 10_000_000,
         "backup_count": 3,
     },
+    "server_log": {
+        "path": ".codex-autorunner/codex-server.log",
+        "max_bytes": 10_000_000,
+        "backup_count": 3,
+    },
 }
 
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
@@ -91,6 +96,8 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "port": 4173,
         "base_path": "",
     },
+    # Hub already has hub.log, but we still support an explicit server_log for consistency.
+    "server_log": None,
 }
 
 # Backwards-compatible alias for repo defaults
@@ -129,6 +136,7 @@ class RepoConfig:
     server_port: int
     server_base_path: str
     log: LogConfig
+    server_log: LogConfig
     voice: Dict[str, Any]
 
     def doc_path(self, key: str) -> Path:
@@ -149,6 +157,7 @@ class HubConfig:
     server_port: int
     server_base_path: str
     log: LogConfig
+    server_log: LogConfig
 
 
 # Alias used by existing code paths that only support repo mode
@@ -250,6 +259,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     template = root / template_val if template_val else None
     term_args = cfg["codex"].get("terminal_args") or []
     log_cfg = cfg.get("log", {})
+    server_log_cfg = cfg.get("server_log", {}) or {}
     return RepoConfig(
         raw=cfg,
         root=root,
@@ -278,6 +288,23 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
                 log_cfg.get("backup_count", DEFAULT_REPO_CONFIG["log"]["backup_count"])
             ),
         ),
+        server_log=LogConfig(
+            path=root
+            / server_log_cfg.get(
+                "path", DEFAULT_REPO_CONFIG["server_log"]["path"]  # type: ignore[index]
+            ),
+            max_bytes=int(
+                server_log_cfg.get(
+                    "max_bytes", DEFAULT_REPO_CONFIG["server_log"]["max_bytes"]  # type: ignore[index]
+                )
+            ),
+            backup_count=int(
+                server_log_cfg.get(
+                    "backup_count",
+                    DEFAULT_REPO_CONFIG["server_log"]["backup_count"],  # type: ignore[index]
+                )
+            ),
+        ),
         voice=voice_cfg,
     )
 
@@ -286,6 +313,14 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
     root = config_path.parent.parent.resolve()
     hub_cfg = cfg["hub"]
     log_cfg = hub_cfg["log"]
+    server_log_cfg = cfg.get("server_log")
+    # Default to hub log if server_log is not configured.
+    if not isinstance(server_log_cfg, dict):
+        server_log_cfg = {
+            "path": log_cfg["path"],
+            "max_bytes": log_cfg["max_bytes"],
+            "backup_count": log_cfg["backup_count"],
+        }
     return HubConfig(
         raw=cfg,
         root=root,
@@ -302,6 +337,13 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
             path=root / log_cfg["path"],
             max_bytes=int(log_cfg["max_bytes"]),
             backup_count=int(log_cfg["backup_count"]),
+        ),
+        server_log=LogConfig(
+            path=root / str(server_log_cfg.get("path", log_cfg["path"])),
+            max_bytes=int(server_log_cfg.get("max_bytes", log_cfg["max_bytes"])),
+            backup_count=int(
+                server_log_cfg.get("backup_count", log_cfg["backup_count"])
+            ),
         ),
     )
 
@@ -369,6 +411,17 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
     for key in ("max_bytes", "backup_count"):
         if not isinstance(log_cfg.get(key, 0), int):
             raise ConfigError(f"log.{key} must be an integer")
+    server_log_cfg = cfg.get("server_log", {})
+    if server_log_cfg is not None and not isinstance(server_log_cfg, dict):
+        raise ConfigError("server_log section must be a mapping or null")
+    if isinstance(server_log_cfg, dict):
+        if "path" in server_log_cfg and not isinstance(
+            server_log_cfg.get("path", ""), str
+        ):
+            raise ConfigError("server_log.path must be a string path")
+        for key in ("max_bytes", "backup_count"):
+            if key in server_log_cfg and not isinstance(server_log_cfg.get(key), int):
+                raise ConfigError(f"server_log.{key} must be an integer")
     voice_cfg = cfg.get("voice", {})
     if voice_cfg is not None and not isinstance(voice_cfg, dict):
         raise ConfigError("voice section must be a mapping if provided")
@@ -407,3 +460,14 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("server.port must be an integer")
     if "base_path" in server and not isinstance(server.get("base_path", ""), str):
         raise ConfigError("server.base_path must be a string if provided")
+    server_log_cfg = cfg.get("server_log")
+    if server_log_cfg is not None and not isinstance(server_log_cfg, dict):
+        raise ConfigError("server_log section must be a mapping or null")
+    if isinstance(server_log_cfg, dict):
+        if "path" in server_log_cfg and not isinstance(
+            server_log_cfg.get("path", ""), str
+        ):
+            raise ConfigError("server_log.path must be a string path")
+        for key in ("max_bytes", "backup_count"):
+            if key in server_log_cfg and not isinstance(server_log_cfg.get(key), int):
+                raise ConfigError(f"server_log.{key} must be an integer")
