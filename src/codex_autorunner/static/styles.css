@@ -122,6 +122,13 @@ body {
   z-index: 1501;
 }
 
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .tab {
   flex: 1;
   padding: 6px 10px;
@@ -532,6 +539,24 @@ main {
   text-overflow: ellipsis;
 }
 
+.hub-repo-subline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+a.hub-pr-pill {
+  text-decoration: none;
+  border-color: rgba(108, 245, 216, 0.35);
+  color: var(--accent);
+}
+
+a.hub-pr-pill:hover {
+  border-color: var(--accent);
+}
+
 .hub-repo-open-indicator {
   color: var(--muted);
   font-size: 14px;
@@ -851,12 +876,55 @@ button.icon-btn {
   font-weight: 700;
 }
 
+/* GitHub card */
+.github-card .github-grid {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 6px;
+}
+
+.github-card .github-row {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.github-card .github-link {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github-card .github-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 12px;
+}
+
 /* Docs nav */
 .doc-nav {
   display: flex;
   align-items: center;
   gap: 4px;
   margin-bottom: 8px;
+}
+
+.spec-issue-import {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 8px;
+}
+
+.spec-issue-import input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
 }
 
 .doc-editor {

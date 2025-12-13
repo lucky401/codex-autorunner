@@ -3,6 +3,7 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 
 let hubData = { repos: [], last_scan_at: null };
+const repoPrCache = new Map();
 
 const repoListEl = document.getElementById("hub-repo-list");
 const lastScanEl = document.getElementById("hub-last-scan");
@@ -18,9 +19,10 @@ function formatRunSummary(repo) {
   if (!repo.exists_on_disk) return "Missing on disk";
   if (!repo.last_run_id) return "No runs yet";
   const time = repo.last_run_finished_at || repo.last_run_started_at;
-  const exit = repo.last_exit_code === null || repo.last_exit_code === undefined
-    ? ""
-    : ` exit:${repo.last_exit_code}`;
+  const exit =
+    repo.last_exit_code === null || repo.last_exit_code === undefined
+      ? ""
+      : ` exit:${repo.last_exit_code}`;
   return `#${repo.last_run_id}${exit}`;
 }
 
@@ -88,7 +90,8 @@ function renderHubUsage(data) {
     hubUsageMeta.textContent = data?.codex_home || "–";
   }
   if (!data || !data.repos) {
-    hubUsageList.innerHTML = '<span class="muted small">Usage unavailable</span>';
+    hubUsageList.innerHTML =
+      '<span class="muted small">Usage unavailable</span>';
     return;
   }
   if (!data.repos.length && (!data.unmatched || !data.unmatched.events)) {
@@ -104,11 +107,17 @@ function renderHubUsage(data) {
     div.className = "hub-usage-chip";
     const totals = repo.totals || {};
     const cached = totals.cached_input_tokens || 0;
-    const cachePercent = totals.input_tokens ? Math.round((cached / totals.input_tokens) * 100) : 0;
+    const cachePercent = totals.input_tokens
+      ? Math.round((cached / totals.input_tokens) * 100)
+      : 0;
     div.innerHTML = `
       <span class="hub-usage-chip-name">${repo.id}</span>
-      <span class="hub-usage-chip-total">${formatTokensCompact(totals.total_tokens)}</span>
-      <span class="hub-usage-chip-meta">${repo.events ?? 0}ev · ${cachePercent}%↻</span>
+      <span class="hub-usage-chip-total">${formatTokensCompact(
+        totals.total_tokens
+      )}</span>
+      <span class="hub-usage-chip-meta">${
+        repo.events ?? 0
+      }ev · ${cachePercent}%↻</span>
     `;
     hubUsageList.appendChild(div);
   });
@@ -118,7 +127,9 @@ function renderHubUsage(data) {
     const totals = data.unmatched.totals || {};
     div.innerHTML = `
       <span class="hub-usage-chip-name">other</span>
-      <span class="hub-usage-chip-total">${formatTokensCompact(totals.total_tokens)}</span>
+      <span class="hub-usage-chip-total">${formatTokensCompact(
+        totals.total_tokens
+      )}</span>
       <span class="hub-usage-chip-meta">${data.unmatched.events}ev</span>
     `;
     hubUsageList.appendChild(div);
@@ -191,12 +202,15 @@ function renderRepos(repos) {
 
     const lockBadge =
       repo.lock_status && repo.lock_status !== "unlocked"
-        ? `<span class="pill pill-small pill-warn">${repo.lock_status.replace("_", " ")}</span>`
+        ? `<span class="pill pill-small pill-warn">${repo.lock_status.replace(
+            "_",
+            " "
+          )}</span>`
         : "";
     const initBadge = !repo.initialized
       ? '<span class="pill pill-small pill-warn">uninit</span>'
       : "";
-    
+
     // Build note for errors
     let noteText = "";
     if (!repo.exists_on_disk) {
@@ -211,21 +225,36 @@ function renderRepos(repos) {
     // Show open indicator only for navigable repos
     const openIndicator = canNavigate
       ? '<span class="hub-repo-open-indicator">→</span>'
-      : '';
-    
+      : "";
+
     // Build compact info line
     const runSummary = formatRunSummary(repo);
     const lastActivity = formatLastActivity(repo);
     const infoItems = [];
-    if (runSummary && runSummary !== "No runs yet" && runSummary !== "Not initialized") {
+    if (
+      runSummary &&
+      runSummary !== "No runs yet" &&
+      runSummary !== "Not initialized"
+    ) {
       infoItems.push(runSummary);
     }
     if (lastActivity) {
       infoItems.push(lastActivity);
     }
-    const infoLine = infoItems.length > 0 
-      ? `<span class="hub-repo-info-line">${infoItems.join(' · ')}</span>`
-      : '';
+    const infoLine =
+      infoItems.length > 0
+        ? `<span class="hub-repo-info-line">${infoItems.join(" · ")}</span>`
+        : "";
+
+    // Best-effort PR pill for mounted repos (does not block rendering).
+    const prInfo = repoPrCache.get(repo.id);
+    const prPill = prInfo?.links?.files
+      ? `<a class="pill pill-small hub-pr-pill" href="${
+          prInfo.links.files
+        }" target="_blank" rel="noopener noreferrer" title="${
+          prInfo.pr?.title || "Open PR files"
+        }">PR${prInfo.pr?.number ? ` #${prInfo.pr.number}` : ""}</a>`
+      : "";
 
     card.innerHTML = `
       <div class="hub-repo-row">
@@ -236,10 +265,13 @@ function renderRepos(repos) {
           </div>
         <div class="hub-repo-center">
           <span class="hub-repo-title">${repo.display_name}</span>
-          ${infoLine}
+          <div class="hub-repo-subline">
+            ${infoLine}
+            ${prPill}
+          </div>
         </div>
         <div class="hub-repo-right">
-          ${actions || ''}
+          ${actions || ""}
           ${openIndicator}
         </div>
       </div>
@@ -255,6 +287,24 @@ function renderRepos(repos) {
   });
 }
 
+async function refreshRepoPrCache(repos) {
+  const mounted = (repos || []).filter((r) => r && r.mounted === true);
+  if (!mounted.length) return;
+  const tasks = mounted.map(async (repo) => {
+    try {
+      const pr = await api(`/repos/${repo.id}/api/github/pr`, {
+        method: "GET",
+      });
+      repoPrCache.set(repo.id, pr);
+    } catch (err) {
+      // Best-effort: ignore GitHub errors so hub stays fast.
+    }
+  });
+  await Promise.allSettled(tasks);
+  // Re-render to show pills without blocking initial load.
+  renderRepos(hubData.repos || []);
+}
+
 async function refreshHub({ scan = false } = {}) {
   setButtonLoading(true);
   try {
@@ -263,6 +313,7 @@ async function refreshHub({ scan = false } = {}) {
     hubData = data;
     renderSummary(data.repos || []);
     renderRepos(data.repos || []);
+    refreshRepoPrCache(data.repos || []).catch(() => {});
     await loadHubUsage();
   } catch (err) {
     flash(err.message || "Hub request failed", "error");
@@ -311,16 +362,16 @@ async function handleCreateRepoSubmit() {
   const idInput = document.getElementById("create-repo-id");
   const pathInput = document.getElementById("create-repo-path");
   const gitCheck = document.getElementById("create-repo-git");
-  
+
   const repoId = idInput?.value?.trim();
   const repoPath = pathInput?.value?.trim() || null;
   const gitInit = gitCheck?.checked ?? true;
-  
+
   if (!repoId) {
     flash("Repo ID is required", "error");
     return;
   }
-  
+
   const ok = await createRepo(repoId, repoPath, gitInit);
   if (ok) {
     hideCreateRepoModal();
@@ -366,11 +417,11 @@ function attachHubHandlers() {
   quickScanBtn?.addEventListener("click", () => refreshHub({ scan: true }));
   refreshBtn?.addEventListener("click", () => refreshHub({ scan: false }));
   hubUsageRefresh?.addEventListener("click", () => loadHubUsage());
-  
+
   newRepoBtn?.addEventListener("click", showCreateRepoModal);
   createCancelBtn?.addEventListener("click", hideCreateRepoModal);
   createSubmitBtn?.addEventListener("click", handleCreateRepoSubmit);
-  
+
   // Allow Enter key in the repo ID input to submit
   createRepoId?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -378,14 +429,14 @@ function attachHubHandlers() {
       handleCreateRepoSubmit();
     }
   });
-  
+
   // Close modal on Escape key
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       hideCreateRepoModal();
     }
   });
-  
+
   // Close modal when clicking overlay background
   const createRepoModal = document.getElementById("create-repo-modal");
   createRepoModal?.addEventListener("click", (e) => {
@@ -397,6 +448,13 @@ function attachHubHandlers() {
   repoListEl?.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
+
+    // Allow PR pill navigation without triggering card navigation.
+    const prLink = target.closest("a.hub-pr-pill");
+    if (prLink) {
+      event.stopPropagation();
+      return;
+    }
 
     // Handle action buttons - stop propagation to prevent card navigation
     const btn = target.closest("button[data-action]");
@@ -421,7 +479,10 @@ function attachHubHandlers() {
   repoListEl?.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
       const target = event.target;
-      if (target instanceof HTMLElement && target.classList.contains("hub-repo-clickable")) {
+      if (
+        target instanceof HTMLElement &&
+        target.classList.contains("hub-repo-clickable")
+      ) {
         event.preventDefault();
         if (target.dataset.href) {
           window.location.href = target.dataset.href;

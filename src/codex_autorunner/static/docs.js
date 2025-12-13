@@ -50,6 +50,12 @@ const chatUI = {
   hint: document.getElementById("doc-chat-hint"),
 };
 
+const specIssueUI = {
+  row: document.getElementById("spec-issue-import"),
+  input: document.getElementById("spec-issue-input"),
+  button: document.getElementById("spec-issue-import-btn"),
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Chat State Management
 // ─────────────────────────────────────────────────────────────────────────────
@@ -797,8 +803,78 @@ function setDoc(kind) {
   document.getElementById(
     "doc-status"
   ).textContent = `Editing ${kind.toUpperCase()}`;
+  if (specIssueUI.row) {
+    specIssueUI.row.classList.toggle("hidden", kind !== "spec");
+  }
   reloadPatch(kind, true);
   renderChat(kind);
+}
+
+async function importIssueToSpec() {
+  if (!specIssueUI.input || !specIssueUI.button) return;
+  const issue = (specIssueUI.input.value || "").trim();
+  if (!issue) {
+    flash("Enter a GitHub issue number or URL", "error");
+    return;
+  }
+  const state = getChatState("spec");
+  if (state.status === "running") {
+    flash("SPEC chat is running; try again shortly", "error");
+    return;
+  }
+
+  specIssueUI.button.disabled = true;
+  specIssueUI.button.classList.add("loading");
+  try {
+    const entry = {
+      id: `${Date.now()}`,
+      prompt: `Import issue → SPEC: ${issue}`,
+      response: "",
+      status: "running",
+      time: Date.now(),
+      lastAppliedContent: null,
+      patch: "",
+    };
+    state.history.unshift(entry);
+    state.status = "running";
+    state.error = "";
+    state.streamText = "";
+    state.patch = "";
+    state.statusText = "importing issue";
+    renderChat("spec");
+
+    const res = await api("/api/github/spec/from-issue", {
+      method: "POST",
+      body: { issue, mode: "worktree" },
+    });
+    applyChatResult(res, state, entry, "spec");
+    if (res?.content) {
+      await applyDocUpdateFromChat("spec", res.content);
+    }
+    if (res?.patch) {
+      state.patch = res.patch;
+      entry.patch = res.patch;
+      entry.status = "needs-apply";
+    } else {
+      entry.status = "done";
+    }
+    state.status = "idle";
+    flash("Imported issue into pending SPEC patch");
+  } catch (err) {
+    const message = err?.message || "Issue import failed";
+    const entry = state.history[0];
+    if (entry) {
+      entry.status = "error";
+      entry.error = message;
+    }
+    state.status = "idle";
+    state.error = message;
+    flash(message, "error");
+  } finally {
+    specIssueUI.button.disabled = false;
+    specIssueUI.button.classList.remove("loading");
+    renderChat("spec");
+  }
 }
 
 async function saveDoc() {
@@ -889,6 +965,21 @@ export function initDocs() {
     chatUI.patchReload.addEventListener("click", () =>
       reloadPatch(activeDoc, true)
     );
+  if (specIssueUI.button) {
+    specIssueUI.button.addEventListener("click", () => {
+      if (activeDoc !== "spec") setDoc("spec");
+      importIssueToSpec();
+    });
+  }
+  if (specIssueUI.input) {
+    specIssueUI.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (activeDoc !== "spec") setDoc("spec");
+        importIssueToSpec();
+      }
+    });
+  }
   initDocVoice();
   reloadPatch(activeDoc, true);
 

@@ -1,4 +1,7 @@
 PYTHON ?= python
+VENV ?= .venv
+VENV_PYTHON := $(VENV)/bin/python
+VENV_PIP := $(VENV)/bin/pip
 HOST ?= 127.0.0.1
 PORT ?= 4173
 HUB_HOST ?= 127.0.0.1
@@ -14,13 +17,25 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks test check format serve serve-dev launchd-hub deadcode-baseline
+.PHONY: install dev hooks test check format serve serve-dev launchd-hub deadcode-baseline venv venv-dev
 
 install:
 	$(PYTHON) -m pip install .
 
 dev:
 	$(PYTHON) -m pip install -e .[dev]
+
+venv: $(VENV_PYTHON)
+
+$(VENV_PYTHON):
+	$(PYTHON) -m venv $(VENV)
+	$(VENV_PYTHON) -m pip install --upgrade pip
+
+venv-dev: $(VENV)/.installed-dev
+
+$(VENV)/.installed-dev: $(VENV_PYTHON) pyproject.toml
+	$(VENV_PIP) install -e .[dev]
+	@touch $(VENV)/.installed-dev
 
 hooks:
 	git config core.hooksPath .githooks
@@ -40,8 +55,8 @@ deadcode-baseline:
 serve:
 	$(PYTHON) -m codex_autorunner.cli serve --host $(HOST) --port $(PORT)
 
-serve-dev:
-	uvicorn codex_autorunner.server:create_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir src --reload-dir .codex-autorunner
+serve-dev: venv-dev
+	$(VENV_PYTHON) -m uvicorn codex_autorunner.server:create_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir src --reload-dir .codex-autorunner
 
 launchd-hub:
 	@LABEL="$(LAUNCH_LABEL)" \

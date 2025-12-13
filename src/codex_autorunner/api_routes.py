@@ -41,6 +41,7 @@ from .usage import (
 from .utils import atomic_write
 from .voice import VoiceService, VoiceServiceError
 from .engine import LockError
+from .github import GitHubError, GitHubService
 
 
 class ActiveSession:
@@ -150,6 +151,10 @@ async def _state_stream(engine, manager, logger=None):
 
 def build_repo_router(static_dir: Path) -> APIRouter:
     router = APIRouter()
+
+    def _github(request: Request) -> GitHubService:
+        engine = request.app.state.engine
+        return GitHubService(engine.repo_root, raw_config=engine.config.raw)
 
     @router.get("/", include_in_schema=False)
     def index(request: Request):
@@ -410,6 +415,131 @@ def build_repo_router(static_dir: Path) -> APIRouter:
             "running": manager.running,
             "runner_pid": state.runner_pid,
         }
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # GitHub integration
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @router.get("/api/github/status")
+    async def github_status(request: Request):
+        try:
+            return await asyncio.to_thread(_github(request).status_payload)
+        except GitHubError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @router.get("/api/github/pr")
+    async def github_pr(request: Request):
+        svc = _github(request)
+        try:
+            status = await asyncio.to_thread(svc.status_payload)
+            return {
+                "status": "ok",
+                "git": status.get("git"),
+                "pr": status.get("pr"),
+                "links": status.get("pr_links"),
+                "link": status.get("link") or {},
+            }
+        except GitHubError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @router.post("/api/github/link-issue")
+    async def github_link_issue(request: Request, payload: Optional[dict] = None):
+        if not payload or not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
+        issue = payload.get("issue")
+        if not issue:
+            raise HTTPException(status_code=400, detail="Missing issue")
+        try:
+            state = await asyncio.to_thread(_github(request).link_issue, str(issue))
+            return {"status": "ok", "link": state}
+        except GitHubError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @router.post("/api/github/spec/from-issue")
+    async def github_spec_from_issue(request: Request, payload: Optional[dict] = None):
+        if not payload or not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
+        issue = payload.get("issue")
+        mode = payload.get("mode") or "worktree"
+        if not issue:
+            raise HTTPException(status_code=400, detail="Missing issue")
+
+        doc_chat = request.app.state.doc_chat
+        repo_blocked = doc_chat.repo_blocked_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
+        if doc_chat.doc_busy("spec"):
+            raise HTTPException(
+                status_code=409, detail="Doc chat already running for spec"
+            )
+
+        svc = _github(request)
+        try:
+            link_state = await asyncio.to_thread(svc.link_issue, str(issue))
+            issue_num = ((link_state.get("issue") or {}) or {}).get("number")
+            issue_title = ((link_state.get("issue") or {}) or {}).get("title") or ""
+            number = await asyncio.to_thread(svc.validate_issue_same_repo, str(issue))
+            issue_obj = await asyncio.to_thread(svc.issue_view, number=int(number))
+            body = (issue_obj.get("body") or "").strip()
+
+            prompt = (
+                "Create or update SPEC to address this GitHub issue.\n\n"
+                f"Issue: #{issue_num} {issue_title}\n"
+                f"URL: {issue_obj.get('url')}\n\n"
+                "Issue body:\n"
+                f"{body}\n\n"
+                "Write a clear SPEC with goals, non-goals, architecture notes, and actionable implementation steps.\n"
+            )
+            doc_req = doc_chat.parse_request(
+                "spec", {"message": prompt, "stream": False}
+            )
+            async with doc_chat.doc_lock("spec"):
+                result = await doc_chat.execute(doc_req)
+            if result.get("status") != "ok":
+                detail = result.get("detail") or "SPEC generation failed"
+                raise HTTPException(status_code=500, detail=detail)
+            result["github"] = {"issue": link_state.get("issue"), "mode": str(mode)}
+            return result
+        except GitHubError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @router.post("/api/github/pr/sync")
+    async def github_pr_sync(request: Request, payload: Optional[dict] = None):
+        payload = payload or {}
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
+        mode = payload.get("mode") or "worktree"
+        draft = bool(payload.get("draft", True))
+        title = payload.get("title")
+        body = payload.get("body")
+        try:
+            return await asyncio.to_thread(
+                _github(request).sync_pr,
+                mode=str(mode),
+                draft=draft,
+                title=str(title) if title else None,
+                body=str(body) if body else None,
+            )
+        except GitHubError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
 
     @router.get("/api/state/stream")
     async def stream_state(request: Request):

@@ -37,6 +37,12 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "auto_commit": False,
         "commit_message_template": "[codex] run #{run_id}",
     },
+    "github": {
+        "enabled": True,
+        "worktree_default": True,
+        "pr_draft_default": True,
+        "sync_commit_mode": "auto",  # none|auto|always
+    },
     "server": {
         "host": "127.0.0.1",
         "port": 4173,
@@ -393,6 +399,24 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("git section must be a mapping")
     if not isinstance(git.get("auto_commit", False), bool):
         raise ConfigError("git.auto_commit must be boolean")
+    github = cfg.get("github", {})
+    if github is not None and not isinstance(github, dict):
+        raise ConfigError("github section must be a mapping if provided")
+    if isinstance(github, dict):
+        if "enabled" in github and not isinstance(github.get("enabled"), bool):
+            raise ConfigError("github.enabled must be boolean")
+        if "worktree_default" in github and not isinstance(
+            github.get("worktree_default"), bool
+        ):
+            raise ConfigError("github.worktree_default must be boolean")
+        if "pr_draft_default" in github and not isinstance(
+            github.get("pr_draft_default"), bool
+        ):
+            raise ConfigError("github.pr_draft_default must be boolean")
+        if "sync_commit_mode" in github and not isinstance(
+            github.get("sync_commit_mode"), str
+        ):
+            raise ConfigError("github.sync_commit_mode must be a string")
     server = cfg.get("server")
     if not isinstance(server, dict):
         raise ConfigError("server section must be a mapping")
