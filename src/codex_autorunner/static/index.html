@@ -342,6 +342,15 @@
             <button id="terminal-connect" class="primary sm">Connect</button>
             <button id="terminal-resume" class="ghost sm">Resume</button>
             <button id="terminal-disconnect" class="ghost sm">Disconnect</button>
+            <button
+              id="terminal-text-input-toggle"
+              class="ghost sm"
+              type="button"
+              aria-controls="terminal-text-input"
+              aria-expanded="false"
+            >
+              Text input
+            </button>
             <div class="terminal-voice">
               <button id="terminal-voice" class="ghost sm voice-button" title="Hold to talk"></button>
               <span class="muted small hidden voice-status" id="terminal-voice-status"></span>
@@ -350,6 +359,33 @@
           <div id="terminal-container" class="terminal-container">
             <div class="terminal-overlay" id="terminal-overlay">
               <p class="muted">Press Connect or Resume to launch Codex TUI</p>
+            </div>
+          </div>
+          <div id="terminal-text-input" class="terminal-text-input hidden" aria-hidden="true">
+            <div class="terminal-text-input-header">
+              <label class="terminal-text-input-title" for="terminal-textarea">Text input</label>
+              <div class="terminal-text-input-options">
+                <label class="terminal-text-input-option" for="terminal-text-append-enter">
+                  <input id="terminal-text-append-enter" type="checkbox" checked />
+                  <span>Append Enter</span>
+                </label>
+                <button id="terminal-text-clear" class="ghost sm" type="button">Clear</button>
+              </div>
+            </div>
+            <textarea
+              id="terminal-textarea"
+              rows="3"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              placeholder="Type or paste text to send to the terminal…"
+              aria-describedby="terminal-text-hint"
+            ></textarea>
+            <div class="terminal-text-input-actions">
+              <span id="terminal-text-hint" class="terminal-text-input-hint muted small">
+                Enter to send • Shift+Enter inserts a newline
+              </span>
+              <button id="terminal-text-send" class="primary" type="button">Send</button>
             </div>
           </div>
           <!-- Mobile control bar - touch-friendly special keys -->

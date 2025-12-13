@@ -2309,6 +2309,7 @@ label {
   border-radius: var(--radius);
   background: var(--bg);
   height: calc(100vh - 100px);
+  height: calc(100dvh - 100px);
   overflow: hidden;
 }
 
@@ -2333,6 +2334,95 @@ label {
 
 .terminal-container .xterm {
   padding: 6px;
+}
+
+/* ===== TERMINAL TEXT INPUT (optional panel) ===== */
+#terminal-text-input-toggle[aria-expanded="true"] {
+  background: rgba(108, 245, 216, 0.12);
+  border-color: rgba(108, 245, 216, 0.3);
+  color: var(--accent);
+}
+
+.terminal-text-input {
+  margin-top: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.terminal-text-input-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.terminal-text-input-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.terminal-text-input-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.terminal-text-input-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.terminal-text-input textarea {
+  width: 100%;
+  min-height: 84px;
+  max-height: 220px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  resize: vertical;
+  overflow-y: auto;
+}
+
+.terminal-text-input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.terminal-text-input-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-text-input-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.terminal-text-input #terminal-text-send {
+  flex: 0 0 auto;
+  min-height: 32px;
+}
+
+/* When the panel is open, shrink xterm height to keep controls visible (JS toggles the class). */
+#terminal.text-input-open .terminal-container {
+  height: max(220px, calc(100vh - 220px));
+  height: max(220px, calc(100dvh - 220px));
 }
 
 /* Toast */
@@ -3078,6 +3168,50 @@ button.loading::after {
     height: calc(100vh - 180px);
     height: calc(100dvh - 180px);
   }
+
+  #terminal .inline-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  #terminal-status {
+    flex: 1 0 100%;
+  }
+
+  #terminal .inline-toolbar button {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  #terminal.text-input-open .terminal-container {
+    height: max(140px, calc(100vh - 320px));
+    height: max(140px, calc(100dvh - 320px));
+  }
+
+  .terminal-text-input {
+    padding: 8px 6px;
+  }
+
+  .terminal-text-input textarea {
+    min-height: 96px;
+    max-height: 160px;
+    resize: none;
+  }
+
+  .terminal-text-input-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .terminal-text-input #terminal-text-send,
+  .terminal-text-input #terminal-text-clear {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  .terminal-text-input-option {
+    min-height: 44px;
+  }
   
   /* Mobile terminal control bar */
   .terminal-mobile-controls {
@@ -3099,7 +3233,7 @@ button.loading::after {
   
   .tmb-key {
     flex: 1;
-    min-height: 40px;
+    min-height: 44px;
     padding: 8px 6px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -3587,6 +3721,11 @@ button.loading::after {
     height: calc(100vh - 170px);
     height: calc(100dvh - 170px);
   }
+
+  #terminal.text-input-open .terminal-container {
+    height: max(120px, calc(100vh - 300px));
+    height: max(120px, calc(100dvh - 300px));
+  }
   
   .terminal-mobile-controls {
     padding: 4px;
@@ -3880,6 +4019,44 @@ button.loading::after {
   
   .terminal-container {
     height: calc(100vh - 120px);
+    height: calc(100dvh - 120px);
+  }
+
+  #terminal.text-input-open .terminal-container {
+    height: max(120px, calc(100vh - 220px));
+    height: max(120px, calc(100dvh - 220px));
+  }
+
+  .terminal-text-input {
+    padding: 6px;
+    gap: 4px;
+  }
+
+  .terminal-text-input textarea {
+    min-height: 56px;
+    max-height: 96px;
+    padding: 6px;
+    font-size: 11px;
+    resize: none;
+  }
+
+  .terminal-text-input-actions {
+    gap: 4px;
+  }
+
+  .terminal-text-input-hint {
+    display: none;
+  }
+
+  .terminal-text-input #terminal-text-send,
+  .terminal-text-input #terminal-text-clear {
+    min-height: 30px;
+    padding: 6px 10px;
+    font-size: 10px;
+  }
+
+  .terminal-text-input-option {
+    min-height: 30px;
   }
   
   /* Compact mobile controls in landscape - single row */

@@ -20,6 +20,18 @@ let voiceController = null;
 let voiceKeyActive = false;
 let mobileVoiceBtn = null;
 let mobileVoiceController = null;
+let resizeRaf = null;
+
+// Text input panel state
+let terminalSectionEl = null;
+let textInputToggleBtn = null;
+let textInputPanelEl = null;
+let textInputTextareaEl = null;
+let textInputSendBtn = null;
+let textInputClearBtn = null;
+let textInputAppendEnterEl = null;
+let textInputEnabled = false;
+let textInputAppendEnter = true;
 
 // Mobile controls state
 let mobileControlsEl = null;
@@ -28,8 +40,45 @@ let altActive = false;
 
 const textEncoder = new TextEncoder();
 
+const TEXT_INPUT_STORAGE_KEYS = Object.freeze({
+  enabled: "codex_terminal_text_input_enabled",
+  appendEnter: "codex_terminal_text_input_append_enter",
+});
+
+const TEXT_INPUT_SIZE_LIMITS = Object.freeze({
+  warnBytes: 100 * 1024,
+  maxBytes: 500 * 1024,
+});
+
+const TOUCH_OVERRIDE = (() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const truthy = new Set(["1", "true", "yes", "on"]);
+    const falsy = new Set(["0", "false", "no", "off"]);
+
+    const touchParam = params.get("force_touch") ?? params.get("touch");
+    if (touchParam !== null) {
+      const value = String(touchParam).toLowerCase();
+      if (truthy.has(value)) return true;
+      if (falsy.has(value)) return false;
+    }
+
+    const desktopParam = params.get("force_desktop") ?? params.get("desktop");
+    if (desktopParam !== null) {
+      const value = String(desktopParam).toLowerCase();
+      if (truthy.has(value)) return false;
+      if (falsy.has(value)) return true;
+    }
+
+    return null;
+  } catch (_err) {
+    return null;
+  }
+})();
+
 // Check if device has touch capability
 function isTouchDevice() {
+  if (TOUCH_OVERRIDE !== null) return TOUCH_OVERRIDE;
   return "ontouchstart" in window || navigator.maxTouchPoints > 0;
 }
 
@@ -52,6 +101,43 @@ function sendKey(seq) {
   ctrlActive = false;
   altActive = false;
   updateModifierButtons();
+}
+
+function normalizeNewlines(text) {
+  return (text || "").replace(/\r\n?/g, "\n");
+}
+
+function sendText(text, options = {}) {
+  const appendNewline = Boolean(options.appendNewline);
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    flash("Connect the terminal first", "error");
+    return false;
+  }
+
+  let payload = normalizeNewlines(text);
+  if (!payload) return false;
+
+  if (appendNewline && !payload.endsWith("\n")) {
+    payload = `${payload}\n`;
+  }
+
+  const encoded = textEncoder.encode(payload);
+  if (encoded.byteLength > TEXT_INPUT_SIZE_LIMITS.maxBytes) {
+    flash(
+      `Text is too large to send (${Math.round(encoded.byteLength / 1024)}KB).`,
+      "error"
+    );
+    return false;
+  }
+  if (encoded.byteLength > TEXT_INPUT_SIZE_LIMITS.warnBytes) {
+    flash(
+      `Large paste (${Math.round(encoded.byteLength / 1024)}KB); sending may be slow.`,
+      "info"
+    );
+  }
+
+  socket.send(encoded);
+  return true;
 }
 
 // Send Ctrl+key combo
@@ -104,6 +190,9 @@ function initMobileControls() {
     const ctrlChar = btn.dataset.ctrl;
     if (ctrlChar) {
       sendCtrl(ctrlChar);
+      if (isTouchDevice() && textInputEnabled) {
+        setTimeout(() => safeFocus(textInputTextareaEl), 0);
+      }
       return;
     }
 
@@ -111,6 +200,9 @@ function initMobileControls() {
     const seq = btn.dataset.seq;
     if (seq) {
       sendKey(seq);
+      if (isTouchDevice() && textInputEnabled) {
+        setTimeout(() => safeFocus(textInputTextareaEl), 0);
+      }
       return;
     }
   });
@@ -125,6 +217,177 @@ function initMobileControls() {
     },
     { passive: true }
   );
+}
+
+function readBoolFromStorage(key, fallback) {
+  const raw = localStorage.getItem(key);
+  if (raw === null) return fallback;
+  if (raw === "1" || raw === "true") return true;
+  if (raw === "0" || raw === "false") return false;
+  return fallback;
+}
+
+function writeBoolToStorage(key, value) {
+  localStorage.setItem(key, value ? "1" : "0");
+}
+
+function safeFocus(el) {
+  if (!el) return;
+  try {
+    el.focus({ preventScroll: true });
+  } catch (err) {
+    try {
+      el.focus();
+    } catch (_err) {
+      // ignore
+    }
+  }
+}
+
+function scheduleResizeAfterLayout() {
+  if (resizeRaf) {
+    cancelAnimationFrame(resizeRaf);
+    resizeRaf = null;
+  }
+
+  // Double-rAF helps ensure layout changes (e.g. toggled classes) have applied.
+  resizeRaf = requestAnimationFrame(() => {
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = null;
+      handleResize();
+    });
+  });
+}
+
+function setTextInputEnabled(enabled, options = {}) {
+  textInputEnabled = Boolean(enabled);
+  writeBoolToStorage(TEXT_INPUT_STORAGE_KEYS.enabled, textInputEnabled);
+
+  const focus = options.focus !== false;
+  const shouldFocusTextarea = focus && (isTouchDevice() || options.focusTextarea);
+
+  textInputToggleBtn?.setAttribute(
+    "aria-expanded",
+    textInputEnabled ? "true" : "false"
+  );
+  textInputPanelEl?.classList.toggle("hidden", !textInputEnabled);
+  textInputPanelEl?.setAttribute(
+    "aria-hidden",
+    textInputEnabled ? "false" : "true"
+  );
+  terminalSectionEl?.classList.toggle("text-input-open", textInputEnabled);
+
+  // The panel changes the terminal container height via CSS; refit xterm and
+  // (if connected) notify the backend so rows/cols stay in sync.
+  scheduleResizeAfterLayout();
+
+  if (textInputEnabled && shouldFocusTextarea) {
+    requestAnimationFrame(() => {
+      safeFocus(textInputTextareaEl);
+    });
+  } else if (!isTouchDevice()) {
+    term?.focus();
+  }
+}
+
+function updateTextInputConnected(connected) {
+  if (textInputSendBtn) textInputSendBtn.disabled = !connected;
+  if (textInputTextareaEl) textInputTextareaEl.disabled = false;
+  if (textInputClearBtn) textInputClearBtn.disabled = false;
+  if (textInputAppendEnterEl) textInputAppendEnterEl.disabled = false;
+}
+
+function sendFromTextarea() {
+  const text = textInputTextareaEl?.value || "";
+  const ok = sendText(text, { appendNewline: textInputAppendEnter });
+  if (!ok) return;
+
+  if (textInputTextareaEl) {
+    textInputTextareaEl.value = "";
+  }
+
+  if (isTouchDevice()) {
+    requestAnimationFrame(() => {
+      safeFocus(textInputTextareaEl);
+    });
+  } else {
+    term?.focus();
+  }
+}
+
+function initTextInputPanel() {
+  terminalSectionEl = document.getElementById("terminal");
+  textInputToggleBtn = document.getElementById("terminal-text-input-toggle");
+  textInputPanelEl = document.getElementById("terminal-text-input");
+  textInputTextareaEl = document.getElementById("terminal-textarea");
+  textInputSendBtn = document.getElementById("terminal-text-send");
+  textInputClearBtn = document.getElementById("terminal-text-clear");
+  textInputAppendEnterEl = document.getElementById(
+    "terminal-text-append-enter"
+  );
+
+  if (
+    !terminalSectionEl ||
+    !textInputToggleBtn ||
+    !textInputPanelEl ||
+    !textInputTextareaEl ||
+    !textInputSendBtn ||
+    !textInputClearBtn ||
+    !textInputAppendEnterEl
+  ) {
+    return;
+  }
+
+  textInputEnabled = readBoolFromStorage(
+    TEXT_INPUT_STORAGE_KEYS.enabled,
+    isTouchDevice()
+  );
+  textInputAppendEnter = readBoolFromStorage(
+    TEXT_INPUT_STORAGE_KEYS.appendEnter,
+    true
+  );
+
+  textInputAppendEnterEl.checked = textInputAppendEnter;
+
+  textInputToggleBtn.addEventListener("click", () => {
+    setTextInputEnabled(!textInputEnabled, { focus: true, focusTextarea: true });
+  });
+
+  textInputAppendEnterEl.addEventListener("change", () => {
+    textInputAppendEnter = Boolean(textInputAppendEnterEl.checked);
+    writeBoolToStorage(TEXT_INPUT_STORAGE_KEYS.appendEnter, textInputAppendEnter);
+  });
+
+  textInputSendBtn.addEventListener("click", () => {
+    if (textInputSendBtn?.disabled) {
+      flash("Connect the terminal first", "error");
+      return;
+    }
+    sendFromTextarea();
+  });
+
+  textInputClearBtn.addEventListener("click", () => {
+    if (textInputTextareaEl) textInputTextareaEl.value = "";
+    if (isTouchDevice()) {
+      requestAnimationFrame(() => {
+        safeFocus(textInputTextareaEl);
+      });
+    }
+  });
+
+  textInputTextareaEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    if (e.isComposing) return;
+    const value = textInputTextareaEl?.value || "";
+    if (normalizeNewlines(value).includes("\n")) {
+      return;
+    }
+    e.preventDefault();
+    sendFromTextarea();
+  });
+
+  setTextInputEnabled(textInputEnabled, { focus: false });
+  updateTextInputConnected(Boolean(socket && socket.readyState === WebSocket.OPEN));
 }
 
 function setStatus(message) {
@@ -190,6 +453,7 @@ function updateButtons(connected) {
   if (connectBtn) connectBtn.disabled = connected;
   if (disconnectBtn) disconnectBtn.disabled = !connected;
   if (resumeBtn) resumeBtn.disabled = connected;
+  updateTextInputConnected(connected);
   const voiceUnavailable = voiceBtn?.classList.contains("disabled");
   if (voiceBtn && !voiceUnavailable) {
     voiceBtn.disabled = !connected;
@@ -513,10 +777,15 @@ export function initTerminal() {
   setStatus("Disconnected");
 
   window.addEventListener("resize", handleResize);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", scheduleResizeAfterLayout);
+    window.visualViewport.addEventListener("scroll", scheduleResizeAfterLayout);
+  }
 
   // Initialize mobile touch controls
   initMobileControls();
   initTerminalVoice();
+  initTextInputPanel();
 
   // Auto-connect if session ID exists
   if (localStorage.getItem("codex_terminal_session_id")) {
