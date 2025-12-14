@@ -14,6 +14,8 @@ let inputDisposable = null;
 let intentionalDisconnect = false;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
+let lastConnectMode = null;
+let suppressNextNotFoundFlash = false;
 let voiceBtn = null;
 let voiceStatus = null;
 let voiceController = null;
@@ -481,6 +483,7 @@ function connect(options = {}) {
   const mode = (options.mode || (options.resume ? "resume" : "new")).toLowerCase();
   const isAttach = mode === "attach";
   const isResume = mode === "resume";
+  const quiet = Boolean(options.quiet);
   if (!ensureTerminal()) return;
   if (socket && socket.readyState === WebSocket.OPEN) return;
 
@@ -492,6 +495,7 @@ function connect(options = {}) {
 
   teardownSocket();
   intentionalDisconnect = false;
+  lastConnectMode = mode;
 
   const queryParams = new URLSearchParams();
   if (mode) queryParams.append("mode", mode);
@@ -501,7 +505,7 @@ function connect(options = {}) {
     if (savedSessionId) {
       queryParams.append("session_id", savedSessionId);
     } else {
-      flash("No saved terminal session to attach to", "error");
+      if (!quiet) flash("No saved terminal session to attach to", "error");
       return;
     }
   } else {
@@ -524,6 +528,19 @@ function connect(options = {}) {
   socket.onopen = () => {
     reconnectAttempts = 0;
     overlayEl?.classList.add("hidden");
+    // On attach (reattach after reload/reconnect), clear the local terminal first
+    // so the server-provided buffer doesn't duplicate output.
+    if (isAttach && term) {
+      try {
+        term.reset();
+      } catch (_err) {
+        try {
+          term.clear();
+        } catch (__err) {
+          // ignore
+        }
+      }
+    }
     if (isAttach) setStatus("Connected (reattached)");
     else if (isResume) setStatus("Connected (codex resume)");
     else setStatus("Connected");
@@ -565,6 +582,15 @@ function connect(options = {}) {
             payload.message.includes("Session not found")
           ) {
             localStorage.removeItem("codex_terminal_session_id");
+            // If an attach failed, don't keep retrying: there's nothing to attach to.
+            if (lastConnectMode === "attach") {
+              if (!suppressNextNotFoundFlash) {
+                flash(payload.message || "Terminal error", "error");
+              }
+              suppressNextNotFoundFlash = false;
+              disconnect();
+              return;
+            }
           }
           flash(payload.message || "Terminal error", "error");
         }
@@ -593,12 +619,20 @@ function connect(options = {}) {
     }
 
     // Auto-reconnect logic
-    if (reconnectAttempts < 5) {
-      const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 10000);
+    const savedId = localStorage.getItem("codex_terminal_session_id");
+    if (!savedId) {
+      setStatus("Disconnected");
+      overlayEl?.classList.remove("hidden");
+      return;
+    }
+
+    if (reconnectAttempts < 3) {
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 8000);
       setStatus(`Reconnecting in ${Math.round(delay / 100)}s...`);
       reconnectAttempts++;
       reconnectTimer = setTimeout(() => {
-        connect({ mode: "attach" }); // Reattach to an existing PTY session if possible
+        suppressNextNotFoundFlash = true;
+        connect({ mode: "attach", quiet: true }); // Reattach to an existing PTY session if possible
       }, delay);
     } else {
       setStatus("Disconnected (max retries reached)");

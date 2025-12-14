@@ -81,7 +81,11 @@ class ActiveSession:
     ):
         self.id = session_id
         self.pty = pty
-        self.buffer = collections.deque(maxlen=1000)
+        # Keep a bounded scrollback buffer for reconnects.
+        # This is sized in bytes (not chunks) so behavior is predictable.
+        self._buffer_max_bytes = 512 * 1024  # 512KB
+        self._buffer_bytes = 0
+        self.buffer: collections.deque[bytes] = collections.deque()
         self.subscribers: set[asyncio.Queue] = set()
         self.lock = asyncio.Lock()
         self.loop = loop
@@ -98,6 +102,10 @@ class ActiveSession:
             if data:
                 self.pty.last_active = time.time()
                 self.buffer.append(data)
+                self._buffer_bytes += len(data)
+                while self._buffer_bytes > self._buffer_max_bytes and self.buffer:
+                    dropped = self.buffer.popleft()
+                    self._buffer_bytes -= len(dropped)
                 for queue in list(self.subscribers):
                     try:
                         queue.put_nowait(data)
