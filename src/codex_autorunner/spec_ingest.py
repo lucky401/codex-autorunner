@@ -5,41 +5,11 @@ from typing import Dict, Optional
 
 from .utils import atomic_write
 from .engine import Engine
+from .prompts import SPEC_INGEST_PROMPT
 
 
 class SpecIngestError(Exception):
     """Raised when ingesting a SPEC fails."""
-
-
-SPEC_INGEST_PROMPT = """You are Codex preparing work docs from a SPEC for an autonomous agent.
-
-Inputs:
-<SPEC>
-{spec}
-</SPEC>
-
-<EXISTING_TODO>
-{todo}
-</EXISTING_TODO>
-
-<EXISTING_PROGRESS>
-{progress}
-</EXISTING_PROGRESS>
-
-<EXISTING_OPINIONS>
-{opinions}
-</EXISTING_OPINIONS>
-
-Tasks:
-1) Generate an ordered TODO checklist of high-level tasks derived from the SPEC (use - [ ] bullets). Each TODO item should be a multi-hour long task. You should also think about how to leverage in-context learning that the agents will have. Meaning that related items should be in one TODO so that the agent only has to learn about them once, instead of potentially multiple agents needing to relearn the same problem space.
-2) Generate PROGRESS that preserves meaningful existing history and notes any inferred status from the SPEC.
-3) Generate OPINIONS by merging existing constraints with SPEC requirements/preferences; keep concise and non-duplicative.
-
-Output strictly in these sections:
-<TODO>...</TODO>
-<PROGRESS>...</PROGRESS>
-<OPINIONS>...</OPINIONS>
-"""
 
 
 def _extract_section(text: str, tag: str) -> Optional[str]:

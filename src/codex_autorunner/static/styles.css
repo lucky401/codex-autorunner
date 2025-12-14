@@ -2345,21 +2345,13 @@ label {
 
 .terminal-text-input {
   margin-top: 4px;
-  padding: 8px;
+  padding: 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
   display: flex;
   flex-direction: column;
-  gap: 6px;
-}
-
-.terminal-text-input-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .terminal-text-input-title {
@@ -2367,33 +2359,21 @@ label {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);
-}
-
-.terminal-text-input-options {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.terminal-text-input-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  display: none; /* Hide on mobile, show on desktop */
 }
 
 .terminal-text-input textarea {
   width: 100%;
-  min-height: 84px;
-  max-height: 220px;
+  min-height: 56px;
+  max-height: 160px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
-  padding: 8px;
+  padding: 6px;
   font-family: inherit;
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.3;
   resize: vertical;
   overflow-y: auto;
 }
@@ -2406,23 +2386,25 @@ label {
 .terminal-text-input-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .terminal-text-input-hint {
   flex: 1 1 auto;
   min-width: 0;
+  font-size: 10px;
 }
 
 .terminal-text-input #terminal-text-send {
   flex: 0 0 auto;
-  min-height: 32px;
+  min-height: 28px;
+  padding: 4px 12px;
 }
 
 /* When the panel is open, shrink xterm height to keep controls visible (JS toggles the class). */
 #terminal.text-input-open .terminal-container {
-  height: max(220px, calc(100vh - 220px));
-  height: max(220px, calc(100dvh - 220px));
+  height: max(180px, calc(100vh - 260px));
+  height: max(180px, calc(100dvh - 260px));
 }
 
 /* Toast */
@@ -3165,8 +3147,8 @@ button.loading::after {
   }
   
   .terminal-container {
-    height: calc(100vh - 180px);
-    height: calc(100dvh - 180px);
+    height: calc(100vh - 220px);
+    height: calc(100dvh - 220px);
   }
 
   #terminal .inline-toolbar {
@@ -3179,46 +3161,41 @@ button.loading::after {
   }
 
   #terminal .inline-toolbar button {
-    min-height: 44px;
-    padding: 10px 12px;
+    min-height: 36px;
+    padding: 8px 10px;
   }
 
   #terminal.text-input-open .terminal-container {
-    height: max(140px, calc(100vh - 320px));
-    height: max(140px, calc(100dvh - 320px));
+    height: max(120px, calc(100vh - 360px));
+    height: max(120px, calc(100dvh - 360px));
   }
 
   .terminal-text-input {
-    padding: 8px 6px;
+    padding: 6px;
+    gap: 4px;
   }
 
   .terminal-text-input textarea {
-    min-height: 96px;
-    max-height: 160px;
+    min-height: 52px;
+    max-height: 100px;
     resize: none;
   }
 
   .terminal-text-input-actions {
-    flex-wrap: wrap;
     gap: 6px;
   }
 
-  .terminal-text-input #terminal-text-send,
-  .terminal-text-input #terminal-text-clear {
-    min-height: 44px;
-    padding: 10px 12px;
+  .terminal-text-input #terminal-text-send {
+    min-height: 32px;
+    padding: 6px 12px;
   }
 
-  .terminal-text-input-option {
-    min-height: 44px;
-  }
-  
   /* Mobile terminal control bar */
   .terminal-mobile-controls {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 6px;
+    gap: 3px;
+    padding: 4px;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -3227,20 +3204,20 @@ button.loading::after {
   
   .tmb-row {
     display: flex;
-    gap: 4px;
+    gap: 3px;
     align-items: center;
   }
   
   .tmb-key {
     flex: 1;
-    min-height: 44px;
-    padding: 8px 6px;
+    min-height: 34px;
+    padding: 6px 5px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--bg);
     color: var(--text);
     font-family: inherit;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 500;
     cursor: pointer;
     touch-action: manipulation;
@@ -3273,9 +3250,9 @@ button.loading::after {
   
   /* Arrow keys - fixed width, larger icon */
   .tmb-arrow {
-    flex: 0 0 36px;
-    font-size: 16px;
-    padding: 6px 4px;
+    flex: 0 0 32px;
+    font-size: 14px;
+    padding: 5px 3px;
   }
   
   /* Enter key - primary action */
@@ -3294,7 +3271,7 @@ button.loading::after {
   /* Ctrl combos - danger styled for interrupt signals */
   .tmb-ctrl-combo {
     flex: 0 0 auto;
-    min-width: 36px;
+    min-width: 32px;
     background: rgba(255, 85, 102, 0.08);
     border-color: rgba(255, 85, 102, 0.25);
     color: #ff8899;
@@ -3314,15 +3291,15 @@ button.loading::after {
   /* Mobile terminal voice button - integrated into mobile controls */
   .tmb-voice {
     flex: 0 0 auto;
-    min-width: 40px;
+    min-width: 34px;
     background: var(--bg);
     border-color: var(--border);
     color: var(--muted);
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 4px;
-    padding: 6px 8px;
+    gap: 3px;
+    padding: 5px 6px;
   }
   
   .tmb-voice svg {
@@ -3718,50 +3695,50 @@ button.loading::after {
 /* Ultra-small screens */
 @media (max-width: 400px) {
   .terminal-container {
-    height: calc(100vh - 170px);
-    height: calc(100dvh - 170px);
+    height: calc(100vh - 200px);
+    height: calc(100dvh - 200px);
   }
 
   #terminal.text-input-open .terminal-container {
-    height: max(120px, calc(100vh - 300px));
-    height: max(120px, calc(100dvh - 300px));
+    height: max(100px, calc(100vh - 340px));
+    height: max(100px, calc(100dvh - 340px));
   }
   
   .terminal-mobile-controls {
-    padding: 4px;
-    gap: 3px;
+    padding: 3px;
+    gap: 2px;
   }
   
   .tmb-row {
-    gap: 3px;
+    gap: 2px;
   }
   
   .tmb-key {
-    min-height: 36px;
-    padding: 6px 4px;
-    font-size: 10px;
+    min-height: 30px;
+    padding: 4px 3px;
+    font-size: 9px;
   }
   
   .tmb-arrow {
-    flex: 0 0 30px;
-    font-size: 14px;
+    flex: 0 0 26px;
+    font-size: 12px;
   }
   
   .tmb-ctrl-combo {
-    min-width: 32px;
+    min-width: 28px;
     font-size: 9px;
   }
   
   .tmb-voice {
-    min-width: 36px;
-    padding: 4px 6px;
+    min-width: 30px;
+    padding: 3px 4px;
   }
   
   .tmb-voice svg {
-    width: 12px;
-    height: 12px;
-    min-width: 12px;
-    min-height: 12px;
+    width: 11px;
+    height: 11px;
+    min-width: 11px;
+    min-height: 11px;
   }
 
   .tab {
@@ -4018,24 +3995,24 @@ button.loading::after {
   }
   
   .terminal-container {
-    height: calc(100vh - 120px);
-    height: calc(100dvh - 120px);
+    height: calc(100vh - 140px);
+    height: calc(100dvh - 140px);
   }
 
   #terminal.text-input-open .terminal-container {
-    height: max(120px, calc(100vh - 220px));
-    height: max(120px, calc(100dvh - 220px));
+    height: max(100px, calc(100vh - 240px));
+    height: max(100px, calc(100dvh - 240px));
   }
 
   .terminal-text-input {
-    padding: 6px;
-    gap: 4px;
+    padding: 4px;
+    gap: 3px;
   }
 
   .terminal-text-input textarea {
-    min-height: 56px;
-    max-height: 96px;
-    padding: 6px;
+    min-height: 40px;
+    max-height: 70px;
+    padding: 4px;
     font-size: 11px;
     resize: none;
   }
@@ -4048,24 +4025,19 @@ button.loading::after {
     display: none;
   }
 
-  .terminal-text-input #terminal-text-send,
-  .terminal-text-input #terminal-text-clear {
-    min-height: 30px;
-    padding: 6px 10px;
+  .terminal-text-input #terminal-text-send {
+    min-height: 26px;
+    padding: 4px 10px;
     font-size: 10px;
   }
 
-  .terminal-text-input-option {
-    min-height: 30px;
-  }
-  
   /* Compact mobile controls in landscape - single row */
   .terminal-mobile-controls {
     display: flex;
     flex-direction: row;
-    gap: 4px;
-    padding: 4px 6px;
-    margin-top: 4px;
+    gap: 3px;
+    padding: 3px 4px;
+    margin-top: 3px;
   }
   
   .tmb-row {
@@ -4074,29 +4046,29 @@ button.loading::after {
   }
   
   .tmb-key {
-    min-height: 30px;
-    padding: 4px 3px;
+    min-height: 26px;
+    padding: 3px 2px;
     font-size: 9px;
   }
   
   .tmb-arrow {
-    flex: 0 0 26px;
-    font-size: 12px;
+    flex: 0 0 24px;
+    font-size: 11px;
   }
   
   .tmb-ctrl-combo {
-    min-width: 28px;
+    min-width: 24px;
     font-size: 9px;
   }
   
   .tmb-voice {
-    min-width: 30px;
-    padding: 4px;
+    min-width: 26px;
+    padding: 3px;
   }
   
   .tmb-voice svg {
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
   }
   
   .doc-editor textarea {

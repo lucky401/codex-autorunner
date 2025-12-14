@@ -12,6 +12,8 @@ from .utils import (
     resolve_executable,
     subprocess_env,
 )
+from .prompts import build_sync_agent_prompt
+from .prompts import build_github_issue_to_spec_prompt
 
 
 class GitHubError(Exception):
@@ -94,41 +96,6 @@ def _get_nested(d: Any, *keys: str, default: Any = None) -> Any:
             return default
         cur = cur.get(k)
     return cur if cur is not None else default
-
-
-def _build_sync_agent_prompt(
-    *,
-    repo_root: Path,
-    branch: str,
-    issue_num: Optional[int],
-) -> str:
-    issue_hint = f"issue #{issue_num}" if issue_num else "the linked issue (if any)"
-    return f"""You are syncing the local git branch to the remote to prepare for a GitHub PR.
-
-Repository: {repo_root}
-Branch: {branch}
-Context: {issue_hint}
-
-Rules (safety):
-- Do NOT discard changes. Do NOT run destructive commands like `git reset --hard`, `git clean -fdx`, or delete files indiscriminately.
-- Do NOT force-push.
-- Prefer minimal, safe changes that preserve intent.
-
-Tasks:
-1) If there is a Makefile or standard tooling, run formatting/lint/tests best-effort. Prefer (in this order) `make fmt`, `make format`, `make lint`, `make test` when targets exist.
-2) Check `git status`. If there are unstaged/uncommitted changes and committing is appropriate, stage and commit them.
-   - Use a descriptive commit message based on the diff; include the issue number if available.
-3) Push the current branch to `origin`.
-   - Ensure upstream is set (e.g., `git push -u origin {branch}`).
-4) If push is rejected (non-fast-forward/remote updated), do a safe `git pull --rebase`.
-   - If there are rebase conflicts, resolve them by editing files to incorporate both sides correctly.
-   - Continue the rebase (`git rebase --continue`) until it completes.
-   - Re-run formatting if needed after conflict resolution.
-   - Retry push.
-5) Do not stop until the branch is successfully pushed.
-
-When finished, print a short summary of what you did.
-"""
 
 
 def _run_codex_sync_agent(
@@ -449,19 +416,42 @@ class GitHubService:
         return payload
 
     def link_issue(self, issue_ref: str) -> dict:
+        state, _issue_obj = self._fetch_and_link_issue(issue_ref)
+        return state
+
+    def _fetch_and_link_issue(self, issue_ref: str) -> tuple[dict, dict]:
         number = self.validate_issue_same_repo(issue_ref)
-        issue = self.issue_view(number=number)
+        issue_obj = self.issue_view(number=number)
         repo = self.repo_info()
         state = self.read_link_state()
         state["repo"] = {"nameWithOwner": repo.name_with_owner, "url": repo.url}
         state["issue"] = {
-            "number": issue.get("number"),
-            "url": issue.get("url"),
-            "title": issue.get("title"),
-            "state": issue.get("state"),
+            "number": issue_obj.get("number"),
+            "url": issue_obj.get("url"),
+            "title": issue_obj.get("title"),
+            "state": issue_obj.get("state"),
         }
         state["updatedAtMs"] = _now_ms()
-        return self.write_link_state(state)
+        return self.write_link_state(state), issue_obj
+
+    def build_spec_prompt_from_issue(self, issue_ref: str) -> tuple[str, dict]:
+        """
+        Fetch issue details, persist link state, and build the prompt used to
+        create/update SPEC based on the issue.
+
+        Returns (prompt, link_state).
+        """
+        link_state, issue_obj = self._fetch_and_link_issue(issue_ref)
+        issue_num = ((link_state.get("issue") or {}) or {}).get("number")
+        issue_title = ((link_state.get("issue") or {}) or {}).get("title") or ""
+        body = (issue_obj.get("body") or "").strip()
+        prompt = build_github_issue_to_spec_prompt(
+            issue_num=int(issue_num or issue_obj.get("number") or 0),
+            issue_title=str(issue_title or ""),
+            issue_url=str(issue_obj.get("url") or ""),
+            issue_body=str(body or ""),
+        )
+        return prompt, link_state
 
     def sync_pr(
         self,
@@ -508,8 +498,8 @@ class GitHubService:
             )
 
         # Agentic sync (format/lint/test, commit if needed, push; resolve rebase conflicts if any)
-        prompt = _build_sync_agent_prompt(
-            repo_root=self.repo_root, branch=head_branch, issue_num=issue_num
+        prompt = build_sync_agent_prompt(
+            repo_root=str(self.repo_root), branch=head_branch, issue_num=issue_num
         )
         _run_codex_sync_agent(
             repo_root=self.repo_root, raw_config=self.raw_config, prompt=prompt

@@ -1,7 +1,5 @@
 import asyncio
-import collections
 import json
-import os
 import time
 import uuid
 from pathlib import Path
@@ -24,7 +22,7 @@ from .doc_chat import (
     DocChatValidationError,
     _normalize_kind,
 )
-from .pty_session import PTYSession
+from .pty_session import ActiveSession, PTYSession
 from .spec_ingest import (
     SpecIngestError,
     clear_work_docs,
@@ -48,64 +46,6 @@ from .snapshot import (
 from .voice import VoiceService, VoiceServiceError
 from .engine import LockError
 from .github import GitHubError, GitHubService
-
-
-class ActiveSession:
-    def __init__(
-        self, session_id: str, pty: PTYSession, loop: asyncio.AbstractEventLoop
-    ):
-        self.id = session_id
-        self.pty = pty
-        self.buffer = collections.deque(maxlen=1000)
-        self.subscribers: set[asyncio.Queue] = set()
-        self.lock = asyncio.Lock()
-        self.loop = loop
-        self._setup_reader()
-
-    def _setup_reader(self):
-        self.loop.add_reader(self.pty.fd, self._read_callback)
-
-    def _read_callback(self):
-        try:
-            if self.pty.closed:
-                return
-            data = os.read(self.pty.fd, 4096)
-            if data:
-                self.pty.last_active = time.time()
-                self.buffer.append(data)
-                for queue in list(self.subscribers):
-                    try:
-                        queue.put_nowait(data)
-                    except asyncio.QueueFull:
-                        pass
-            else:
-                self.close()
-        except OSError:
-            self.close()
-
-    def add_subscriber(self) -> asyncio.Queue:
-        q = asyncio.Queue()
-        for chunk in self.buffer:
-            q.put_nowait(chunk)
-        self.subscribers.add(q)
-        return q
-
-    def remove_subscriber(self, q: asyncio.Queue):
-        self.subscribers.discard(q)
-
-    def close(self):
-        if not self.pty.closed:
-            try:
-                self.loop.remove_reader(self.pty.fd)
-            except Exception:
-                pass
-            self.pty.terminate()
-        for queue in list(self.subscribers):
-            try:
-                queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
-        self.subscribers.clear()
 
 
 async def _log_stream(log_path: Path):
@@ -523,20 +463,8 @@ def build_repo_router(static_dir: Path) -> APIRouter:
 
         svc = _github(request)
         try:
-            link_state = await asyncio.to_thread(svc.link_issue, str(issue))
-            issue_num = ((link_state.get("issue") or {}) or {}).get("number")
-            issue_title = ((link_state.get("issue") or {}) or {}).get("title") or ""
-            number = await asyncio.to_thread(svc.validate_issue_same_repo, str(issue))
-            issue_obj = await asyncio.to_thread(svc.issue_view, number=int(number))
-            body = (issue_obj.get("body") or "").strip()
-
-            prompt = (
-                "Create or update SPEC to address this GitHub issue.\n\n"
-                f"Issue: #{issue_num} {issue_title}\n"
-                f"URL: {issue_obj.get('url')}\n\n"
-                "Issue body:\n"
-                f"{body}\n\n"
-                "Write a clear SPEC with goals, non-goals, architecture notes, and actionable implementation steps.\n"
+            prompt, link_state = await asyncio.to_thread(
+                svc.build_spec_prompt_from_issue, str(issue)
             )
             doc_req = doc_chat.parse_request(
                 "spec", {"message": prompt, "stream": False}

@@ -28,10 +28,7 @@ let textInputToggleBtn = null;
 let textInputPanelEl = null;
 let textInputTextareaEl = null;
 let textInputSendBtn = null;
-let textInputClearBtn = null;
-let textInputAppendEnterEl = null;
 let textInputEnabled = false;
-let textInputAppendEnter = true;
 
 // Mobile controls state
 let mobileControlsEl = null;
@@ -42,7 +39,6 @@ const textEncoder = new TextEncoder();
 
 const TEXT_INPUT_STORAGE_KEYS = Object.freeze({
   enabled: "codex_terminal_text_input_enabled",
-  appendEnter: "codex_terminal_text_input_append_enter",
 });
 
 const TEXT_INPUT_SIZE_LIMITS = Object.freeze({
@@ -293,13 +289,11 @@ function setTextInputEnabled(enabled, options = {}) {
 function updateTextInputConnected(connected) {
   if (textInputSendBtn) textInputSendBtn.disabled = !connected;
   if (textInputTextareaEl) textInputTextareaEl.disabled = false;
-  if (textInputClearBtn) textInputClearBtn.disabled = false;
-  if (textInputAppendEnterEl) textInputAppendEnterEl.disabled = false;
 }
 
 function sendFromTextarea() {
   const text = textInputTextareaEl?.value || "";
-  const ok = sendText(text, { appendNewline: textInputAppendEnter });
+  const ok = sendText(text, { appendNewline: true });
   if (!ok) return;
 
   if (textInputTextareaEl) {
@@ -321,19 +315,13 @@ function initTextInputPanel() {
   textInputPanelEl = document.getElementById("terminal-text-input");
   textInputTextareaEl = document.getElementById("terminal-textarea");
   textInputSendBtn = document.getElementById("terminal-text-send");
-  textInputClearBtn = document.getElementById("terminal-text-clear");
-  textInputAppendEnterEl = document.getElementById(
-    "terminal-text-append-enter"
-  );
 
   if (
     !terminalSectionEl ||
     !textInputToggleBtn ||
     !textInputPanelEl ||
     !textInputTextareaEl ||
-    !textInputSendBtn ||
-    !textInputClearBtn ||
-    !textInputAppendEnterEl
+    !textInputSendBtn
   ) {
     return;
   }
@@ -342,20 +330,9 @@ function initTextInputPanel() {
     TEXT_INPUT_STORAGE_KEYS.enabled,
     isTouchDevice()
   );
-  textInputAppendEnter = readBoolFromStorage(
-    TEXT_INPUT_STORAGE_KEYS.appendEnter,
-    true
-  );
-
-  textInputAppendEnterEl.checked = textInputAppendEnter;
 
   textInputToggleBtn.addEventListener("click", () => {
     setTextInputEnabled(!textInputEnabled, { focus: true, focusTextarea: true });
-  });
-
-  textInputAppendEnterEl.addEventListener("change", () => {
-    textInputAppendEnter = Boolean(textInputAppendEnterEl.checked);
-    writeBoolToStorage(TEXT_INPUT_STORAGE_KEYS.appendEnter, textInputAppendEnter);
   });
 
   textInputSendBtn.addEventListener("click", () => {
@@ -364,15 +341,6 @@ function initTextInputPanel() {
       return;
     }
     sendFromTextarea();
-  });
-
-  textInputClearBtn.addEventListener("click", () => {
-    if (textInputTextareaEl) textInputTextareaEl.value = "";
-    if (isTouchDevice()) {
-      requestAnimationFrame(() => {
-        safeFocus(textInputTextareaEl);
-      });
-    }
   });
 
   textInputTextareaEl.addEventListener("keydown", (e) => {

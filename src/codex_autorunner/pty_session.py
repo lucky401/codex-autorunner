@@ -1,3 +1,5 @@
+import asyncio
+import collections
 import os
 import fcntl
 import select
@@ -71,3 +73,61 @@ class PTYSession:
         except Exception:
             pass
         self.closed = True
+
+
+class ActiveSession:
+    def __init__(
+        self, session_id: str, pty: PTYSession, loop: asyncio.AbstractEventLoop
+    ):
+        self.id = session_id
+        self.pty = pty
+        self.buffer = collections.deque(maxlen=1000)
+        self.subscribers: set[asyncio.Queue] = set()
+        self.lock = asyncio.Lock()
+        self.loop = loop
+        self._setup_reader()
+
+    def _setup_reader(self):
+        self.loop.add_reader(self.pty.fd, self._read_callback)
+
+    def _read_callback(self):
+        try:
+            if self.pty.closed:
+                return
+            data = os.read(self.pty.fd, 4096)
+            if data:
+                self.pty.last_active = time.time()
+                self.buffer.append(data)
+                for queue in list(self.subscribers):
+                    try:
+                        queue.put_nowait(data)
+                    except asyncio.QueueFull:
+                        pass
+            else:
+                self.close()
+        except OSError:
+            self.close()
+
+    def add_subscriber(self) -> asyncio.Queue:
+        q = asyncio.Queue()
+        for chunk in self.buffer:
+            q.put_nowait(chunk)
+        self.subscribers.add(q)
+        return q
+
+    def remove_subscriber(self, q: asyncio.Queue):
+        self.subscribers.discard(q)
+
+    def close(self):
+        if not self.pty.closed:
+            try:
+                self.loop.remove_reader(self.pty.fd)
+            except Exception:
+                pass
+            self.pty.terminate()
+        for queue in list(self.subscribers):
+            try:
+                queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+        self.subscribers.clear()

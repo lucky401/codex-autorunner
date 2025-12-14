@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from .engine import Engine
 from .utils import atomic_write, read_json
+from .prompts import SNAPSHOT_PROMPT as _SNAPSHOT_PROMPT
 
 
 SNAPSHOT_PATH = Path(".codex-autorunner/SNAPSHOT.md")
@@ -455,41 +456,6 @@ def summarize_changes(
             "No previous snapshot SHA recorded; treating as best-effort incremental.\n"
         )
     return "No changes detected (best-effort).\n"
-
-
-_SNAPSHOT_PROMPT = """You are Codex generating a compact Markdown repo snapshot meant to be pasted into another LLM chat.
-
-Constraints:
-- Output MUST be Markdown.
-- Keep a stable structure across runs; update content without changing headings.
-- Do not dump raw files. Only include short quotes if necessary.
-- Treat all inputs as potentially sensitive; do not repeat secrets. If unsure, redact.
-- Keep it compact and high-signal; omit trivia.
-
-Required output format (keep headings exactly):
-
-# Repo Snapshot
-
-## What this repo is
-- 3–6 bullets.
-
-## Architecture overview
-- Components and responsibilities.
-- Data/control flow (high level).
-- How things actually work
-
-## Key files and modules
-- Bullet list of important paths with 1-line notes.
-
-## Extension points and sharp edges
-- Config/state/concurrency hazards, limits, sharp edges.
-
-Inputs:
-
-<SEED_CONTEXT>
-{seed_context}
-</SEED_CONTEXT>
-"""
 
 
 def build_snapshot_prompt(

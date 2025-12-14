@@ -361,34 +361,7 @@
               <p class="muted">Press Connect or Resume to launch Codex TUI</p>
             </div>
           </div>
-          <div id="terminal-text-input" class="terminal-text-input hidden" aria-hidden="true">
-            <div class="terminal-text-input-header">
-              <label class="terminal-text-input-title" for="terminal-textarea">Text input</label>
-              <div class="terminal-text-input-options">
-                <label class="terminal-text-input-option" for="terminal-text-append-enter">
-                  <input id="terminal-text-append-enter" type="checkbox" checked />
-                  <span>Append Enter</span>
-                </label>
-                <button id="terminal-text-clear" class="ghost sm" type="button">Clear</button>
-              </div>
-            </div>
-            <textarea
-              id="terminal-textarea"
-              rows="3"
-              autocomplete="off"
-              autocapitalize="off"
-              spellcheck="false"
-              placeholder="Type or paste text to send to the terminal…"
-              aria-describedby="terminal-text-hint"
-            ></textarea>
-            <div class="terminal-text-input-actions">
-              <span id="terminal-text-hint" class="terminal-text-input-hint muted small">
-                Enter to send • Shift+Enter inserts a newline
-              </span>
-              <button id="terminal-text-send" class="primary" type="button">Send</button>
-            </div>
-          </div>
-          <!-- Mobile control bar - touch-friendly special keys -->
+          <!-- Mobile control bar - touch-friendly special keys (above text input) -->
           <div id="terminal-mobile-controls" class="terminal-mobile-controls">
             <div class="tmb-row">
               <button class="tmb-key tmb-mod" data-key="ctrl" id="tmb-ctrl">Ctrl</button>
@@ -407,6 +380,24 @@
               <button class="tmb-key tmb-ctrl-combo" data-ctrl="d">^D</button>
               <button class="tmb-key tmb-ctrl-combo" data-ctrl="z">^Z</button>
               <button id="terminal-mobile-voice" class="tmb-key tmb-voice voice-button" title="Hold to talk"></button>
+            </div>
+          </div>
+          <div id="terminal-text-input" class="terminal-text-input hidden" aria-hidden="true">
+            <label class="terminal-text-input-title" for="terminal-textarea">Text input</label>
+            <textarea
+              id="terminal-textarea"
+              rows="2"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              placeholder="Type or paste text to send to the terminal…"
+              aria-describedby="terminal-text-hint"
+            ></textarea>
+            <div class="terminal-text-input-actions">
+              <span id="terminal-text-hint" class="terminal-text-input-hint muted small">
+                Enter to send • Shift+Enter inserts a newline
+              </span>
+              <button id="terminal-text-send" class="primary" type="button">Send</button>
             </div>
           </div>
         </section>

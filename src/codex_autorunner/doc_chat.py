@@ -14,6 +14,7 @@ from asyncio.subprocess import PIPE, STDOUT
 from .engine import Engine, _process_alive, timestamp
 from .state import load_state
 from .utils import atomic_write
+from .prompts import DOC_CHAT_PROMPT_TEMPLATE
 
 ALLOWED_DOC_KINDS = ("todo", "progress", "opinions", "spec")
 DOC_CHAT_TIMEOUT_SECONDS = 180
@@ -61,42 +62,6 @@ def format_sse(event: str, data: object) -> str:
     for line in lines:
         parts.append(f"data: {line}")
     return "\n".join(parts) + "\n\n"
-
-
-DOC_CHAT_PROMPT_TEMPLATE = """You are Codex, an autonomous coding assistant helping rewrite a single work doc for this repository.
-
-Target doc: {doc_title}
-User request: {message}
-Doc path: {target_path}
-
-Instructions:
-- Update only the {doc_title} document at {target_path}. Edit the file directly.
-- Keep stdout minimal: optionally print one short summary prefixed with "Agent:"; do not print diffs or extra logs.
-
-<WORK_DOCS>
-<TODO>
-{todo}
-</TODO>
-
-<PROGRESS>
-{progress}
-</PROGRESS>
-
-<OPINIONS>
-{opinions}
-</OPINIONS>
-
-<SPEC>
-{spec}
-</SPEC>
-</WORK_DOCS>
-
-{recent_run_block}
-
-<TARGET_DOC>
-{target_doc}
-</TARGET_DOC>
-"""
 
 
 class DocChatService:
