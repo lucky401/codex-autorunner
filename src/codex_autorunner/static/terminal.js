@@ -392,7 +392,7 @@ function ensureTerminal() {
   fitAddon = new window.FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(container);
-  term.write('Press "Start session" to launch Codex TUI...\r\n');
+  term.write('Press "New" or "Resume" to launch Codex TUI...\r\n');
   if (!inputDisposable) {
     inputDisposable = term.onData((data) => {
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -478,7 +478,9 @@ function handleResize() {
 }
 
 function connect(options = {}) {
-  const resume = Boolean(options.resume);
+  const mode = (options.mode || (options.resume ? "resume" : "new")).toLowerCase();
+  const isAttach = mode === "attach";
+  const isResume = mode === "resume";
   if (!ensureTerminal()) return;
   if (socket && socket.readyState === WebSocket.OPEN) return;
 
@@ -492,11 +494,23 @@ function connect(options = {}) {
   intentionalDisconnect = false;
 
   const queryParams = new URLSearchParams();
-  if (resume) queryParams.append("mode", "resume");
+  if (mode) queryParams.append("mode", mode);
 
   const savedSessionId = localStorage.getItem("codex_terminal_session_id");
-  if (savedSessionId) {
-    queryParams.append("session_id", savedSessionId);
+  if (isAttach) {
+    if (savedSessionId) {
+      queryParams.append("session_id", savedSessionId);
+    } else {
+      flash("No saved terminal session to attach to", "error");
+      return;
+    }
+  } else {
+    // Starting a new PTY session (either fresh codex or codex resume) should not
+    // accidentally attach to an old session.
+    if (savedSessionId) {
+      queryParams.append("close_session_id", savedSessionId);
+    }
+    localStorage.removeItem("codex_terminal_session_id");
   }
 
   const queryString = queryParams.toString();
@@ -510,13 +524,13 @@ function connect(options = {}) {
   socket.onopen = () => {
     reconnectAttempts = 0;
     overlayEl?.classList.add("hidden");
-    setStatus(resume ? "Connected (resume)" : "Connected");
+    if (isAttach) setStatus("Connected (reattached)");
+    else if (isResume) setStatus("Connected (codex resume)");
+    else setStatus("Connected");
     updateButtons(true);
     fitAddon.fit();
     handleResize();
-    if (resume) {
-      term?.write("\r\nLaunching resume flow...\r\n");
-    }
+    if (isResume) term?.write("\r\nLaunching codex resume...\r\n");
   };
 
   socket.onmessage = (event) => {
@@ -584,7 +598,7 @@ function connect(options = {}) {
       setStatus(`Reconnecting in ${Math.round(delay / 100)}s...`);
       reconnectAttempts++;
       reconnectTimer = setTimeout(() => {
-        connect({ resume: true }); // Always try to resume on reconnect
+        connect({ mode: "attach" }); // Reattach to an existing PTY session if possible
       }, delay);
     } else {
       setStatus("Disconnected (max retries reached)");
@@ -738,8 +752,8 @@ export function initTerminal() {
 
   if (!statusEl || !connectBtn || !disconnectBtn || !resumeBtn) return;
 
-  connectBtn.addEventListener("click", () => connect({ resume: false }));
-  resumeBtn.addEventListener("click", () => connect({ resume: true }));
+  connectBtn.addEventListener("click", () => connect({ mode: "new" }));
+  resumeBtn.addEventListener("click", () => connect({ mode: "resume" }));
   disconnectBtn.addEventListener("click", disconnect);
   updateButtons(false);
   setStatus("Disconnected");
@@ -757,6 +771,6 @@ export function initTerminal() {
 
   // Auto-connect if session ID exists
   if (localStorage.getItem("codex_terminal_session_id")) {
-    connect({ resume: true });
+    connect({ mode: "attach" });
   }
 }

@@ -222,7 +222,9 @@ def create_app(
     manager = RunnerManager(engine)
     doc_chat = DocChatService(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
-    terminal_max_idle_seconds = 3600
+    # Safety net for leaked sessions (e.g. user closes tab and never returns).
+    # PTYSession updates last_active on read/write/resize, so this is "idle time".
+    terminal_max_idle_seconds = 24 * 3600
     # Construct asyncio primitives without assuming a loop already exists.
     # This comes up in unit tests (sync context) and when mounting from a worker thread.
     try:

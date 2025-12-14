@@ -650,6 +650,9 @@ def build_repo_router(static_dir: Path) -> APIRouter:
         terminal_lock: asyncio.Lock = app.state.terminal_lock
 
         client_session_id = ws.query_params.get("session_id")
+        close_session_id = ws.query_params.get("close_session_id")
+        mode = (ws.query_params.get("mode") or "").strip().lower()
+        attach_only = mode == "attach"
         session_id = None
         active_session: Optional[ActiveSession] = None
 
@@ -664,8 +667,29 @@ def build_repo_router(static_dir: Path) -> APIRouter:
                     session_id = client_session_id
 
             if not active_session:
+                if attach_only:
+                    await ws.send_text(
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "message": "Session not found",
+                                "session_id": client_session_id,
+                            }
+                        )
+                    )
+                    await ws.close()
+                    return
+                if (
+                    close_session_id
+                    and close_session_id in terminal_sessions
+                    and close_session_id != client_session_id
+                ):
+                    try:
+                        terminal_sessions[close_session_id].close()
+                    finally:
+                        terminal_sessions.pop(close_session_id, None)
                 session_id = str(uuid.uuid4())
-                resume_mode = ws.query_params.get("mode") == "resume"
+                resume_mode = mode == "resume"
                 if resume_mode:
                     cmd = [
                         engine.config.codex_binary,
@@ -676,6 +700,7 @@ def build_repo_router(static_dir: Path) -> APIRouter:
                 else:
                     cmd = [
                         engine.config.codex_binary,
+                        "--yolo",
                         *engine.config.codex_terminal_args,
                     ]
                 try:
