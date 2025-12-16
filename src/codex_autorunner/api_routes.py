@@ -685,7 +685,9 @@ def build_repo_router(static_dir: Path) -> APIRouter:
                     and close_session_id != client_session_id
                 ):
                     try:
-                        terminal_sessions[close_session_id].close()
+                        session_to_close = terminal_sessions[close_session_id]
+                        session_to_close.close()
+                        await session_to_close.wait_closed()
                     finally:
                         terminal_sessions.pop(close_session_id, None)
                 session_id = str(uuid.uuid4())

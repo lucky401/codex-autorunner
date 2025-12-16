@@ -139,3 +139,11 @@ class ActiveSession:
             except asyncio.QueueFull:
                 pass
         self.subscribers.clear()
+
+    async def wait_closed(self, timeout: float = 5.0):
+        """Wait for the underlying PTY process to terminate."""
+        start = time.time()
+        while time.time() - start < timeout:
+            if not self.pty.isalive():
+                return
+            await asyncio.sleep(0.1)
