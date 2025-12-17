@@ -1,5 +1,6 @@
 import { api, flash, streamEvents } from "./utils.js";
 import { publish, subscribe } from "./bus.js";
+import { saveToCache, loadFromCache } from "./cache.js";
 import { CONSTANTS } from "./constants.js";
 
 const logRunIdInput = document.getElementById("log-run-id");
@@ -344,10 +345,20 @@ async function loadLogs() {
       rawLogLines = text.split("\n");
       delete output.dataset.isPlaceholder;
       renderLogs();
+
+      // Update cache if we are looking at the latest logs (no specific run ID)
+      if (!runId) {
+        // Limit to last 200 lines to avoid localStorage quota issues
+        const lines = rawLogLines.slice(-200);
+        saveToCache("logs:tail", lines.join("\n"));
+      }
     } else {
       output.textContent = "(empty log)";
       output.dataset.isPlaceholder = "true";
       rawLogLines = [];
+      if (!runId) {
+        saveToCache("logs:tail", "");
+      }
     }
 
     flash("Logs loaded");
@@ -550,6 +561,18 @@ export function initLogs() {
   const output = document.getElementById("log-output");
   if (output) {
     output.addEventListener("scroll", updateJumpButtonVisibility);
+  }
+
+  // Try loading from cache first
+  const cachedLogs = loadFromCache("logs:tail");
+  if (cachedLogs) {
+    const output = document.getElementById("log-output");
+    rawLogLines = cachedLogs.split("\n");
+    if (rawLogLines.length > 0) {
+      delete output.dataset.isPlaceholder;
+      renderLogs();
+      scrollLogsToBottom(true);
+    }
   }
 
   loadLogs();

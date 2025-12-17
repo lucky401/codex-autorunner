@@ -1,5 +1,6 @@
 import { api, flash, statusPill, confirmModal } from "./utils.js";
 import { subscribe } from "./bus.js";
+import { saveToCache, loadFromCache } from "./cache.js";
 import {
   loadState,
   startRun,
@@ -14,6 +15,7 @@ import { CONSTANTS } from "./constants.js";
 
 function renderState(state) {
   if (!state) return;
+  saveToCache("state", state);
   statusPill(document.getElementById("runner-status"), state.status);
   document.getElementById("last-run-id").textContent = state.last_run_id ?? "–";
   document.getElementById("last-exit-code").textContent =
@@ -73,6 +75,7 @@ function renderUsageProgressBar(container, percent, windowMinutes) {
 }
 
 function renderUsage(data) {
+  if (data) saveToCache("usage", data);
   const totals = data?.totals || {};
   const events = data?.events ?? 0;
   const rate = data?.latest_rate_limits;
@@ -233,6 +236,13 @@ export function initDashboard() {
   });
   bindAction("refresh-state", loadState);
   bindAction("usage-refresh", loadUsage);
+
+  // Try loading from cache first
+  const cachedState = loadFromCache("state");
+  if (cachedState) renderState(cachedState);
+
+  const cachedUsage = loadFromCache("usage");
+  if (cachedUsage) renderUsage(cachedUsage);
 
   const summaryBtn = document.getElementById("open-summary");
   if (summaryBtn) {
