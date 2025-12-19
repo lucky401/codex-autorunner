@@ -2534,6 +2534,7 @@ label {
 }
 
 .terminal-text-input-buttons .voice-button,
+.terminal-text-input-buttons .terminal-text-image,
 .terminal-text-send-icon {
   width: 34px;
   height: 34px;
@@ -2541,6 +2542,11 @@ label {
   min-height: 34px;
   padding: 0;
   border-radius: 10px;
+}
+
+.terminal-text-input-buttons .terminal-text-image {
+  font-size: 11px;
+  letter-spacing: 0.2px;
 }
 
 .terminal-text-input-buttons .voice-button svg {
@@ -3412,12 +3418,17 @@ button.loading::after {
   }
 
   .terminal-text-input-buttons .voice-button,
+  .terminal-text-input-buttons .terminal-text-image,
   .terminal-text-send-icon {
     width: 30px;
     height: 30px;
     min-width: 30px;
     min-height: 30px;
     border-radius: 8px;
+  }
+
+  .terminal-text-input-buttons .terminal-text-image {
+    font-size: 10px;
   }
 
   .terminal-text-input-buttons .voice-button svg {
@@ -4329,12 +4340,17 @@ button.loading::after {
   }
 
   .terminal-text-input-buttons .voice-button,
+  .terminal-text-input-buttons .terminal-text-image,
   .terminal-text-send-icon {
     width: 28px;
     height: 28px;
     min-width: 28px;
     min-height: 28px;
     border-radius: 8px;
+  }
+
+  .terminal-text-input-buttons .terminal-text-image {
+    font-size: 9px;
   }
 
   .terminal-text-input-buttons .voice-button svg {

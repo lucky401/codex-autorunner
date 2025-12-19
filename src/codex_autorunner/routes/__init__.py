@@ -7,6 +7,7 @@ This package splits the monolithic api_routes.py into focused modules:
 - github: GitHub integration endpoints
 - repos: Run control (start/stop/resume/reset)
 - voice: Voice transcription and config
+- terminal_images: Terminal image uploads
 """
 
 from pathlib import Path
@@ -18,6 +19,7 @@ from .docs import build_docs_routes
 from .github import build_github_routes
 from .repos import build_repos_routes
 from .system import build_system_routes
+from .terminal_images import build_terminal_image_routes
 from .voice import build_voice_routes
 
 
@@ -39,10 +41,10 @@ def build_repo_router(static_dir: Path) -> APIRouter:
     router.include_router(build_github_routes())
     router.include_router(build_repos_routes())
     router.include_router(build_system_routes())
+    router.include_router(build_terminal_image_routes())
     router.include_router(build_voice_routes())
 
     return router
 
 
 __all__ = ["build_repo_router"]
-

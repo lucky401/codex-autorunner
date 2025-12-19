@@ -37,6 +37,6 @@ export const CONSTANTS = {
     LOGS_ENDPOINT: "/api/logs",
     DOCS_ENDPOINT: "/api/docs",
     TERMINAL_ENDPOINT: "/api/terminal",
+    TERMINAL_IMAGE_ENDPOINT: "/api/terminal/image",
   }
 };
-

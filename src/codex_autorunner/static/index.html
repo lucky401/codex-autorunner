@@ -443,9 +443,22 @@
                 autocomplete="off"
                 autocapitalize="off"
                 spellcheck="false"
-                placeholder="Type or paste text to send to the terminal…"
+                placeholder="Type or paste text/images to send to the terminal…"
               ></textarea>
               <div class="terminal-text-input-buttons">
+                <button
+                  id="terminal-text-image"
+                  class="ghost sm terminal-text-image"
+                  type="button"
+                  title="Attach image"
+                  aria-label="Attach image"
+                >Img</button>
+                <input
+                  id="terminal-text-image-input"
+                  class="hidden"
+                  type="file"
+                  accept="image/*"
+                />
                 <button
                   id="terminal-text-voice"
                   class="ghost sm voice-button terminal-text-voice"

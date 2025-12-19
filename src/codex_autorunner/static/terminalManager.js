@@ -1,4 +1,4 @@
-import { flash, buildWsUrl, isMobileViewport } from "./utils.js";
+import { api, flash, buildWsUrl, isMobileViewport } from "./utils.js";
 import { CONSTANTS } from "./constants.js";
 import { initVoiceInput } from "./voice.js";
 
@@ -89,6 +89,8 @@ export class TerminalManager {
     this.textInputPanelEl = null;
     this.textInputTextareaEl = null;
     this.textInputSendBtn = null;
+    this.textInputImageBtn = null;
+    this.textInputImageInputEl = null;
     this.textInputEnabled = false;
     this.textInputPending = null;
     this.textInputSendBtnLabel = null;
@@ -881,19 +883,105 @@ export class TerminalManager {
     }
   }
 
+  _insertTextIntoTextInput(text, options = {}) {
+    if (!text) return false;
+    if (!this.textInputTextareaEl) return false;
+
+    if (!this.textInputEnabled) {
+      this._setTextInputEnabled(true, { focus: true, focusTextarea: true });
+    }
+
+    const textarea = this.textInputTextareaEl;
+    const value = textarea.value || "";
+    const start = Number.isInteger(textarea.selectionStart)
+      ? textarea.selectionStart
+      : value.length;
+    const end = Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : start;
+    const prefix = value.slice(0, start);
+    const suffix = value.slice(end);
+
+    let insert = String(text);
+    if (options.separator === "newline") {
+      insert = `${prefix && !prefix.endsWith("\n") ? "\n" : ""}${insert}`;
+    } else if (options.separator === "space") {
+      insert = `${prefix && !/\s$/.test(prefix) ? " " : ""}${insert}`;
+    }
+
+    textarea.value = `${prefix}${insert}${suffix}`;
+    const cursor = prefix.length + insert.length;
+    textarea.setSelectionRange(cursor, cursor);
+    this._persistTextInputDraft();
+    this._updateComposerSticky();
+    this._safeFocus(textarea);
+    return true;
+  }
+
+  async _uploadTerminalImage(file) {
+    if (!file) return;
+    if (!file.type || !file.type.startsWith("image/")) {
+      flash("That file is not an image", "error");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file, file.name || "image");
+
+    if (this.textInputImageBtn) {
+      this.textInputImageBtn.disabled = true;
+    }
+
+    try {
+      const response = await api(CONSTANTS.API.TERMINAL_IMAGE_ENDPOINT, {
+        method: "POST",
+        body: formData,
+      });
+      const imagePath = response?.path;
+      if (!imagePath) {
+        throw new Error("Upload returned no path");
+      }
+      this._insertTextIntoTextInput(imagePath, { separator: "newline" });
+      flash(`Image saved to ${imagePath}`);
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "Image upload failed";
+      flash(message, "error");
+    } finally {
+      if (this.textInputImageBtn) {
+        this.textInputImageBtn.disabled = false;
+      }
+    }
+  }
+
+  async _handleImageFiles(files) {
+    if (!files || files.length === 0) return;
+    const images = Array.from(files).filter(
+      (file) => file && file.type && file.type.startsWith("image/")
+    );
+    if (!images.length) {
+      flash("No image found in clipboard", "error");
+      return;
+    }
+    for (const file of images) {
+      await this._uploadTerminalImage(file);
+    }
+  }
+
   _initTextInputPanel() {
     this.terminalSectionEl = document.getElementById("terminal");
     this.textInputToggleBtn = document.getElementById("terminal-text-input-toggle");
     this.textInputPanelEl = document.getElementById("terminal-text-input");
     this.textInputTextareaEl = document.getElementById("terminal-textarea");
     this.textInputSendBtn = document.getElementById("terminal-text-send");
+    this.textInputImageBtn = document.getElementById("terminal-text-image");
+    this.textInputImageInputEl = document.getElementById("terminal-text-image-input");
 
     if (
       !this.terminalSectionEl ||
       !this.textInputToggleBtn ||
       !this.textInputPanelEl ||
       !this.textInputTextareaEl ||
-      !this.textInputSendBtn
+      !this.textInputSendBtn ||
+      !this.textInputImageBtn ||
+      !this.textInputImageInputEl
     ) {
       return;
     }
@@ -931,6 +1019,32 @@ export class TerminalManager {
       this._updateComposerSticky();
     });
 
+    this.textInputTextareaEl.addEventListener("paste", (e) => {
+      const items = e.clipboardData?.items;
+      if (!items || !items.length) return;
+      const files = [];
+      for (const item of items) {
+        if (item.type && item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (!files.length) return;
+      e.preventDefault();
+      this._handleImageFiles(files);
+    });
+
+    this.textInputImageBtn.addEventListener("click", () => {
+      this.textInputImageInputEl?.click();
+    });
+
+    this.textInputImageInputEl.addEventListener("change", () => {
+      const files = Array.from(this.textInputImageInputEl?.files || []);
+      if (!files.length) return;
+      this._handleImageFiles(files);
+      this.textInputImageInputEl.value = "";
+    });
+
     this.textInputTextareaEl.addEventListener("focus", () => {
       this._updateComposerSticky();
       this._updateViewportInsets();
@@ -947,6 +1061,22 @@ export class TerminalManager {
           this.exitMobileInputMode();
         }
       }, 0);
+    });
+
+    this.terminalSectionEl.addEventListener("paste", (e) => {
+      if (document.activeElement === this.textInputTextareaEl) return;
+      const items = e.clipboardData?.items;
+      if (!items || !items.length) return;
+      const files = [];
+      for (const item of items) {
+        if (item.type && item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (!files.length) return;
+      e.preventDefault();
+      this._handleImageFiles(files);
     });
 
     this.textInputPending = this._loadPendingTextInput();
