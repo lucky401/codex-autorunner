@@ -3450,7 +3450,7 @@ button.loading::after {
   }
 
   html.mobile-compose-fixed #terminal .terminal-text-input {
-    position: sticky;
+    position: fixed;
     bottom: calc(var(--mobile-bottom-nav) + var(--vv-bottom, 0px));
   }
 
