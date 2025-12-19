@@ -40,8 +40,10 @@ function updateViewportInset() {
     const vv = window.visualViewport;
     bottom = Math.max(0, viewportHeight - (vv.height + vv.offsetTop));
   }
-  const keyboardFallback = Math.max(0, baseViewportHeight - viewportHeight);
-  const inset = Math.max(bottom, keyboardFallback);
+  const keyboardFallback = window.visualViewport
+    ? 0
+    : Math.max(0, baseViewportHeight - viewportHeight);
+  const inset = bottom || keyboardFallback;
   document.documentElement.style.setProperty("--vv-bottom", `${inset}px`);
 }
 

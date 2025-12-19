@@ -417,8 +417,10 @@ export class TerminalManager {
       const vv = window.visualViewport;
       bottom = Math.max(0, viewportHeight - (vv.height + vv.offsetTop));
     }
-    const keyboardFallback = Math.max(0, this.baseViewportHeight - viewportHeight);
-    const inset = Math.max(bottom, keyboardFallback);
+    const keyboardFallback = window.visualViewport
+      ? 0
+      : Math.max(0, this.baseViewportHeight - viewportHeight);
+    const inset = bottom || keyboardFallback;
     document.documentElement.style.setProperty("--vv-bottom", `${inset}px`);
     this.terminalSectionEl?.style.setProperty("--vv-bottom", `${inset}px`);
   }
