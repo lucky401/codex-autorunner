@@ -670,7 +670,9 @@ export class TerminalManager {
     if (!this.textInputSendBtn) return;
     const connected = Boolean(this.socket && this.socket.readyState === WebSocket.OPEN);
     const pending = Boolean(this.textInputPending);
-    this.textInputSendBtn.disabled = !connected || pending;
+    this.textInputSendBtn.disabled = pending;
+    this.textInputSendBtn.setAttribute("aria-disabled", connected ? "false" : "true");
+    this.textInputSendBtn.classList.toggle("disconnected", !connected);
     if (this.textInputSendBtnLabel === null) {
       this.textInputSendBtnLabel = this.textInputSendBtn.textContent || "Send";
     }
@@ -979,9 +981,7 @@ export class TerminalManager {
       !this.textInputToggleBtn ||
       !this.textInputPanelEl ||
       !this.textInputTextareaEl ||
-      !this.textInputSendBtn ||
-      !this.textInputImageBtn ||
-      !this.textInputImageInputEl
+      !this.textInputSendBtn
     ) {
       return;
     }
@@ -1019,31 +1019,33 @@ export class TerminalManager {
       this._updateComposerSticky();
     });
 
-    this.textInputTextareaEl.addEventListener("paste", (e) => {
-      const items = e.clipboardData?.items;
-      if (!items || !items.length) return;
-      const files = [];
-      for (const item of items) {
-        if (item.type && item.type.startsWith("image/")) {
-          const file = item.getAsFile();
-          if (file) files.push(file);
+    if (this.textInputImageBtn && this.textInputImageInputEl) {
+      this.textInputTextareaEl.addEventListener("paste", (e) => {
+        const items = e.clipboardData?.items;
+        if (!items || !items.length) return;
+        const files = [];
+        for (const item of items) {
+          if (item.type && item.type.startsWith("image/")) {
+            const file = item.getAsFile();
+            if (file) files.push(file);
+          }
         }
-      }
-      if (!files.length) return;
-      e.preventDefault();
-      this._handleImageFiles(files);
-    });
+        if (!files.length) return;
+        e.preventDefault();
+        this._handleImageFiles(files);
+      });
 
-    this.textInputImageBtn.addEventListener("click", () => {
-      this.textInputImageInputEl?.click();
-    });
+      this.textInputImageBtn.addEventListener("click", () => {
+        this.textInputImageInputEl?.click();
+      });
 
-    this.textInputImageInputEl.addEventListener("change", () => {
-      const files = Array.from(this.textInputImageInputEl?.files || []);
-      if (!files.length) return;
-      this._handleImageFiles(files);
-      this.textInputImageInputEl.value = "";
-    });
+      this.textInputImageInputEl.addEventListener("change", () => {
+        const files = Array.from(this.textInputImageInputEl?.files || []);
+        if (!files.length) return;
+        this._handleImageFiles(files);
+        this.textInputImageInputEl.value = "";
+      });
+    }
 
     this.textInputTextareaEl.addEventListener("focus", () => {
       this._updateComposerSticky();
@@ -1063,21 +1065,23 @@ export class TerminalManager {
       }, 0);
     });
 
-    this.terminalSectionEl.addEventListener("paste", (e) => {
-      if (document.activeElement === this.textInputTextareaEl) return;
-      const items = e.clipboardData?.items;
-      if (!items || !items.length) return;
-      const files = [];
-      for (const item of items) {
-        if (item.type && item.type.startsWith("image/")) {
-          const file = item.getAsFile();
-          if (file) files.push(file);
+    if (this.textInputImageBtn && this.textInputImageInputEl) {
+      this.terminalSectionEl.addEventListener("paste", (e) => {
+        if (document.activeElement === this.textInputTextareaEl) return;
+        const items = e.clipboardData?.items;
+        if (!items || !items.length) return;
+        const files = [];
+        for (const item of items) {
+          if (item.type && item.type.startsWith("image/")) {
+            const file = item.getAsFile();
+            if (file) files.push(file);
+          }
         }
-      }
-      if (!files.length) return;
-      e.preventDefault();
-      this._handleImageFiles(files);
-    });
+        if (!files.length) return;
+        e.preventDefault();
+        this._handleImageFiles(files);
+      });
+    }
 
     this.textInputPending = this._loadPendingTextInput();
     this._restoreTextInputDraft();

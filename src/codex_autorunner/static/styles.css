@@ -2568,6 +2568,10 @@ button.terminal-text-send-icon {
   line-height: 1;
 }
 
+button.terminal-text-send-icon.disconnected {
+  opacity: 0.55;
+}
+
 .terminal-text-input-buttons .voice-level-meter {
   width: 34px;
   height: 34px;
