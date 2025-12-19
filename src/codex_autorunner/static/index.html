@@ -40,7 +40,9 @@
     <script>
       (() => {
         const params = new URLSearchParams(window.location.search);
-        const version = params.get("v");
+        const injected = "__CAR_ASSET_VERSION__";
+        const token = "__CAR_" + "ASSET_VERSION__";
+        const version = params.get("v") || (injected !== token ? injected : "");
         const suffix = version ? `?v=${encodeURIComponent(version)}` : "";
         window.__assetSuffix = suffix;
 

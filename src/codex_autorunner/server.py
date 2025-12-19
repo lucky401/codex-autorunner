@@ -16,6 +16,7 @@ from fastapi import (
 )
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     JSONResponse,
     RedirectResponse,
     StreamingResponse,
@@ -37,6 +38,7 @@ from .usage import (
     summarize_repo_usage,
 )
 from .manifest import load_manifest
+from .static_assets import asset_version, render_index_html
 from .voice import VoiceConfig, VoiceService, VoiceServiceError
 from .api_routes import build_repo_router, ActiveSession
 from .routes.system import build_system_routes
@@ -260,6 +262,7 @@ def create_app(
     app.state.terminal_lock = terminal_lock
 
     static_dir = _static_dir()
+    app.state.asset_version = asset_version(static_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     # Route handlers
     app.include_router(build_repo_router(static_dir))
@@ -320,6 +323,7 @@ def create_hub_app(
     except Exception:
         pass
     static_dir = _static_dir()
+    app.state.asset_version = asset_version(static_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
@@ -606,7 +610,8 @@ def create_hub_app(
             raise HTTPException(
                 status_code=500, detail="Static UI assets missing; reinstall package"
             )
-        return FileResponse(index_path)
+        html = render_index_html(static_dir, app.state.asset_version)
+        return HTMLResponse(html)
 
     app.include_router(build_system_routes())
 

@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from ..pty_session import ActiveSession, PTYSession
 from ..state import load_state
+from ..static_assets import render_index_html
 from .shared import build_codex_terminal_cmd, log_stream, state_stream
 
 
@@ -27,7 +28,8 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             raise HTTPException(
                 status_code=500, detail="Static UI assets missing; reinstall package"
             )
-        return FileResponse(index_path)
+        html = render_index_html(static_dir, request.app.state.asset_version)
+        return HTMLResponse(html)
 
     @router.get("/api/state")
     def get_state(request: Request):

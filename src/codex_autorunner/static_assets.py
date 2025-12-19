@@ -1,0 +1,32 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+_ASSET_VERSION_TOKEN = "__CAR_ASSET_VERSION__"
+
+
+def asset_version(static_dir: Path) -> str:
+    candidates = [
+        static_dir / "index.html",
+        static_dir / "styles.css",
+        static_dir / "app.js",
+    ]
+    mtimes = []
+    for path in candidates:
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        mtimes.append(stat.st_mtime_ns)
+    if not mtimes:
+        return "0"
+    return str(max(mtimes))
+
+
+def render_index_html(static_dir: Path, version: Optional[str]) -> str:
+    index_path = static_dir / "index.html"
+    text = index_path.read_text(encoding="utf-8")
+    if version:
+        text = text.replace(_ASSET_VERSION_TOKEN, version)
+    return text
