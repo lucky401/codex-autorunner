@@ -85,11 +85,21 @@ function suppressOtherFormFields(activeEl) {
     if (field === activeEl) return;
     if (!isVisible(field)) return;
     if (field.dataset?.codexFieldSuppressed === "1") return;
+    if (field instanceof HTMLInputElement && field.type === "hidden") return;
     if (field.hasAttribute("tabindex")) {
       field.dataset.codexPrevTabindex = field.getAttribute("tabindex") || "";
     }
     field.dataset.codexFieldSuppressed = "1";
     field.setAttribute("tabindex", "-1");
+    if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) {
+      if (field.disabled) {
+        field.dataset.codexPrevDisabled = "1";
+      }
+      field.disabled = true;
+    } else if (field.getAttribute("contenteditable") === "true") {
+      field.dataset.codexPrevContenteditable = "true";
+      field.setAttribute("contenteditable", "false");
+    }
     terminalFieldSuppression.touched.add(field);
   });
 }
@@ -107,6 +117,17 @@ function restoreFormFields() {
     }
     delete field.dataset.codexPrevTabindex;
     delete field.dataset.codexFieldSuppressed;
+    if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) {
+      if (field.dataset.codexPrevDisabled === "1") {
+        field.disabled = true;
+      } else {
+        field.disabled = false;
+      }
+      delete field.dataset.codexPrevDisabled;
+    } else if (field.dataset.codexPrevContenteditable === "true") {
+      field.setAttribute("contenteditable", "true");
+      delete field.dataset.codexPrevContenteditable;
+    }
   });
   terminalFieldSuppression.touched.clear();
   terminalFieldSuppression.active = false;
