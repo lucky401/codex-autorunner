@@ -59,7 +59,7 @@ function isTerminalComposeOpen() {
   if (!panel || !input) return false;
   if (!panel.classList.contains("active")) return false;
   if (input.classList.contains("hidden")) return false;
-  return isVisible(input);
+  return true;
 }
 
 function updateComposeFixed() {
