@@ -21,6 +21,7 @@ const hubUsageList = document.getElementById("hub-usage-list");
 const hubUsageMeta = document.getElementById("hub-usage-meta");
 const hubUsageRefresh = document.getElementById("hub-usage-refresh");
 const hubVersionEl = document.getElementById("hub-version");
+const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 
 function formatRunSummary(repo) {
   if (!repo.initialized) return "Not initialized";
@@ -736,11 +737,27 @@ async function loadHubVersion() {
   }
 }
 
+async function checkUpdateStatus() {
+  try {
+    const data = await api("/system/update/status", { method: "GET" });
+    if (!data || !data.status) return;
+    const stamp = data.at ? String(data.at) : "";
+    if (stamp && sessionStorage.getItem(UPDATE_STATUS_SEEN_KEY) === stamp) return;
+    if (data.status === "rollback" || data.status === "error") {
+      flash(data.message || "Update failed; rollback attempted.", "error");
+    }
+    if (stamp) sessionStorage.setItem(UPDATE_STATUS_SEEN_KEY, stamp);
+  } catch (_err) {
+    // ignore
+  }
+}
+
 export function initHub() {
   if (!repoListEl) return;
   attachHubHandlers();
   refreshHub();
   loadHubVersion();
+  checkUpdateStatus();
 
   // Register auto-refresh for hub repo list
   // Hub is a top-level page so we use tabId: null (global)

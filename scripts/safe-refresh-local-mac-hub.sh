@@ -21,12 +21,14 @@ set -euo pipefail
 
 LABEL="${LABEL:-com.codex.autorunner}"
 PLIST_PATH="${PLIST_PATH:-$HOME/Library/LaunchAgents/${LABEL}.plist}"
+UPDATE_STATUS_PATH="${UPDATE_STATUS_PATH:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
 
 PIPX_ROOT="${PIPX_ROOT:-$HOME/.local/pipx}"
 PIPX_VENV="${PIPX_VENV:-$PIPX_ROOT/venvs/codex-autorunner}"
+PIPX_PYTHON="${PIPX_PYTHON:-$PIPX_VENV/bin/python}"
 CURRENT_VENV_LINK="${CURRENT_VENV_LINK:-$PIPX_ROOT/venvs/codex-autorunner.current}"
 PREV_VENV_LINK="${PREV_VENV_LINK:-$PIPX_ROOT/venvs/codex-autorunner.prev}"
 
@@ -35,23 +37,46 @@ HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-0.5}"
 HEALTH_PATH="${HEALTH_PATH:-/car/openapi.json}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
 
-if [[ ! -f "${PLIST_PATH}" ]]; then
-  echo "LaunchAgent plist not found at ${PLIST_PATH}" >&2
-  echo "Run scripts/install-local-mac-hub.sh or scripts/launchd-hub.sh first (or set PLIST_PATH)." >&2
+write_status() {
+  local status message
+  status="$1"
+  message="$2"
+  if [[ -z "${UPDATE_STATUS_PATH}" ]]; then
+    return 0
+  fi
+  "${PIPX_PYTHON}" - <<PY
+import json, pathlib, time
+path = pathlib.Path("${UPDATE_STATUS_PATH}")
+path.parent.mkdir(parents=True, exist_ok=True)
+payload = {"status": "${status}", "message": "${message}", "at": time.time()}
+path.write_text(json.dumps(payload), encoding="utf-8")
+PY
+}
+
+fail() {
+  local message="$1"
+  echo "${message}" >&2
+  write_status "error" "${message}"
   exit 1
+}
+
+if [[ ! -f "${PLIST_PATH}" ]]; then
+  fail "LaunchAgent plist not found at ${PLIST_PATH}. Run scripts/install-local-mac-hub.sh or scripts/launchd-hub.sh (or set PLIST_PATH)."
 fi
 
 if [[ ! -d "${PIPX_VENV}" ]]; then
-  echo "Expected pipx venv not found at ${PIPX_VENV}" >&2
-  echo "Run scripts/install-local-mac-hub.sh first (or set PIPX_VENV)." >&2
-  exit 1
+  fail "Expected pipx venv not found at ${PIPX_VENV}. Run scripts/install-local-mac-hub.sh (or set PIPX_VENV)."
 fi
 
-PIPX_PYTHON="${PIPX_PYTHON:-$PIPX_VENV/bin/python}"
 if [[ ! -x "${PIPX_PYTHON}" ]]; then
-  echo "Python not found at ${PIPX_PYTHON}" >&2
-  exit 1
+  fail "Python not found at ${PIPX_PYTHON}."
 fi
+
+for cmd in git launchctl curl; do
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    fail "Missing required command: ${cmd}."
+  fi
+done
 
 if [[ ! -L "${CURRENT_VENV_LINK}" ]]; then
   echo "Initializing ${CURRENT_VENV_LINK} -> ${PIPX_VENV}"
@@ -159,16 +184,19 @@ _reload
 
 if _wait_healthy; then
   echo "Health check OK; update successful."
+  write_status "ok" "Update completed successfully."
 else
   echo "Health check failed; rolling back to ${current_target}..." >&2
   ln -sfn "${current_target}" "${CURRENT_VENV_LINK}"
   _reload || true
   if _wait_healthy; then
     echo "Rollback OK; service restored." >&2
+    write_status "rollback" "Update failed; rollback succeeded."
   else
     echo "Rollback failed; service still unhealthy. Check logs and launchctl state:" >&2
     echo "  tail -n 200 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log" >&2
     echo "  launchctl print ${domain}" >&2
+    write_status "error" "Update failed and rollback did not recover the service."
     exit 2
   fi
   exit 1

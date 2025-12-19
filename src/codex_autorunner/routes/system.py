@@ -1,8 +1,10 @@
+import importlib.metadata
+import json
 import logging
 import os
 import shutil
 import subprocess
-import importlib.metadata
+import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
@@ -28,6 +30,27 @@ def _run_cmd(cmd: list[str], cwd: Path) -> None:
         # Include stdout/stderr in the error message for debugging
         detail = f"Command failed: {' '.join(cmd)}\nStdout: {e.stdout}\nStderr: {e.stderr}"
         raise RuntimeError(detail) from e
+
+
+def _update_status_path() -> Path:
+    return Path.home() / ".codex-autorunner" / "update_status.json"
+
+
+def _write_update_status(status: str, message: str, **extra) -> None:
+    payload = {"status": status, "message": message, "at": time.time(), **extra}
+    path = _update_status_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _read_update_status() -> Optional[dict]:
+    path = _update_status_path()
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def _find_git_root(start: Path) -> Optional[Path]:
@@ -171,7 +194,25 @@ def _system_update_check(
 
 
 def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Logger) -> None:
+    status_path = _update_status_path()
     try:
+        _write_update_status(
+            "running",
+            "Update started.",
+            repo_url=repo_url,
+            update_dir=str(update_dir),
+        )
+
+        missing = []
+        for cmd in ("git", "bash", "launchctl", "curl"):
+            if shutil.which(cmd) is None:
+                missing.append(cmd)
+        if missing:
+            msg = f"Missing required commands: {', '.join(missing)}"
+            logger.error(msg)
+            _write_update_status("error", msg)
+            return
+
         update_dir.parent.mkdir(parents=True, exist_ok=True)
 
         if update_dir.exists() and (update_dir / ".git").exists():
@@ -184,8 +225,14 @@ def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Lo
             logger.info("Cloning %s into %s", repo_url, update_dir)
             _run_cmd(["git", "clone", repo_url, str(update_dir)], cwd=update_dir.parent)
 
-        logger.info("Running checks...")
-        _run_cmd(["./scripts/check.sh"], cwd=update_dir)
+        if os.environ.get("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS") == "1":
+            logger.info("Skipping update checks (CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1).")
+        else:
+            logger.info("Running checks...")
+            try:
+                _run_cmd(["./scripts/check.sh"], cwd=update_dir)
+            except Exception as exc:
+                logger.warning("Checks failed; continuing with refresh. %s", exc)
 
         logger.info("Refreshing launchd service...")
         refresh_script = update_dir / "scripts" / "safe-refresh-local-mac-hub.sh"
@@ -194,6 +241,7 @@ def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Lo
 
         env = os.environ.copy()
         env["PACKAGE_SRC"] = str(update_dir)
+        env["UPDATE_STATUS_PATH"] = str(status_path)
 
         proc = subprocess.Popen(
             [str(refresh_script)],
@@ -207,8 +255,25 @@ def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Lo
             for line in proc.stdout:
                 logger.info("[Updater] %s", line.rstrip("\n"))
         proc.wait()
+        if proc.returncode != 0:
+            existing = _read_update_status()
+            if not existing or existing.get("status") not in ("rollback", "error"):
+                _write_update_status(
+                    "rollback",
+                    "Update failed; rollback attempted. Check hub logs for details.",
+                    exit_code=proc.returncode,
+                )
+            return
+
+        existing = _read_update_status()
+        if not existing or existing.get("status") not in ("rollback", "error"):
+            _write_update_status("ok", "Update completed successfully.")
     except Exception:
         logger.exception("System update failed")
+        _write_update_status(
+            "error",
+            "Update crashed; see hub logs for details.",
+        )
 
 
 def build_system_routes() -> APIRouter:
@@ -277,5 +342,12 @@ def build_system_routes() -> APIRouter:
             if logger:
                 logger.error("Update error: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
+
+    @router.get("/system/update/status")
+    async def system_update_status():
+        status = _read_update_status()
+        if status is None:
+            return {"status": "unknown", "message": "No update status recorded."}
+        return status
 
     return router

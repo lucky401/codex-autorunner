@@ -13,6 +13,8 @@ import {
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 
+const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
+
 function renderState(state) {
   if (!state) return;
   saveToCache("state", state);
@@ -279,6 +281,7 @@ export function initDashboard() {
   // Initial load
   loadUsage();
   loadVersion();
+  checkUpdateStatus();
   startStatePolling();
 
   // Register auto-refresh for usage data (every 60s, only when dashboard tab is active)
@@ -300,5 +303,20 @@ async function loadVersion() {
     versionEl.textContent = version ? `v${version}` : "v–";
   } catch (_err) {
     versionEl.textContent = "v–";
+  }
+}
+
+async function checkUpdateStatus() {
+  try {
+    const data = await api("/system/update/status", { method: "GET" });
+    if (!data || !data.status) return;
+    const stamp = data.at ? String(data.at) : "";
+    if (stamp && sessionStorage.getItem(UPDATE_STATUS_SEEN_KEY) === stamp) return;
+    if (data.status === "rollback" || data.status === "error") {
+      flash(data.message || "Update failed; rollback attempted.", "error");
+    }
+    if (stamp) sessionStorage.setItem(UPDATE_STATUS_SEEN_KEY, stamp);
+  } catch (_err) {
+    // ignore
   }
 }
