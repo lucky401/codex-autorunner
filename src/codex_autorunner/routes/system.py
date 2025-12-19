@@ -4,12 +4,13 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from ..config import HubConfig
 from ..git_utils import GitError, run_git
@@ -276,6 +277,43 @@ def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Lo
         )
 
 
+def _spawn_update_process(*, repo_url: str, update_dir: Path, logger: logging.Logger) -> None:
+    status_path = _update_status_path()
+    log_path = status_path.parent / "update-standalone.log"
+    _write_update_status(
+        "running",
+        "Update spawned.",
+        repo_url=repo_url,
+        update_dir=str(update_dir),
+        log_path=str(log_path),
+    )
+    cmd = [
+        sys.executable,
+        "-m",
+        "codex_autorunner.update_runner",
+        "--repo-url",
+        repo_url,
+        "--update-dir",
+        str(update_dir),
+        "--log-path",
+        str(log_path),
+    ]
+    try:
+        subprocess.Popen(
+            cmd,
+            cwd=str(update_dir.parent),
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        logger.exception("Failed to spawn update worker")
+        _write_update_status(
+            "error",
+            "Failed to spawn update worker; see hub logs for details.",
+        )
+
+
 def build_system_routes() -> APIRouter:
     router = APIRouter()
 
@@ -305,7 +343,7 @@ def build_system_routes() -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/system/update")
-    async def system_update(request: Request, background_tasks: BackgroundTasks):
+    async def system_update(request: Request):
         """
         Pull latest code and refresh the running service.
         This will restart the server if successful.
@@ -329,14 +367,11 @@ def build_system_routes() -> APIRouter:
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger is None:
                 logger = logging.getLogger("codex_autorunner.system_update")
-
-            background_tasks.add_task(
-                _system_update_worker,
-                repo_url=repo_url,
-                update_dir=update_dir,
-                logger=logger,
-            )
-            return {"status": "ok", "message": "Update started. Service will restart shortly."}
+            _spawn_update_process(repo_url=repo_url, update_dir=update_dir, logger=logger)
+            return {
+                "status": "ok",
+                "message": "Update started. Service will restart shortly.",
+            }
         except Exception as e:
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger:
