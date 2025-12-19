@@ -78,6 +78,7 @@ export async function initVoiceInput({
 }) {
   if (!button) return null;
   button.type = "button";
+  const replaceWithWaveform = button.dataset.voiceMode === "waveform";
 
   if (!supportsVoice()) {
     disableButton(button, statusEl, "Voice capture not supported");
@@ -119,6 +120,7 @@ export async function initVoiceInput({
     audioContext: null,
     analyser: null,
     levelMeter: null,
+    levelMeterStopHandler: null,
     animationFrame: null,
   };
 
@@ -253,6 +255,15 @@ export async function initVoiceInput({
       // Create and show level meter
       state.levelMeter = createLevelMeter();
       button.parentElement.insertBefore(state.levelMeter, button.nextSibling);
+      if (replaceWithWaveform) {
+        button.classList.add("hidden");
+        state.levelMeter.classList.add("voice-level-stop");
+        state.levelMeterStopHandler = (e) => {
+          e.preventDefault();
+          stopRecording();
+        };
+        state.levelMeter.addEventListener("click", state.levelMeterStopHandler);
+      }
 
       // Start animation loop
       const dataArray = new Uint8Array(state.analyser.frequencyBinCount);
@@ -392,22 +403,31 @@ export async function initVoiceInput({
   };
 }
 
-function cleanupRecorder(state) {
-  if (state.recorder) {
-    state.recorder.onstop = null;
-    state.recorder.ondataavailable = null;
-  }
-  state.recorder = null;
+  function cleanupRecorder(state) {
+    if (state.recorder) {
+      state.recorder.onstop = null;
+      state.recorder.ondataavailable = null;
+    }
+    state.recorder = null;
 
   // Clean up audio visualization
   if (state.animationFrame) {
     cancelAnimationFrame(state.animationFrame);
     state.animationFrame = null;
   }
-  if (state.levelMeter && state.levelMeter.parentElement) {
-    state.levelMeter.parentElement.removeChild(state.levelMeter);
-  }
-  state.levelMeter = null;
+    if (state.levelMeter) {
+      if (state.levelMeterStopHandler) {
+        state.levelMeter.removeEventListener("click", state.levelMeterStopHandler);
+        state.levelMeterStopHandler = null;
+      }
+      if (state.levelMeter.parentElement) {
+        state.levelMeter.parentElement.removeChild(state.levelMeter);
+      }
+    }
+    state.levelMeter = null;
+    if (replaceWithWaveform) {
+      button.classList.remove("hidden");
+    }
   if (state.audioContext) {
     state.audioContext.close().catch(() => {});
     state.audioContext = null;

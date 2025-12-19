@@ -1569,6 +1569,10 @@ button.icon-btn {
   flex-shrink: 0;
 }
 
+.voice-level-meter.voice-level-stop {
+  cursor: pointer;
+}
+
 .voice-level-bar {
   width: 3px;
   min-height: 3px;
@@ -2498,10 +2502,61 @@ label {
   font-size: 10px;
 }
 
-.terminal-text-input #terminal-text-send {
+.terminal-text-input-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.terminal-text-input-row textarea {
+  flex: 1 1 auto;
+  min-height: 56px;
+}
+
+.terminal-text-input-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   flex: 0 0 auto;
-  min-height: 28px;
-  padding: 4px 12px;
+}
+
+.terminal-text-input-buttons .voice-button,
+.terminal-text-send-icon {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 10px;
+}
+
+.terminal-text-input-buttons .voice-button svg {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  fill: none;
+}
+
+button.terminal-text-send-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #0b0f14;
+  background: var(--accent);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.terminal-text-input-buttons .voice-level-meter {
+  width: 34px;
+  height: 34px;
+  padding: 4px 2px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: rgba(108, 245, 216, 0.12);
+  cursor: pointer;
 }
 
 /* When the panel is open, shrink xterm height to keep controls visible (JS toggles the class). */
@@ -3048,14 +3103,14 @@ button.loading::after {
     position: fixed;
     left: 4px;
     right: 4px;
-    bottom: calc(env(safe-area-inset-bottom, 0px) + var(--vv-bottom, 0px));
+    bottom: calc(var(--mobile-bottom-nav) + var(--vv-bottom, 0px));
     margin: 0;
     z-index: 120;
   }
 
   html.mobile-compose-fixed #terminal.panel.active,
   html.mobile-compose-fixed #docs.panel.active {
-    padding-bottom: calc(90px + var(--vv-bottom, 0px));
+    padding-bottom: calc(86px + var(--mobile-bottom-nav) + var(--vv-bottom, 0px));
   }
   
   .tabs {
@@ -3288,9 +3343,17 @@ button.loading::after {
     font-size: 9px;
   }
   
-  .terminal-container {
-    height: calc(100vh - 220px);
-    height: calc(100dvh - 220px);
+  #terminal.panel.active {
+    display: flex;
+    flex-direction: column;
+    height: calc(100dvh - var(--mobile-top-pad) - var(--mobile-bottom-nav));
+    overflow: hidden;
+  }
+
+  #terminal .terminal-container {
+    height: auto;
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   #terminal .inline-toolbar {
@@ -3308,13 +3371,17 @@ button.loading::after {
   }
 
   #terminal.text-input-open .terminal-container {
-    height: max(120px, calc(100vh - 360px));
-    height: max(120px, calc(100dvh - 360px));
+    height: auto;
   }
 
   .terminal-text-input {
     padding: 6px;
     gap: 4px;
+  }
+
+  #terminal .terminal-mobile-controls,
+  #terminal .terminal-text-input {
+    flex: 0 0 auto;
   }
 
   .terminal-text-input textarea {
@@ -3323,13 +3390,48 @@ button.loading::after {
     resize: none;
   }
 
+  .terminal-text-input-row {
+    gap: 4px;
+  }
+
+  .terminal-text-input-buttons {
+    gap: 4px;
+  }
+
+  .terminal-text-input-buttons .voice-button,
+  .terminal-text-send-icon {
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
+    min-height: 30px;
+    border-radius: 8px;
+  }
+
+  .terminal-text-input-buttons .voice-button svg {
+    width: 12px;
+    height: 12px;
+    min-width: 12px;
+    min-height: 12px;
+  }
+
+  .terminal-text-input-buttons .voice-level-meter {
+    width: 30px;
+    height: 30px;
+    padding: 3px 2px;
+    border-radius: 8px;
+  }
+
   .terminal-text-input-actions {
     gap: 6px;
   }
 
-  .terminal-text-input #terminal-text-send {
-    min-height: 32px;
-    padding: 6px 12px;
+  html.mobile-compose-fixed #terminal .terminal-text-input {
+    position: sticky;
+    bottom: calc(var(--mobile-bottom-nav) + var(--vv-bottom, 0px));
+  }
+
+  html.mobile-compose-fixed #terminal.panel.active {
+    padding-bottom: calc(var(--mobile-bottom-nav) + var(--vv-bottom, 0px));
   }
 
   /* Mobile terminal control bar */
@@ -3832,6 +3934,45 @@ button.loading::after {
     top: 0;
     left: 2px;
   }
+  
+  /* ===== MOBILE TERMINAL TALL VIEW ===== */
+  .mobile-terminal-view {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bg);
+    z-index: 100; /* Below input (z-index 120) */
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 10px;
+    padding-bottom: calc(100px + env(safe-area-inset-bottom) + var(--vv-bottom, 0px));
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    line-height: 1.15;
+    letter-spacing: 0;
+    font-variant-ligatures: none;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text);
+    -webkit-overflow-scrolling: touch;
+  }
+  .mobile-terminal-view > div {
+    white-space: pre-wrap;
+    font-family: inherit;
+  }
+  .mobile-terminal-line {
+    margin: 0;
+    padding: 0;
+    line-height: inherit;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+  .mobile-terminal-view.hidden {
+    display: none;
+  }
 }
 
 /* Ultra-small screens */
@@ -4136,14 +4277,21 @@ button.loading::after {
     height: calc(100vh - 80px);
   }
   
-  .terminal-container {
-    height: calc(100vh - 140px);
-    height: calc(100dvh - 140px);
+  #terminal.panel.active {
+    display: flex;
+    flex-direction: column;
+    height: calc(100dvh - 120px);
+    overflow: hidden;
+  }
+
+  #terminal .terminal-container {
+    height: auto;
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   #terminal.text-input-open .terminal-container {
-    height: max(100px, calc(100vh - 240px));
-    height: max(100px, calc(100dvh - 240px));
+    height: auto;
   }
 
   .terminal-text-input {
@@ -4159,6 +4307,37 @@ button.loading::after {
     resize: none;
   }
 
+  .terminal-text-input-row {
+    gap: 4px;
+  }
+
+  .terminal-text-input-buttons {
+    gap: 4px;
+  }
+
+  .terminal-text-input-buttons .voice-button,
+  .terminal-text-send-icon {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    min-height: 28px;
+    border-radius: 8px;
+  }
+
+  .terminal-text-input-buttons .voice-button svg {
+    width: 11px;
+    height: 11px;
+    min-width: 11px;
+    min-height: 11px;
+  }
+
+  .terminal-text-input-buttons .voice-level-meter {
+    width: 28px;
+    height: 28px;
+    padding: 3px 2px;
+    border-radius: 8px;
+  }
+
   .terminal-text-input-actions {
     gap: 4px;
   }
@@ -4168,9 +4347,7 @@ button.loading::after {
   }
 
   .terminal-text-input #terminal-text-send {
-    min-height: 26px;
-    padding: 4px 10px;
-    font-size: 10px;
+    font-size: 14px;
   }
 
   /* Compact mobile controls in landscape - single row */

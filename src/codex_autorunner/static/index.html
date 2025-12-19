@@ -398,25 +398,34 @@
               <button class="tmb-key tmb-ctrl-combo" data-ctrl="c">^C</button>
               <button class="tmb-key tmb-ctrl-combo" data-ctrl="d">^D</button>
               <button class="tmb-key tmb-ctrl-combo" data-ctrl="z">^Z</button>
-              <button id="terminal-mobile-voice" class="tmb-key tmb-voice voice-button" title="Hold to talk"></button>
             </div>
           </div>
           <div id="terminal-text-input" class="terminal-text-input hidden" aria-hidden="true">
             <label class="terminal-text-input-title" for="terminal-textarea">Text input</label>
-            <textarea
-              id="terminal-textarea"
-              rows="2"
-              autocomplete="off"
-              autocapitalize="off"
-              spellcheck="false"
-              placeholder="Type or paste text to send to the terminal…"
-              aria-describedby="terminal-text-hint"
-            ></textarea>
-            <div class="terminal-text-input-actions">
-              <span id="terminal-text-hint" class="terminal-text-input-hint muted small">
-                Enter to send • Shift+Enter inserts a newline
-              </span>
-              <button id="terminal-text-send" class="primary" type="button">Send</button>
+            <div class="terminal-text-input-row">
+              <textarea
+                id="terminal-textarea"
+                rows="2"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                placeholder="Type or paste text to send to the terminal…"
+              ></textarea>
+              <div class="terminal-text-input-buttons">
+                <button
+                  id="terminal-text-voice"
+                  class="ghost sm voice-button terminal-text-voice"
+                  type="button"
+                  title="Hold to talk"
+                  data-voice-mode="waveform"
+                ></button>
+                <button
+                  id="terminal-text-send"
+                  class="primary terminal-text-send-icon"
+                  type="button"
+                  aria-label="Send"
+                >↑</button>
+              </div>
             </div>
           </div>
         </section>

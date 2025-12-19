@@ -4,6 +4,7 @@ import {
   setMobileComposeFixed,
 } from "./utils.js";
 import { subscribe } from "./bus.js";
+import { getTerminalManager } from "./terminal.js";
 
 const COMPOSE_INPUT_SELECTOR = "#doc-chat-input, #terminal-textarea";
 const SEND_BUTTON_SELECTOR = "#doc-chat-send, #terminal-text-send";
@@ -57,6 +58,10 @@ export function initMobileCompact() {
     if (!isMobileViewport()) return;
     setMobileChromeHidden(false);
     updateComposeFixed();
+    // Force a visual update
+    document.documentElement.style.display = 'none';
+    document.documentElement.offsetHeight; // trigger reflow
+    document.documentElement.style.display = '';
   };
 
   window.addEventListener("scroll", maybeHide, { passive: true });
@@ -72,7 +77,12 @@ export function initMobileCompact() {
       if (!(target instanceof HTMLElement)) return;
       if (!target.matches(COMPOSE_INPUT_SELECTOR)) return;
       updateComposeFixed();
-      setMobileChromeHidden(false);
+      setMobileChromeHidden(false); // Ensure chrome is shown (or hidden? logic seems to be "hide chrome when focused" in maybeHide?)
+      
+      // If we are focusing the terminal input, switch to mobile view
+      if (target.id === "terminal-textarea") {
+         getTerminalManager()?.enterMobileInputMode();
+      }
     },
     true
   );
@@ -87,7 +97,8 @@ export function initMobileCompact() {
       setTimeout(() => {
         if (isComposeFocused()) return;
         show();
-      }, 0);
+        getTerminalManager()?.exitMobileInputMode();
+      }, 50); // Slight increase to ensure reliable restore
     },
     true
   );
