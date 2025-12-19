@@ -184,7 +184,9 @@ async function handleSystemUpdate(btnId) {
     document.body.style.pointerEvents = "none";
     // Wait for restart (approx 5-10s) then reload
     setTimeout(() => {
-      window.location.reload();
+      const url = new URL(window.location.href);
+      url.searchParams.set("v", String(Date.now()));
+      window.location.replace(url.toString());
     }, 8000);
   } catch (err) {
     flash(err.message || "Update failed", "error");

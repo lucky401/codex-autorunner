@@ -37,8 +37,24 @@
         document.head.appendChild(baseTag);
       })();
     </script>
-    <link rel="stylesheet" href="static/styles.css" />
-    <link rel="stylesheet" href="static/vendor/xterm.css" />
+    <script>
+      (() => {
+        const params = new URLSearchParams(window.location.search);
+        const version = params.get("v");
+        const suffix = version ? `?v=${encodeURIComponent(version)}` : "";
+        window.__assetSuffix = suffix;
+
+        const addStylesheet = (href) => {
+          const link = document.createElement("link");
+          link.rel = "stylesheet";
+          link.href = `${href}${suffix}`;
+          document.head.appendChild(link);
+        };
+
+        addStylesheet("static/styles.css");
+        addStylesheet("static/vendor/xterm.css");
+      })();
+    </script>
   </head>
   <body>
     <div id="hub-shell" class="hub-shell hidden">
@@ -527,8 +543,27 @@
       </div>
     </div>
     
-    <script src="static/vendor/xterm.js"></script>
-    <script src="static/vendor/xterm-addon-fit.js"></script>
-    <script src="static/app.js" type="module"></script>
+    <script>
+      (() => {
+        const suffix = window.__assetSuffix || "";
+        const addScript = (src, { type } = {}) =>
+          new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = `${src}${suffix}`;
+            if (type) script.type = type;
+            script.async = false;
+            script.onload = resolve;
+            script.onerror = reject;
+            document.body.appendChild(script);
+          });
+
+        addScript("static/vendor/xterm.js")
+          .then(() => addScript("static/vendor/xterm-addon-fit.js"))
+          .then(() => addScript("static/app.js", { type: "module" }))
+          .catch((err) => {
+            console.error("Failed to load assets", err);
+          });
+      })();
+    </script>
   </body>
 </html>

@@ -1,4 +1,4 @@
-import { flash, buildWsUrl } from "./utils.js";
+import { flash, buildWsUrl, isMobileViewport } from "./utils.js";
 import { CONSTANTS } from "./constants.js";
 import { initVoiceInput } from "./voice.js";
 
@@ -934,11 +934,19 @@ export class TerminalManager {
     this.textInputTextareaEl.addEventListener("focus", () => {
       this._updateComposerSticky();
       this._updateViewportInsets();
+      if (this.isTouchDevice() && isMobileViewport()) {
+        this.enterMobileInputMode();
+      }
     });
 
     this.textInputTextareaEl.addEventListener("blur", () => {
       // Wait a tick so activeElement updates.
-      setTimeout(() => this._updateComposerSticky(), 0);
+      setTimeout(() => {
+        this._updateComposerSticky();
+        if (this.isTouchDevice() && isMobileViewport()) {
+          this.exitMobileInputMode();
+        }
+      }, 0);
     });
 
     this.textInputPending = this._loadPendingTextInput();
@@ -1324,6 +1332,7 @@ export class TerminalManager {
 
   exitMobileInputMode() {
     if (!this.mobileViewEl) return;
+    if (this.mobileViewEl.classList.contains("hidden")) return;
     this.mobileViewScrollTop = this.mobileViewEl.scrollTop;
     this.mobileViewEl.classList.add("hidden");
     this.mobileViewEl.innerHTML = "";
