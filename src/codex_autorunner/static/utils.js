@@ -158,6 +158,18 @@ export function createPoller(fn, intervalMs, { immediate = true } = {}) {
   };
 }
 
+export function isMobileViewport() {
+  try {
+    return Boolean(window.matchMedia && window.matchMedia("(max-width: 640px)").matches);
+  } catch (_err) {
+    return window.innerWidth <= 640;
+  }
+}
+
+export function setMobileChromeHidden(hidden) {
+  document.documentElement.classList.toggle("mobile-chrome-hidden", Boolean(hidden));
+}
+
 /**
  * Show a custom confirmation modal dialog.
  * Works consistently across desktop and mobile.

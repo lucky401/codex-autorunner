@@ -2790,6 +2790,10 @@ button.loading::after {
     --mobile-bottom-nav: calc(52px + env(safe-area-inset-bottom, 0px));
   }
 
+  html.mobile-chrome-hidden {
+    --mobile-bottom-nav: env(safe-area-inset-bottom, 0px);
+  }
+
   /* Safe area support for notches */
   .app-shell {
     padding: 4px;
@@ -3022,6 +3026,21 @@ button.loading::after {
     z-index: 100;
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
+    transition: transform 0.18s ease;
+  }
+
+  html.mobile-chrome-hidden .nav-bar {
+    transform: translateY(calc(100% + env(safe-area-inset-bottom, 0px)));
+  }
+
+  html.mobile-chrome-hidden #terminal .terminal-mobile-controls,
+  html.mobile-chrome-hidden #terminal .terminal-text-input-actions {
+    display: none;
+  }
+
+  html.mobile-chrome-hidden #docs .doc-chat-input-row button,
+  html.mobile-chrome-hidden #docs .doc-chat-meta {
+    display: none;
   }
   
   .tabs {
