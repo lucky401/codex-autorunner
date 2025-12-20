@@ -3,6 +3,7 @@ Base routes: Index, state streaming, WebSocket terminal, and logs.
 """
 
 import asyncio
+import logging
 import json
 import uuid
 from pathlib import Path
@@ -14,6 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from ..pty_session import ActiveSession, PTYSession
 from ..state import load_state
 from ..static_assets import index_response_headers, render_index_html
+from ..logging_utils import safe_log
 from .shared import build_codex_terminal_cmd, log_stream, state_stream
 
 
@@ -91,6 +93,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
     async def terminal(ws: WebSocket):
         await ws.accept()
         app = ws.scope.get("app")
+        logger = app.state.logger
         engine = app.state.engine
         terminal_sessions: dict[str, ActiveSession] = app.state.terminal_sessions
         terminal_lock: asyncio.Lock = app.state.terminal_lock
@@ -179,7 +182,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         break
                     await ws.send_bytes(data)
             except Exception:
-                pass
+                safe_log(logger, logging.WARNING, "Terminal PTY to WS bridge failed")
 
         async def ws_to_pty():
             try:
@@ -250,7 +253,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             except WebSocketDisconnect:
                 pass
             except Exception:
-                pass
+                safe_log(logger, logging.WARNING, "Terminal WS to PTY bridge failed")
 
         forward_task = asyncio.create_task(pty_to_ws())
         input_task = asyncio.create_task(ws_to_pty())
@@ -261,7 +264,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             try:
                 task.result()
             except Exception:
-                pass
+                safe_log(logger, logging.WARNING, "Terminal websocket task failed")
 
         if active_session:
             active_session.remove_subscriber(queue)
@@ -274,6 +277,6 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         try:
             await ws.close()
         except Exception:
-            pass
+            safe_log(logger, logging.WARNING, "Terminal websocket close failed")
 
     return router

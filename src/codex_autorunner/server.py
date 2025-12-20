@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import threading
 from importlib import resources
@@ -25,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import ConfigError, HubConfig, _normalize_base_path, load_config
 from .engine import Engine, LockError, doctor
-from .logging_utils import setup_rotating_logger
+from .logging_utils import safe_log, setup_rotating_logger
 from .doc_chat import DocChatService
 from .hub import HubSupervisor
 from .state import load_state, save_state, RunnerState, now_iso
@@ -242,13 +243,22 @@ def create_app(
     app.state.logger = setup_rotating_logger(
         f"repo[{engine.repo_root}]", engine.config.server_log
     )
-    app.state.logger.info("Repo server ready at %s", engine.repo_root)
+    safe_log(
+        app.state.logger,
+        logging.INFO,
+        f"Repo server ready at {engine.repo_root}",
+    )
     voice_service: Optional[VoiceService]
     try:
         voice_service = VoiceService(voice_config, logger=app.state.logger)
     except Exception as exc:
         voice_service = None
-        app.state.logger.warning("Voice service unavailable: %s", exc, exc_info=False)
+        safe_log(
+            app.state.logger,
+            logging.WARNING,
+            "Voice service unavailable",
+            exc,
+        )
     # Store shared state for routers/handlers.
     app.state.engine = engine
     app.state.config = engine.config  # Expose config consistently
@@ -283,8 +293,13 @@ def create_app(
                                 to_remove.append(sid)
                         for sid in to_remove:
                             app.state.terminal_sessions.pop(sid, None)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "Terminal cleanup task failed",
+                        exc,
+                    )
 
         asyncio.create_task(_cleanup_loop())
 
@@ -318,10 +333,11 @@ def create_hub_app(
     # Hub server/system logs (separate from any repo agent logs).
     app.state.logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)
     app.state.config = config  # Expose config for route modules
-    try:
-        app.state.logger.info("Hub app ready at %s", config.root)
-    except Exception:
-        pass
+    safe_log(
+        app.state.logger,
+        logging.INFO,
+        f"Hub app ready at {config.root}",
+    )
     static_dir = _static_dir()
     app.state.asset_version = asset_version(static_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -411,10 +427,7 @@ def create_hub_app(
 
     @app.get("/hub/repos")
     async def list_repos():
-        try:
-            app.state.logger.info("Hub list_repos")
-        except Exception:
-            pass
+        safe_log(app.state.logger, logging.INFO, "Hub list_repos")
         snapshots = supervisor.list_repos()
         _refresh_mounts(snapshots)
         return {
@@ -428,10 +441,7 @@ def create_hub_app(
 
     @app.post("/hub/repos/scan")
     async def scan_repos():
-        try:
-            app.state.logger.info("Hub scan_repos")
-        except Exception:
-            pass
+        safe_log(app.state.logger, logging.INFO, "Hub scan_repos")
         snapshots = supervisor.scan()
         _refresh_mounts(snapshots)
         return {
@@ -452,16 +462,12 @@ def create_hub_app(
         repo_path = Path(repo_path_val) if repo_path_val else None
         git_init = bool(payload.get("git_init", True))
         force = bool(payload.get("force", False))
-        try:
-            app.state.logger.info(
-                "Hub create repo id=%s path=%s git_init=%s force=%s",
-                repo_id,
-                repo_path_val,
-                git_init,
-                force,
-            )
-        except Exception:
-            pass
+        safe_log(
+            app.state.logger,
+            logging.INFO,
+            "Hub create repo id=%s path=%s git_init=%s force=%s"
+            % (repo_id, repo_path_val, git_init, force),
+        )
         try:
             snapshot = supervisor.create_repo(
                 str(repo_id), repo_path=repo_path, git_init=git_init, force=force
@@ -484,15 +490,12 @@ def create_hub_app(
             raise HTTPException(
                 status_code=400, detail="Missing base_repo_id or branch"
             )
-        try:
-            app.state.logger.info(
-                "Hub create worktree base=%s branch=%s force=%s",
-                base_repo_id,
-                branch,
-                force,
-            )
-        except Exception:
-            pass
+        safe_log(
+            app.state.logger,
+            logging.INFO,
+            "Hub create worktree base=%s branch=%s force=%s"
+            % (base_repo_id, branch, force),
+        )
         try:
             snapshot = supervisor.create_worktree(
                 base_repo_id=str(base_repo_id), branch=str(branch), force=force
@@ -515,15 +518,12 @@ def create_hub_app(
             raise HTTPException(status_code=400, detail="Missing worktree_repo_id")
         delete_branch = bool(payload.get("delete_branch", False))
         delete_remote = bool(payload.get("delete_remote", False))
-        try:
-            app.state.logger.info(
-                "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s",
-                worktree_repo_id,
-                delete_branch,
-                delete_remote,
-            )
-        except Exception:
-            pass
+        safe_log(
+            app.state.logger,
+            logging.INFO,
+            "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s"
+            % (worktree_repo_id, delete_branch, delete_remote),
+        )
         try:
             supervisor.cleanup_worktree(
                 worktree_repo_id=str(worktree_repo_id),
@@ -539,10 +539,11 @@ def create_hub_app(
         once = False
         if payload and isinstance(payload, dict):
             once = bool(payload.get("once", False))
-        try:
-            app.state.logger.info("Hub run %s once=%s", repo_id, once)
-        except Exception:
-            pass
+        safe_log(
+            app.state.logger,
+            logging.INFO,
+            "Hub run %s once=%s" % (repo_id, once),
+        )
         try:
             snapshot = supervisor.run_repo(repo_id, once=once)
         except LockError as exc:
@@ -554,10 +555,7 @@ def create_hub_app(
 
     @app.post("/hub/repos/{repo_id}/stop")
     async def stop_repo(repo_id: str):
-        try:
-            app.state.logger.info("Hub stop %s", repo_id)
-        except Exception:
-            pass
+        safe_log(app.state.logger, logging.INFO, f"Hub stop {repo_id}")
         try:
             snapshot = supervisor.stop_repo(repo_id)
         except Exception as exc:
@@ -569,10 +567,11 @@ def create_hub_app(
         once = False
         if payload and isinstance(payload, dict):
             once = bool(payload.get("once", False))
-        try:
-            app.state.logger.info("Hub resume %s once=%s", repo_id, once)
-        except Exception:
-            pass
+        safe_log(
+            app.state.logger,
+            logging.INFO,
+            "Hub resume %s once=%s" % (repo_id, once),
+        )
         try:
             snapshot = supervisor.resume_repo(repo_id, once=once)
         except LockError as exc:
@@ -584,10 +583,7 @@ def create_hub_app(
 
     @app.post("/hub/repos/{repo_id}/kill")
     async def kill_repo(repo_id: str):
-        try:
-            app.state.logger.info("Hub kill %s", repo_id)
-        except Exception:
-            pass
+        safe_log(app.state.logger, logging.INFO, f"Hub kill {repo_id}")
         try:
             snapshot = supervisor.kill_repo(repo_id)
         except Exception as exc:
@@ -596,10 +592,7 @@ def create_hub_app(
 
     @app.post("/hub/repos/{repo_id}/init")
     async def init_repo(repo_id: str):
-        try:
-            app.state.logger.info("Hub init %s", repo_id)
-        except Exception:
-            pass
+        safe_log(app.state.logger, logging.INFO, f"Hub init {repo_id}")
         try:
             snapshot = supervisor.init_repo(repo_id)
         except Exception as exc:

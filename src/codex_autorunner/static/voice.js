@@ -78,7 +78,7 @@ export async function initVoiceInput({
 }) {
   if (!button) return null;
   button.type = "button";
-  const replaceWithWaveform = button.dataset.voiceMode === "waveform";
+  const replaceWithWaveform = button.dataset?.voiceMode === "waveform";
 
   if (!supportsVoice()) {
     disableButton(button, statusEl, "Voice capture not supported");
@@ -386,6 +386,41 @@ export async function initVoiceInput({
     return payload.text || "";
   }
 
+  function cleanupRecorder(state) {
+    if (state.recorder) {
+      state.recorder.onstop = null;
+      state.recorder.ondataavailable = null;
+    }
+    state.recorder = null;
+
+    // Clean up audio visualization
+    if (state.animationFrame) {
+      cancelAnimationFrame(state.animationFrame);
+      state.animationFrame = null;
+    }
+    if (state.levelMeter) {
+      if (state.levelMeterStopHandler) {
+        state.levelMeter.removeEventListener(
+          "click",
+          state.levelMeterStopHandler
+        );
+        state.levelMeterStopHandler = null;
+      }
+      if (state.levelMeter.parentElement) {
+        state.levelMeter.parentElement.removeChild(state.levelMeter);
+      }
+    }
+    state.levelMeter = null;
+    if (replaceWithWaveform) {
+      button.classList.remove("hidden");
+    }
+    if (state.audioContext) {
+      state.audioContext.close().catch(() => {});
+      state.audioContext = null;
+    }
+    state.analyser = null;
+  }
+
   function getExtensionForMime(mime) {
     if (!mime) return "webm";
     if (mime.includes("ogg")) return "ogg";
@@ -401,38 +436,6 @@ export async function initVoiceInput({
     isRecording: () => state.recording,
     hasPending: () => Boolean(state.pendingBlob),
   };
-}
-
-  function cleanupRecorder(state) {
-    if (state.recorder) {
-      state.recorder.onstop = null;
-      state.recorder.ondataavailable = null;
-    }
-    state.recorder = null;
-
-  // Clean up audio visualization
-  if (state.animationFrame) {
-    cancelAnimationFrame(state.animationFrame);
-    state.animationFrame = null;
-  }
-    if (state.levelMeter) {
-      if (state.levelMeterStopHandler) {
-        state.levelMeter.removeEventListener("click", state.levelMeterStopHandler);
-        state.levelMeterStopHandler = null;
-      }
-      if (state.levelMeter.parentElement) {
-        state.levelMeter.parentElement.removeChild(state.levelMeter);
-      }
-    }
-    state.levelMeter = null;
-    if (replaceWithWaveform) {
-      button.classList.remove("hidden");
-    }
-  if (state.audioContext) {
-    state.audioContext.close().catch(() => {});
-    state.audioContext = null;
-  }
-  state.analyser = null;
 }
 
 function cleanupStream(state) {

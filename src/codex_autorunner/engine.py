@@ -11,16 +11,16 @@ import signal
 import traceback
 
 from .about_car import ensure_about_car_file
+from .codex_runner import run_codex_streaming
 from .config import Config, ConfigError, load_config
 from .docs import DocsManager
+from .lock_utils import process_alive, read_lock_info, write_lock_info
 from .prompt import build_final_summary_prompt, build_prompt
 from .state import RunnerState, load_state, now_iso, save_state
 from .utils import (
     atomic_write,
     ensure_executable,
     find_repo_root,
-    resolve_executable,
-    subprocess_env,
 )
 
 
@@ -58,17 +58,16 @@ class Engine:
 
     def acquire_lock(self, force: bool = False) -> None:
         if self.lock_path.exists():
-            pid_text = self.lock_path.read_text(encoding="utf-8").strip()
-            pid = int(pid_text) if pid_text.isdigit() else None
-            if pid and _process_alive(pid):
+            info = read_lock_info(self.lock_path)
+            pid = info.pid
+            if pid and process_alive(pid):
                 if not force:
                     raise LockError(
                         f"Another autorunner is active (pid={pid}); use --force to override"
                     )
             else:
                 self.lock_path.unlink(missing_ok=True)
-        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self.lock_path.write_text(str(os.getpid()), encoding="utf-8")
+        write_lock_info(self.lock_path, os.getpid(), started_at=now_iso())
 
     def release_lock(self) -> None:
         if self.lock_path.exists():
@@ -78,9 +77,9 @@ class Engine:
         """Force-kill the process holding the lock, if any. Returns pid if killed."""
         if not self.lock_path.exists():
             return None
-        pid_text = self.lock_path.read_text(encoding="utf-8").strip()
-        pid = int(pid_text) if pid_text.isdigit() else None
-        if pid and _process_alive(pid):
+        info = read_lock_info(self.lock_path)
+        pid = info.pid
+        if pid and process_alive(pid):
             try:
                 os.kill(pid, signal.SIGTERM)
                 return pid
@@ -135,13 +134,19 @@ class Engine:
         """
         self._update_state("running", run_id, None, started=True)
         self._ensure_log_path()
+        self._ensure_run_log_dir()
         self._maybe_rotate_log()
+        run_log = self._run_log_path(run_id)
         with self.log_path.open("a", encoding="utf-8") as f:
+            f.write(f"=== run {run_id} start ===\n")
+        with run_log.open("a", encoding="utf-8") as f:
             f.write(f"=== run {run_id} start ===\n")
 
         exit_code = self.run_codex_cli(prompt, run_id)
 
         with self.log_path.open("a", encoding="utf-8") as f:
+            f.write(f"=== run {run_id} end (code {exit_code}) ===\n")
+        with run_log.open("a", encoding="utf-8") as f:
             f.write(f"=== run {run_id} end (code {exit_code}) ===\n")
 
         self._update_state(
@@ -171,7 +176,24 @@ class Engine:
         return exit_code
 
     def extract_prev_output(self, run_id: int) -> Optional[str]:
-        if not self.log_path.exists() or run_id <= 0:
+        if run_id <= 0:
+            return None
+        run_log = self._run_log_path(run_id)
+        if run_log.exists():
+            try:
+                text = run_log.read_text(encoding="utf-8")
+            except Exception:
+                text = ""
+            if text:
+                lines = [
+                    line
+                    for line in text.splitlines()
+                    if not line.startswith("=== run ")
+                ]
+                text = _strip_log_prefixes("\n".join(lines))
+                max_chars = self.config.prompt_prev_run_max_chars
+                return text[-max_chars:] if text else None
+        if not self.log_path.exists():
             return None
         start = f"=== run {run_id} start ==="
         end = f"=== run {run_id} end"
@@ -198,6 +220,12 @@ class Engine:
 
     def read_run_block(self, run_id: int) -> Optional[str]:
         """Return a single run block from the log."""
+        run_log = self._run_log_path(run_id)
+        if run_log.exists():
+            try:
+                return run_log.read_text(encoding="utf-8")
+            except Exception:
+                return None
         if not self.log_path.exists():
             return None
         start = f"=== run {run_id} start"
@@ -251,13 +279,23 @@ class Engine:
 
     def log_line(self, run_id: int, message: str) -> None:
         self._ensure_log_path()
+        self._ensure_run_log_dir()
         self._maybe_rotate_log()
         line = f"[{timestamp()}] run={run_id} {message}\n"
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(line)
+        run_log = self._run_log_path(run_id)
+        with run_log.open("a", encoding="utf-8") as f:
+            f.write(line)
 
     def _ensure_log_path(self) -> None:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _run_log_path(self, run_id: int) -> Path:
+        return self.log_path.parent / "runs" / f"run-{run_id}.log"
+
+    def _ensure_run_log_dir(self) -> None:
+        (self.log_path.parent / "runs").mkdir(parents=True, exist_ok=True)
 
     def _rotated_log_path(self, index: int) -> Path:
         return self.log_path.with_name(f"{self.log_path.name}.{index}")
@@ -284,31 +322,15 @@ class Engine:
         self.log_path.write_text("", encoding="utf-8")
 
     def run_codex_cli(self, prompt: str, run_id: int) -> int:
-        resolved = resolve_executable(self.config.codex_binary)
-        if not resolved:
-            raise ConfigError(f"Codex binary not found: {self.config.codex_binary}")
-        cmd = [resolved] + self.config.codex_args + [prompt]
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(self.repo_root),
-                env=subprocess_env(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-        except FileNotFoundError:
-            raise ConfigError(f"Codex binary not found: {resolved}")
+        def _log_stdout(line: str) -> None:
+            self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
 
-        if proc.stdout:
-            for line in proc.stdout:
-                self.log_line(
-                    run_id, f"stdout: {line.rstrip()}" if line else "stdout: "
-                )
-
-        proc.wait()
-        return proc.returncode
+        return run_codex_streaming(
+            self.config,
+            self.repo_root,
+            prompt,
+            on_stdout_line=_log_stdout,
+        )
 
     def maybe_git_commit(self, run_id: int) -> None:
         msg = self.config.git_commit_message_template.replace(
@@ -444,19 +466,11 @@ class Engine:
         save_state(self.state_path, new_state)
 
 
-def _process_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
-
-
 def clear_stale_lock(lock_path: Path) -> None:
     if lock_path.exists():
-        pid_text = lock_path.read_text(encoding="utf-8").strip()
-        pid = int(pid_text) if pid_text.isdigit() else None
-        if not pid or not _process_alive(pid):
+        info = read_lock_info(lock_path)
+        pid = info.pid
+        if not pid or not process_alive(pid):
             lock_path.unlink(missing_ok=True)
 
 

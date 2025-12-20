@@ -10,6 +10,7 @@ from .bootstrap import seed_repo_files
 from .config import HubConfig, load_config
 from .discovery import DiscoveryRecord, discover_and_init
 from .engine import Engine, LockError, clear_stale_lock
+from .lock_utils import process_alive, read_lock_info
 from .manifest import Manifest, ManifestRepo, load_manifest, save_manifest
 from .state import RunnerState, load_state, now_iso
 from .utils import atomic_write
@@ -92,22 +93,12 @@ class HubState:
         }
 
 
-def _process_alive(pid: int) -> bool:
-    try:
-        import os
-
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
-
-
 def read_lock_status(lock_path: Path) -> LockStatus:
     if not lock_path.exists():
         return LockStatus.UNLOCKED
-    pid_text = lock_path.read_text(encoding="utf-8").strip()
-    pid = int(pid_text) if pid_text.isdigit() else None
-    if pid and _process_alive(pid):
+    info = read_lock_info(lock_path)
+    pid = info.pid
+    if pid and process_alive(pid):
         return LockStatus.LOCKED_ALIVE
     return LockStatus.LOCKED_STALE
 

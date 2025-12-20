@@ -2,7 +2,7 @@ import collections
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import OrderedDict
+from typing import Optional, OrderedDict
 
 from .config import LogConfig
 
@@ -52,3 +52,15 @@ def setup_rotating_logger(name: str, log_config: LogConfig) -> logging.Logger:
         except Exception:
             pass
     return logger
+
+
+def safe_log(
+    logger: logging.Logger, level: int, message: str, exc: Optional[Exception] = None
+) -> None:
+    try:
+        if exc is not None:
+            logger.log(level, f"{message}: {exc}")
+        else:
+            logger.log(level, message)
+    except Exception:
+        pass

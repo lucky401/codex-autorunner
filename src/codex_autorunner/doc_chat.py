@@ -9,9 +9,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, Dict, List, Optional, Tuple
 
-from asyncio.subprocess import PIPE, STDOUT
-
-from .engine import Engine, _process_alive, timestamp
+from .codex_runner import (
+    CodexTimeoutError,
+    build_codex_command,
+    resolve_codex_binary,
+    run_codex_capture_async,
+)
+from .config import ConfigError
+from .engine import Engine, timestamp
+from .lock_utils import process_alive, read_lock_info
 from .state import load_state
 from .utils import atomic_write
 from .prompts import DOC_CHAT_PROMPT_TEMPLATE
@@ -88,10 +94,11 @@ class DocChatService:
     def repo_blocked_reason(self) -> Optional[str]:
         lock_path = self.engine.lock_path
         if lock_path.exists():
-            pid_text = lock_path.read_text(encoding="utf-8").strip()
-            pid = int(pid_text) if pid_text.isdigit() else None
-            if pid and _process_alive(pid):
-                return f"Autorunner is running (pid={pid}); try again later."
+            info = read_lock_info(lock_path)
+            pid = info.pid
+            if pid and process_alive(pid):
+                host = f" on {info.host}" if info.host else ""
+                return f"Autorunner is running (pid={pid}{host}); try again later."
             return "Autorunner lock present; clear or resume before using doc chat."
 
         state = load_state(self.engine.state_path)
@@ -177,32 +184,31 @@ class DocChatService:
         )
 
     async def _run_codex_cli(self, prompt: str, chat_id: str) -> str:
-        cmd = [self.engine.config.codex_binary, *self.engine.config.codex_args, prompt]
-        self._log(chat_id, f"cmd={' '.join(cmd[:-1])} prompt_chars={len(prompt)}")
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=str(self.engine.repo_root),
-                stdout=PIPE,
-                stderr=STDOUT,
+            resolved = resolve_codex_binary(self.engine.config)
+            cmd = build_codex_command(
+                self.engine.config, prompt, resolved_binary=resolved
             )
-        except FileNotFoundError:
-            raise DocChatError(
-                f"Codex binary not found: {self.engine.config.codex_binary}"
-            )
+        except ConfigError as exc:
+            raise DocChatError(str(exc))
+
+        self._log(chat_id, f"cmd={' '.join(cmd[:-1])} prompt_chars={len(prompt)}")
 
         try:
-            stdout, _ = await asyncio.wait_for(
-                proc.communicate(), timeout=DOC_CHAT_TIMEOUT_SECONDS
+            exit_code, output = await run_codex_capture_async(
+                self.engine.config,
+                self.engine.repo_root,
+                prompt,
+                timeout_seconds=DOC_CHAT_TIMEOUT_SECONDS,
+                cmd=cmd,
             )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+        except CodexTimeoutError:
             self._log(chat_id, "timed out waiting for codex process")
             raise DocChatError("Doc chat agent timed out")
+        except ConfigError as exc:
+            raise DocChatError(str(exc))
 
-        exit_code = proc.returncode
-        output = (stdout.decode("utf-8", errors="ignore") if stdout else "").strip()
+        output = (output or "").strip()
         for line in output.splitlines():
             self._log(chat_id, f"stdout: {line}")
         self._log(chat_id, f"exit_code={exit_code}")
