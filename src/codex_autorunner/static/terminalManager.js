@@ -1067,11 +1067,22 @@ export class TerminalManager {
       console.log("TerminalManager: sending text input");
       this._sendFromTextarea();
     };
+    this.textInputSendBtn.addEventListener("pointerup", (e) => {
+      if (e.pointerType !== "touch") return;
+      if (e.cancelable) e.preventDefault();
+      this.suppressNextSendClick = true;
+      triggerSend();
+    });
     this.textInputSendBtn.addEventListener("touchend", (e) => {
-      e.preventDefault();
+      if (e.cancelable) e.preventDefault();
+      this.suppressNextSendClick = true;
       triggerSend();
     });
     this.textInputSendBtn.addEventListener("click", () => {
+      if (this.suppressNextSendClick) {
+        this.suppressNextSendClick = false;
+        return;
+      }
       triggerSend();
     });
 
