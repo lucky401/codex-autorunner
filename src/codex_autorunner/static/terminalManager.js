@@ -108,6 +108,12 @@ export class TerminalManager {
     this.deferScrollRestore = false;
     this.savedViewportY = null;
     this.savedAtBottom = null;
+    this.mobileViewEl = null;
+    this.mobileViewActive = false;
+    this.mobileViewScrollTop = null;
+    this.mobileViewAtBottom = true;
+    this.mobileViewRaf = null;
+    this.mobileViewDirty = false;
 
     // Bind methods that are used as callbacks
     this._handleResize = this._handleResize.bind(this);
@@ -192,6 +198,9 @@ export class TerminalManager {
     }
     const atBottom = buffer.viewportY >= buffer.baseY;
     this.jumpBottomBtn.classList.toggle("hidden", atBottom);
+    if (this.mobileViewActive) {
+      this.mobileViewAtBottom = atBottom;
+    }
   }
 
   _captureTerminalScrollState() {
@@ -298,6 +307,89 @@ export class TerminalManager {
     );
   }
 
+  _initMobileView() {
+    if (this.mobileViewEl) return;
+    const existing = document.getElementById("mobile-terminal-view");
+    if (existing) {
+      this.mobileViewEl = existing;
+    } else {
+      this.mobileViewEl = document.createElement("div");
+      this.mobileViewEl.id = "mobile-terminal-view";
+      this.mobileViewEl.className = "mobile-terminal-view hidden";
+      document.body.appendChild(this.mobileViewEl);
+    }
+
+    this.mobileViewEl.addEventListener("scroll", () => {
+      if (!this.mobileViewEl) return;
+      this.mobileViewScrollTop = this.mobileViewEl.scrollTop;
+      const threshold = 4;
+      this.mobileViewAtBottom =
+        this.mobileViewEl.scrollTop + this.mobileViewEl.clientHeight >=
+        this.mobileViewEl.scrollHeight - threshold;
+    });
+  }
+
+  _setMobileViewActive(active) {
+    if (!this.isTouchDevice() || !isMobileViewport()) return;
+    this._initMobileView();
+    if (!this.mobileViewEl) return;
+    this.mobileViewActive = Boolean(active);
+    if (!this.mobileViewActive) {
+      this.mobileViewEl.classList.add("hidden");
+      return;
+    }
+    const buffer = this.term?.buffer?.active;
+    if (buffer) {
+      const atBottom = buffer.viewportY >= buffer.baseY;
+      this.mobileViewAtBottom = atBottom;
+    }
+    this._renderMobileView();
+    this.mobileViewEl.classList.remove("hidden");
+  }
+
+  _scheduleMobileViewRender() {
+    if (!this.mobileViewActive) return;
+    this.mobileViewDirty = true;
+    if (this.mobileViewRaf) return;
+    this.mobileViewRaf = requestAnimationFrame(() => {
+      this.mobileViewRaf = null;
+      if (!this.mobileViewDirty) return;
+      this.mobileViewDirty = false;
+      this._renderMobileView();
+    });
+  }
+
+  _renderMobileView() {
+    if (!this.mobileViewActive || !this.mobileViewEl || !this.term) return;
+    const buffer = this.term.buffer?.active;
+    if (!buffer) return;
+    if (!this.mobileViewEl.classList.contains("hidden")) {
+      const threshold = 4;
+      this.mobileViewAtBottom =
+        this.mobileViewEl.scrollTop + this.mobileViewEl.clientHeight >=
+        this.mobileViewEl.scrollHeight - threshold;
+    }
+    const rows = this.term.rows || buffer.length || 0;
+    const totalLines = Math.max(0, buffer.baseY + rows - 1);
+    const maxLines = 800;
+    const start = Math.max(0, totalLines - maxLines);
+    let content = "";
+    for (let i = start; i <= totalLines; i++) {
+      const line = buffer.getLine(i);
+      if (line) {
+        content += line.translateToString(true) + "\n";
+      }
+    }
+    this.mobileViewEl.textContent = content;
+    if (this.mobileViewAtBottom) {
+      this.mobileViewEl.scrollTop = this.mobileViewEl.scrollHeight;
+    } else if (this.mobileViewScrollTop !== null) {
+      const maxScroll =
+        this.mobileViewEl.scrollHeight - this.mobileViewEl.clientHeight;
+      this.mobileViewEl.scrollTop = Math.min(this.mobileViewScrollTop, maxScroll);
+    }
+  }
+
   /**
    * Ensure xterm terminal is initialized
    */
@@ -329,6 +421,7 @@ export class TerminalManager {
     this.term.open(container);
     this.term.write('Press "New" or "Resume" to launch Codex TUI...\r\n');
     this.term.onScroll(() => this._updateJumpBottomVisibility());
+    this.term.onRender(() => this._scheduleMobileViewRender());
     this._updateJumpBottomVisibility();
     this._initTouchTerminalScroll(container);
 
@@ -1191,6 +1284,15 @@ export class TerminalManager {
       this.deferScrollRestore = true;
       if (this.isTouchDevice() && isMobileViewport()) {
         this._scheduleResizeAfterLayout();
+        this._setMobileViewActive(true);
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+          const savedSessionId = localStorage.getItem("codex_terminal_session_id");
+          if (savedSessionId) {
+            this.connect({ mode: "attach", quiet: true });
+          } else {
+            this.connect({ mode: "new", quiet: true });
+          }
+        }
       }
     });
 
@@ -1205,6 +1307,7 @@ export class TerminalManager {
         this.deferScrollRestore = true;
         if (this.isTouchDevice() && isMobileViewport()) {
           this._scheduleResizeAfterLayout();
+          this._setMobileViewActive(false);
         }
       }, 0);
     });
