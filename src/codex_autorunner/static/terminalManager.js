@@ -105,6 +105,9 @@ export class TerminalManager {
     this.suppressNextSendClick = false;
     this.lastSendTapAt = 0;
     this.textInputWasFocused = false;
+    this.deferScrollRestore = false;
+    this.savedViewportY = null;
+    this.savedAtBottom = null;
 
     // Bind methods that are used as callbacks
     this._handleResize = this._handleResize.bind(this);
@@ -189,6 +192,42 @@ export class TerminalManager {
     }
     const atBottom = buffer.viewportY >= buffer.baseY;
     this.jumpBottomBtn.classList.toggle("hidden", atBottom);
+  }
+
+  _captureTerminalScrollState() {
+    if (!this.term) return;
+    const buffer = this.term.buffer?.active;
+    if (!buffer) return;
+    this.savedViewportY = buffer.viewportY;
+    this.savedAtBottom = buffer.viewportY >= buffer.baseY;
+  }
+
+  _restoreTerminalScrollState() {
+    if (!this.term) return;
+    const buffer = this.term.buffer?.active;
+    if (!buffer) return;
+    if (this.savedAtBottom) {
+      this.term.scrollToBottom();
+    } else if (Number.isInteger(this.savedViewportY)) {
+      const delta = this.savedViewportY - buffer.viewportY;
+      if (delta !== 0) {
+        this.term.scrollLines(delta);
+      }
+    }
+    this._updateJumpBottomVisibility();
+    this.savedViewportY = null;
+    this.savedAtBottom = null;
+  }
+
+  _scrollToBottomIfNearBottom() {
+    if (!this.term) return;
+    const buffer = this.term.buffer?.active;
+    if (!buffer) return;
+    const atBottom = buffer.viewportY >= buffer.baseY - 1;
+    if (atBottom) {
+      this.term.scrollToBottom();
+      this._updateJumpBottomVisibility();
+    }
   }
 
   _initTouchTerminalScroll(container) {
@@ -404,6 +443,10 @@ export class TerminalManager {
         this.resizeRaf = null;
         this._updateViewportInsets();
         this._handleResize();
+        if (this.deferScrollRestore) {
+          this.deferScrollRestore = false;
+          this._restoreTerminalScrollState();
+        }
       });
     });
   }
@@ -918,6 +961,8 @@ export class TerminalManager {
     this._updateComposerSticky();
 
     // The panel changes the terminal container height via CSS; refit xterm
+    this._captureTerminalScrollState();
+    this.deferScrollRestore = true;
     this._scheduleResizeAfterLayout();
 
     if (this.textInputEnabled && shouldFocusTextarea) {
@@ -949,6 +994,7 @@ export class TerminalManager {
     this._persistTextInputDraft();
     const ok = this._sendTextWithAck(text, { appendNewline: true });
     if (!ok) return;
+    this._scrollToBottomIfNearBottom();
 
     if (this.isTouchDevice()) {
       requestAnimationFrame(() => {
@@ -1141,6 +1187,8 @@ export class TerminalManager {
       this.textInputWasFocused = true;
       this._updateComposerSticky();
       this._updateViewportInsets();
+      this._captureTerminalScrollState();
+      this.deferScrollRestore = true;
       if (this.isTouchDevice() && isMobileViewport()) {
         this._scheduleResizeAfterLayout();
       }
@@ -1153,6 +1201,8 @@ export class TerminalManager {
           this.textInputWasFocused = false;
         }
         this._updateComposerSticky();
+        this._captureTerminalScrollState();
+        this.deferScrollRestore = true;
         if (this.isTouchDevice() && isMobileViewport()) {
           this._scheduleResizeAfterLayout();
         }
