@@ -19,6 +19,8 @@ from ..static_assets import index_response_headers, render_index_html
 from ..logging_utils import safe_log
 from .shared import build_codex_terminal_cmd, log_stream, state_stream
 
+ALT_SCREEN_ENTER = b"\x1b[?1049h"
+
 
 def build_base_routes(static_dir: Path) -> APIRouter:
     """Build routes for index, state, logs, and terminal WebSocket."""
@@ -241,6 +243,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 _maybe_persist_sessions(force=True)
 
         await ws.send_text(json.dumps({"type": "hello", "session_id": session_id}))
+        await ws.send_bytes(ALT_SCREEN_ENTER)
         queue = active_session.add_subscriber()
 
         async def pty_to_ws():
