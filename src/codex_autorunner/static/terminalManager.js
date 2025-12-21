@@ -480,6 +480,7 @@ export class TerminalManager {
         '"JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
       fontSize: this._getFontSize(),
       cursorBlink: true,
+      scrollback: 0,
       rows: 24,
       cols: 100,
       theme: CONSTANTS.THEME.XTERM,
