@@ -2,6 +2,7 @@ import { flash, resolvePath } from "./utils.js";
 
 // SVG mic icon (more polished than emoji)
 const MIC_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>`;
+const SENDING_ICON_SVG = `<svg class="voice-spinner" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity="0.25"></circle><path d="M21 12a9 9 0 0 0-9-9"></path></svg>`;
 const RETRY_ICON = "↻";
 
 // Audio level visualization
@@ -109,6 +110,8 @@ export async function initVoiceInput({
     pendingBlob: null,
     chunks: [],
     recorder: null,
+    recorderDataHandler: null,
+    recorderStopHandler: null,
     stream: null,
     lastError: "",
     // Click-to-toggle support
@@ -122,6 +125,8 @@ export async function initVoiceInput({
     levelMeter: null,
     levelMeterStopHandler: null,
     animationFrame: null,
+    stopTimeout: null,
+    stopTimedOut: false,
   };
 
   // Threshold for distinguishing click vs hold (ms)
@@ -223,12 +228,19 @@ export async function initVoiceInput({
     }
 
     state.chunks = [];
-    state.recorder.addEventListener("dataavailable", (e) => {
+    state.stopTimedOut = false;
+    if (state.stopTimeout) {
+      clearTimeout(state.stopTimeout);
+      state.stopTimeout = null;
+    }
+    state.recorderDataHandler = (e) => {
       if (e.data && e.data.size > 0) {
         state.chunks.push(e.data);
       }
-    });
-    state.recorder.addEventListener("stop", onRecorderStop);
+    };
+    state.recorderStopHandler = onRecorderStop;
+    state.recorder.addEventListener("dataavailable", state.recorderDataHandler);
+    state.recorder.addEventListener("stop", state.recorderStopHandler);
     state.recording = true;
     if (state.pendingClickToggle && !state.pointerIsDown) {
       state.isClickToggleMode = true;
@@ -288,6 +300,7 @@ export async function initVoiceInput({
       state.lastError = "Unable to start recorder";
       setStatus(statusEl, state.lastError);
       setButtonError(button, state.pendingBlob);
+      cleanupStream(state);
       if (onError) onError(state.lastError);
     }
   }
@@ -300,29 +313,62 @@ export async function initVoiceInput({
     setStatus(statusEl, "Transcribing…");
     setButtonSending(button);
     try {
+      if (state.stopTimeout) {
+        clearTimeout(state.stopTimeout);
+      }
+      state.stopTimeout = window.setTimeout(() => {
+        if (!state.sending) return;
+        state.stopTimedOut = true;
+        state.sending = false;
+        state.lastError = "Recording timed out";
+        setStatus(statusEl, state.lastError);
+        setButtonError(button, state.pendingBlob);
+        cleanupRecorder(state);
+        cleanupStream(state);
+        if (onError) onError(state.lastError);
+      }, 4000);
       state.recorder.stop();
     } catch (err) {
       state.sending = false;
       state.lastError = "Unable to stop recorder";
       setButtonError(button, state.pendingBlob);
+      cleanupStream(state);
       if (onError) onError(state.lastError);
     }
   }
 
   async function onRecorderStop() {
-    const blob = new Blob(state.chunks, {
-      type: (state.recorder && state.recorder.mimeType) || "audio/webm",
-    });
-    cleanupRecorder(state);
-    if (!blob.size) {
+    try {
+      if (state.stopTimeout) {
+        clearTimeout(state.stopTimeout);
+        state.stopTimeout = null;
+      }
+      if (state.stopTimedOut) {
+        state.stopTimedOut = false;
+        return;
+      }
+      const blob = new Blob(state.chunks, {
+        type: (state.recorder && state.recorder.mimeType) || "audio/webm",
+      });
+      cleanupRecorder(state);
+      if (!blob.size) {
+        state.sending = false;
+        state.lastError = "No audio captured";
+        setStatus(statusEl, state.lastError);
+        setButtonError(button, state.pendingBlob);
+        if (onError) onError(state.lastError);
+        cleanupStream(state);
+        return;
+      }
+      await sendForTranscription(blob);
+    } catch (err) {
       state.sending = false;
-      state.lastError = "No audio captured";
+      state.lastError = formatErrorMessage(err, "Voice transcription failed");
       setStatus(statusEl, state.lastError);
       setButtonError(button, state.pendingBlob);
       if (onError) onError(state.lastError);
-      return;
+      cleanupStream(state);
     }
-    await sendForTranscription(blob);
   }
 
   async function retryTranscription() {
@@ -337,14 +383,12 @@ export async function initVoiceInput({
     state.pendingBlob = blob;
     try {
       const text = await transcribeBlob(blob);
-      state.sending = false;
       state.pendingBlob = null;
       setStatus(statusEl, text ? "Transcript ready" : "No speech detected");
       resetButton(button);
       if (text && onTranscript) onTranscript(text);
       if (!text) flash("No speech detected in recording", "error");
     } catch (err) {
-      state.sending = false;
       state.lastError = formatErrorMessage(err, "Voice transcription failed");
       setStatus(statusEl, state.lastError);
       setButtonError(button, state.pendingBlob);
@@ -356,6 +400,7 @@ export async function initVoiceInput({
       );
       if (onError) onError(state.lastError);
     } finally {
+      state.sending = false;
       cleanupStream(state);
     }
   }
@@ -388,10 +433,23 @@ export async function initVoiceInput({
 
   function cleanupRecorder(state) {
     if (state.recorder) {
-      state.recorder.onstop = null;
-      state.recorder.ondataavailable = null;
+      if (state.recorderStopHandler) {
+        state.recorder.removeEventListener("stop", state.recorderStopHandler);
+        state.recorderStopHandler = null;
+      }
+      if (state.recorderDataHandler) {
+        state.recorder.removeEventListener(
+          "dataavailable",
+          state.recorderDataHandler
+        );
+        state.recorderDataHandler = null;
+      }
     }
     state.recorder = null;
+    if (state.stopTimeout) {
+      clearTimeout(state.stopTimeout);
+      state.stopTimeout = null;
+    }
 
     // Clean up audio visualization
     if (state.animationFrame) {
@@ -453,6 +511,7 @@ function setStatus(el, text) {
 
 function resetButton(button) {
   button.disabled = false;
+  button.removeAttribute("aria-busy");
   button.classList.remove(
     "voice-recording",
     "voice-sending",
@@ -463,18 +522,21 @@ function resetButton(button) {
 }
 
 function setButtonRecording(button) {
+  button.removeAttribute("aria-busy");
   button.classList.add("voice-recording");
   button.classList.remove("voice-sending", "voice-error");
   button.innerHTML = MIC_ICON_SVG;
 }
 
 function setButtonSending(button) {
+  button.setAttribute("aria-busy", "true");
   button.classList.add("voice-sending");
   button.classList.remove("voice-recording", "voice-error");
-  button.innerHTML = MIC_ICON_SVG;
+  button.innerHTML = SENDING_ICON_SVG;
 }
 
 function setButtonError(button, hasPending) {
+  button.removeAttribute("aria-busy");
   button.classList.remove("voice-recording", "voice-sending");
   button.classList.add("voice-error");
   if (hasPending) {
