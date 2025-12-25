@@ -258,6 +258,7 @@ main {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-wrap: wrap;
 }
 
 .usage-chart-label {
@@ -272,6 +273,7 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 2px 4px;
+  min-width: 42px;
 }
 
 .usage-chart-canvas {

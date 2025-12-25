@@ -173,9 +173,11 @@ function buildUsageSeriesQuery() {
   const params = new URLSearchParams();
   const now = new Date();
   const since = new Date(now.getTime() - usageChartState.windowDays * 86400000);
+  const bucket =
+    usageChartState.windowDays >= 180 ? "week" : usageChartState.bucket;
   params.set("since", since.toISOString());
   params.set("until", now.toISOString());
-  params.set("bucket", usageChartState.bucket);
+  params.set("bucket", bucket);
   params.set("segment", usageChartState.segment);
   return params.toString();
 }
@@ -227,6 +229,29 @@ function renderUsageChart(data) {
     padding + chartHeight - (value / scaleMax) * chartHeight;
 
   let svg = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Token usage trend">`;
+  svg += `
+    <defs>
+      <linearGradient id="usage-line-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#6cf5d8" stop-opacity="0.35" />
+        <stop offset="100%" stop-color="#6cf5d8" stop-opacity="0" />
+      </linearGradient>
+      <filter id="usage-line-glow" x="-20%" y="-20%" width="140%" height="140%">
+        <feGaussianBlur stdDeviation="2" result="blur" />
+        <feMerge>
+          <feMergeNode in="blur" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+    </defs>
+  `;
+
+  const gridLines = 3;
+  for (let i = 1; i <= gridLines; i += 1) {
+    const y = padding + (chartHeight / (gridLines + 1)) * i;
+    svg += `<line x1="${padding}" y1="${y}" x2="${
+      padding + chartWidth
+    }" y2="${y}" stroke="rgba(108, 245, 216, 0.12)" stroke-width="1" />`;
+  }
 
   if (usageChartState.segment === "none") {
     const values = series[0]?.values || [];
@@ -235,9 +260,19 @@ function renderUsageChart(data) {
       const y = yFor(value);
       return `${x},${y}`;
     });
-    svg += `<polyline fill="none" stroke="#6cf5d8" stroke-width="2" points="${points.join(
-      " "
-    )}" />`;
+    if (values.length) {
+      const x0 = xFor(0, values.length);
+      const y0 = yFor(values[0] || 0);
+      const linePath = `M ${points.join(" L ")}`;
+      const areaPath = `${linePath} L ${
+        padding + chartWidth
+      },${padding + chartHeight} L ${padding},${
+        padding + chartHeight
+      } Z`;
+      svg += `<path d="${areaPath}" fill="url(#usage-line-fill)" />`;
+      svg += `<path d="${linePath}" fill="none" stroke="#6cf5d8" stroke-width="2" filter="url(#usage-line-glow)" />`;
+      svg += `<circle cx="${x0}" cy="${y0}" r="2" fill="#6cf5d8" />`;
+    }
   } else {
     const count = buckets.length;
     const accum = new Array(count).fill(0);
@@ -263,7 +298,7 @@ function renderUsageChart(data) {
         })
         .join(" ");
       const color = colors[idx % colors.length];
-      svg += `<polygon fill="${color}55" stroke="${color}" stroke-width="1" points="${pathTop} ${pathBottom}" />`;
+      svg += `<polygon fill="${color}44" stroke="${color}" stroke-width="1" points="${pathTop} ${pathBottom}" />`;
     });
   }
 
@@ -378,10 +413,21 @@ function initSettings() {
 
 function initUsageChartControls() {
   const segmentSelect = document.getElementById("usage-chart-segment");
+  const rangeSelect = document.getElementById("usage-chart-range");
   if (segmentSelect) {
     segmentSelect.value = usageChartState.segment;
     segmentSelect.addEventListener("change", () => {
       usageChartState.segment = segmentSelect.value;
+      loadUsageSeries();
+    });
+  }
+  if (rangeSelect) {
+    rangeSelect.value = String(usageChartState.windowDays);
+    rangeSelect.addEventListener("change", () => {
+      const value = Number(rangeSelect.value);
+      usageChartState.windowDays = Number.isNaN(value)
+        ? usageChartState.windowDays
+        : value;
       loadUsageSeries();
     });
   }

@@ -216,6 +216,14 @@
                 <div class="usage-chart-header">
                   <span class="usage-chart-title">Trend</span>
                   <div class="usage-chart-controls">
+                    <label class="usage-chart-label" for="usage-chart-range">Range</label>
+                    <select id="usage-chart-range" class="usage-chart-select">
+                      <option value="7">1w</option>
+                      <option value="30" selected>1m</option>
+                      <option value="90">3m</option>
+                      <option value="180">6m</option>
+                      <option value="365">1y</option>
+                    </select>
                     <label class="usage-chart-label" for="usage-chart-segment">Group</label>
                     <select id="usage-chart-segment" class="usage-chart-select">
                       <option value="none">Total</option>
