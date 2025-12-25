@@ -454,7 +454,10 @@ class HubSupervisor:
             detail = (
                 proc.stderr or proc.stdout or ""
             ).strip() or f"exit {proc.returncode}"
-            raise ValueError(f"git worktree remove failed: {detail}")
+            detail_lower = detail.lower()
+            # If the worktree is already gone (deleted via UI/Hub), continue cleanup.
+            if "not a working tree" not in detail_lower:
+                raise ValueError(f"git worktree remove failed: {detail}")
         subprocess.run(
             ["git", "worktree", "prune"],
             cwd=base_path,
