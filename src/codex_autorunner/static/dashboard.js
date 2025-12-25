@@ -214,7 +214,6 @@ function renderCodexOptions(data) {
   const modelCustom = document.getElementById("runner-model-custom");
   const reasoningSelect = document.getElementById("runner-reasoning-select");
   const reasoningCustom = document.getElementById("runner-reasoning-custom");
-  const hintEl = document.getElementById("runner-options-hint");
 
   populateSelect(modelSelect, data.models);
   populateSelect(reasoningSelect, data.reasoning_levels);
@@ -268,10 +267,6 @@ function renderCodexOptions(data) {
     }
   }
 
-  if (hintEl) {
-    hintEl.textContent =
-      "Model/reasoning defaults to the active Codex CLI profile when empty.";
-  }
 }
 
 async function loadCodexOptions() {

@@ -940,10 +940,6 @@ a.hub-pr-pill:hover {
   text-transform: uppercase;
 }
 
-.runner-config-hint {
-  margin: 6px 0 0;
-  opacity: 0.7;
-}
 
 /* Actions */
 .actions {
@@ -3346,11 +3342,14 @@ button.loading::after {
 
   .runner-config-actions {
     justify-content: flex-start;
+    flex-direction: column;
+    align-items: stretch;
   }
 
-  .runner-config-hint {
-    display: none;
+  .runner-config-actions button {
+    width: 100%;
   }
+
 
   .actions {
     display: grid;
