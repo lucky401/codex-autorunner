@@ -849,25 +849,54 @@ a.hub-pr-pill:hover {
 }
 
 .runner-config {
-  margin-top: 8px;
-  padding-top: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
   border-top: 1px solid var(--border);
 }
 
 .runner-config-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.runner-config-field {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  min-width: 0;
 }
 
-.runner-config-row input[type="text"] {
-  width: 170px;
+.runner-config-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.runner-config-field input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+.runner-config-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .runner-config-row button {
   padding: 4px 8px;
   font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.runner-config-hint {
+  margin: 4px 0 0;
 }
 
 /* Actions */
@@ -3253,6 +3282,18 @@ button.loading::after {
   .actions button:active {
     transform: scale(0.95);
     opacity: 0.8;
+  }
+
+  .runner-config-row {
+    grid-template-columns: 1fr;
+  }
+
+  .runner-config-actions {
+    justify-content: flex-start;
+  }
+
+  .runner-config-hint {
+    display: none;
   }
   
   .card {

@@ -9,8 +9,8 @@ import yaml
 from fastapi import APIRouter, HTTPException, Request
 
 from ..codex_cli import (
-    discover_codex_models,
-    discover_codex_reasoning,
+    DEFAULT_MODELS,
+    DEFAULT_REASONING_LEVELS,
     extract_flag_value,
     strip_flag,
 )
@@ -55,25 +55,12 @@ def build_codex_routes() -> APIRouter:
             args, "--reasoning"
         )
 
-        models, model_source, model_error = discover_codex_models(
-            config.codex_binary
-        )
-        reasoning, reasoning_source, reasoning_error = discover_codex_reasoning(
-            config.codex_binary
-        )
-
-        tiered_models = raw_codex.get("models") if isinstance(
-            raw_codex.get("models"), dict
-        ) else {}
-        fallback_models = [
-            tiered_models.get("small"),
-            tiered_models.get("large"),
-            current_model,
-        ]
-        models = sorted(set([m for m in models + fallback_models if m]))
-
-        if current_reasoning:
-            reasoning = sorted(set([*reasoning, current_reasoning]))
+        models = list(DEFAULT_MODELS)
+        if current_model and current_model not in models:
+            models.append(current_model)
+        reasoning = list(DEFAULT_REASONING_LEVELS)
+        if current_reasoning and current_reasoning not in reasoning:
+            reasoning.append(current_reasoning)
 
         return {
             "current_model": current_model,
@@ -81,10 +68,10 @@ def build_codex_routes() -> APIRouter:
             "models": models,
             "reasoning_levels": reasoning,
             "discovery": {
-                "models_source": model_source,
-                "models_error": model_error,
-                "reasoning_source": reasoning_source,
-                "reasoning_error": reasoning_error,
+                "models_source": "static",
+                "models_error": None,
+                "reasoning_source": "static",
+                "reasoning_error": None,
             },
         }
 

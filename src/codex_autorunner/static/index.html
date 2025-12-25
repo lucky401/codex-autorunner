@@ -173,36 +173,44 @@
               </div>
               <div class="runner-config">
                 <div class="runner-config-row">
-                  <label for="runner-model">Model</label>
-                  <input
-                    type="text"
-                    id="runner-model"
-                    list="runner-models"
-                    placeholder="auto"
-                    autocomplete="off"
-                    spellcheck="false"
-                  />
-                  <datalist id="runner-models"></datalist>
-                  <label for="runner-reasoning">Reasoning</label>
-                  <input
-                    type="text"
-                    id="runner-reasoning"
-                    list="runner-reasoning-levels"
-                    placeholder="auto"
-                    autocomplete="off"
-                    spellcheck="false"
-                  />
-                  <datalist id="runner-reasoning-levels"></datalist>
-                  <button
-                    id="runner-options-refresh"
-                    class="ghost sm icon-btn"
-                    title="Refresh model list"
-                  >
-                    ↻
-                  </button>
-                  <button id="runner-options-save" class="primary sm">Apply</button>
+                  <div class="runner-config-field">
+                    <span class="runner-config-label">Model</span>
+                    <input
+                      type="text"
+                      id="runner-model"
+                      list="runner-models"
+                      placeholder="auto"
+                      autocomplete="off"
+                      spellcheck="false"
+                      aria-label="Model"
+                    />
+                    <datalist id="runner-models"></datalist>
+                  </div>
+                  <div class="runner-config-field">
+                    <span class="runner-config-label">Reason</span>
+                    <input
+                      type="text"
+                      id="runner-reasoning"
+                      list="runner-reasoning-levels"
+                      placeholder="auto"
+                      autocomplete="off"
+                      spellcheck="false"
+                      aria-label="Reasoning"
+                    />
+                    <datalist id="runner-reasoning-levels"></datalist>
+                  </div>
+                  <div class="runner-config-actions">
+                    <button
+                      id="runner-options-refresh"
+                      class="ghost sm icon-btn"
+                      title="Refresh model list"
+                    >
+                      ↻
+                    </button>
+                    <button id="runner-options-save" class="primary sm">Apply</button>
+                  </div>
                 </div>
-                <p id="runner-options-hint" class="muted small">
+                <p id="runner-options-hint" class="runner-config-hint muted small">
                   Model/reasoning defaults to the active Codex CLI profile when empty.
                 </p>
               </div>

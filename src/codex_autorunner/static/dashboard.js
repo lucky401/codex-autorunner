@@ -205,21 +205,8 @@ function renderCodexOptions(data) {
   }
 
   if (hintEl) {
-    const discovery = data.discovery || {};
-    const hints = [];
-    if (discovery.models_source === "codex-cli") {
-      hints.push("Models: codex CLI");
-    }
-    if (discovery.reasoning_source === "default") {
-      hints.push("Reasoning: defaults");
-    }
-    if (discovery.models_error) {
-      hints.push("Discovery fallback in use");
-    }
     hintEl.textContent =
-      hints.length > 0
-        ? hints.join(" · ")
-        : "Model/reasoning defaults to the active Codex CLI profile when empty.";
+      "Model/reasoning defaults to the active Codex CLI profile when empty.";
   }
 }
 
