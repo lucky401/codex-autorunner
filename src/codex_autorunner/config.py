@@ -34,6 +34,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "binary": "codex",
         "args": ["--yolo", "exec", "--sandbox", "danger-full-access"],
         "terminal_args": ["--yolo"],
+        "model": None,
+        "reasoning": None,
         # Optional model tiers for different Codex invocations.
         # If codex.models.large is unset/null, callers should avoid passing --model
         # so Codex uses the user's default/global profile model.
@@ -160,6 +162,8 @@ class RepoConfig:
     codex_binary: str
     codex_args: List[str]
     codex_terminal_args: List[str]
+    codex_model: Optional[str]
+    codex_reasoning: Optional[str]
     prompt_prev_run_max_chars: int
     prompt_template: Optional[Path]
     runner_sleep_seconds: int
@@ -318,6 +322,8 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         codex_binary=cfg["codex"]["binary"],
         codex_args=list(cfg["codex"].get("args", [])),
         codex_terminal_args=list(term_args) if isinstance(term_args, list) else [],
+        codex_model=cfg["codex"].get("model"),
+        codex_reasoning=cfg["codex"].get("reasoning"),
         prompt_prev_run_max_chars=int(cfg["prompt"]["prev_run_max_chars"]),
         prompt_template=template,
         runner_sleep_seconds=int(cfg["runner"]["sleep_seconds"]),
@@ -426,6 +432,14 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         codex.get("terminal_args", []), list
     ):
         raise ConfigError("codex.terminal_args must be a list if provided")
+    if "model" in codex and codex.get("model") is not None and not isinstance(
+        codex.get("model"), str
+    ):
+        raise ConfigError("codex.model must be a string or null if provided")
+    if "reasoning" in codex and codex.get("reasoning") is not None and not isinstance(
+        codex.get("reasoning"), str
+    ):
+        raise ConfigError("codex.reasoning must be a string or null if provided")
     if "models" in codex:
         models = codex.get("models")
         if models is not None and not isinstance(models, dict):

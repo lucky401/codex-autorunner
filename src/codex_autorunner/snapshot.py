@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from .codex_cli import apply_codex_options
 from .engine import Engine
 from .utils import atomic_write, read_json
 from .prompts import SNAPSHOT_PROMPT as _SNAPSHOT_PROMPT
@@ -464,13 +465,16 @@ def _inject_model_arg(args: List[str], model: str) -> List[str]:
 
 def _run_codex(engine: Engine, prompt: str, *, prefer_large_model: bool) -> str:
     args = list(engine.config.codex_args)
-    model = None
+    model = engine.config.codex_model
     if prefer_large_model:
         model = (
             ((engine.config.raw or {}).get("codex") or {}).get("models") or {}
         ).get("large")
     if model:
         args = _inject_model_arg(args, model)
+    args = apply_codex_options(
+        args, model=None, reasoning=engine.config.codex_reasoning
+    )
     cmd = [engine.config.codex_binary] + args + [prompt]
     try:
         result = subprocess.run(

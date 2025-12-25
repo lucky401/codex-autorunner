@@ -848,6 +848,28 @@ a.hub-pr-pill:hover {
   font-size: 11px;
 }
 
+.runner-config {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.runner-config-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.runner-config-row input[type="text"] {
+  width: 170px;
+}
+
+.runner-config-row button {
+  padding: 4px 8px;
+  font-size: 10px;
+}
+
 /* Actions */
 .actions {
   display: flex;

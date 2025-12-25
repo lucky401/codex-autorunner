@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Optional
 
+from .codex_runner import build_codex_command
 from .utils import atomic_write
 from .engine import Engine
 from .prompts import SPEC_INGEST_PROMPT
@@ -56,7 +57,7 @@ def generate_docs_from_spec(
         engine.docs.read_doc("progress"),
         engine.docs.read_doc("opinions"),
     )
-    cmd = [engine.config.codex_binary] + engine.config.codex_args + [prompt]
+    cmd = build_codex_command(engine.config, prompt)
     try:
         result = subprocess.run(
             cmd,

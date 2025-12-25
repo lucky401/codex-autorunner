@@ -162,6 +162,98 @@ function renderUsage(data) {
   if (metaEl) metaEl.textContent = codexHome;
 }
 
+function setRunnerOptionsLoading(loading) {
+  const modelInput = document.getElementById("runner-model");
+  const reasoningInput = document.getElementById("runner-reasoning");
+  const refreshBtn = document.getElementById("runner-options-refresh");
+  const saveBtn = document.getElementById("runner-options-save");
+  [modelInput, reasoningInput, refreshBtn, saveBtn].forEach((el) => {
+    if (!el) return;
+    el.disabled = loading;
+  });
+  if (refreshBtn) refreshBtn.classList.toggle("loading", loading);
+  if (saveBtn) saveBtn.classList.toggle("loading", loading);
+}
+
+function populateDatalist(listEl, options) {
+  if (!listEl) return;
+  listEl.innerHTML = "";
+  const uniq = Array.from(new Set((options || []).filter(Boolean)));
+  uniq.forEach((val) => {
+    const opt = document.createElement("option");
+    opt.value = val;
+    listEl.appendChild(opt);
+  });
+}
+
+function renderCodexOptions(data) {
+  if (!data) return;
+  const modelInput = document.getElementById("runner-model");
+  const reasoningInput = document.getElementById("runner-reasoning");
+  const modelList = document.getElementById("runner-models");
+  const reasoningList = document.getElementById("runner-reasoning-levels");
+  const hintEl = document.getElementById("runner-options-hint");
+
+  populateDatalist(modelList, data.models);
+  populateDatalist(reasoningList, data.reasoning_levels);
+
+  if (modelInput) {
+    modelInput.value = data.current_model || "";
+  }
+  if (reasoningInput) {
+    reasoningInput.value = data.current_reasoning || "";
+  }
+
+  if (hintEl) {
+    const discovery = data.discovery || {};
+    const hints = [];
+    if (discovery.models_source === "codex-cli") {
+      hints.push("Models: codex CLI");
+    }
+    if (discovery.reasoning_source === "default") {
+      hints.push("Reasoning: defaults");
+    }
+    if (discovery.models_error) {
+      hints.push("Discovery fallback in use");
+    }
+    hintEl.textContent =
+      hints.length > 0
+        ? hints.join(" · ")
+        : "Model/reasoning defaults to the active Codex CLI profile when empty.";
+  }
+}
+
+async function loadCodexOptions() {
+  setRunnerOptionsLoading(true);
+  try {
+    const data = await api("/api/codex/options");
+    renderCodexOptions(data);
+  } catch (err) {
+    flash(err.message || "Failed to load codex options", "error");
+  } finally {
+    setRunnerOptionsLoading(false);
+  }
+}
+
+async function saveCodexOptions() {
+  const modelInput = document.getElementById("runner-model");
+  const reasoningInput = document.getElementById("runner-reasoning");
+  const payload = {
+    model: modelInput?.value?.trim() || null,
+    reasoning: reasoningInput?.value?.trim() || null,
+  };
+  setRunnerOptionsLoading(true);
+  try {
+    await api("/api/codex/options", { method: "PUT", body: payload });
+    flash("Runner options updated", "info");
+    await loadCodexOptions();
+  } catch (err) {
+    flash(err.message || "Failed to update runner options", "error");
+  } finally {
+    setRunnerOptionsLoading(false);
+  }
+}
+
 async function loadUsage() {
   setUsageLoading(true);
   try {
@@ -310,6 +402,14 @@ export function initDashboard() {
   bindAction("refresh-state", loadState);
   bindAction("usage-refresh", loadUsage);
   bindAction("refresh-preview", loadTodoPreview);
+  const refreshOptions = document.getElementById("runner-options-refresh");
+  if (refreshOptions) {
+    refreshOptions.addEventListener("click", loadCodexOptions);
+  }
+  const saveOptions = document.getElementById("runner-options-save");
+  if (saveOptions) {
+    saveOptions.addEventListener("click", saveCodexOptions);
+  }
 
   // Try loading from cache first
   const cachedState = loadFromCache("state");
@@ -340,6 +440,7 @@ export function initDashboard() {
   loadUsage();
   loadTodoPreview();
   loadVersion();
+  loadCodexOptions();
   checkUpdateStatus();
   startStatePolling();
 

@@ -171,6 +171,41 @@
                   <p id="done-count" class="metric">–</p>
                 </div>
               </div>
+              <div class="runner-config">
+                <div class="runner-config-row">
+                  <label for="runner-model">Model</label>
+                  <input
+                    type="text"
+                    id="runner-model"
+                    list="runner-models"
+                    placeholder="auto"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <datalist id="runner-models"></datalist>
+                  <label for="runner-reasoning">Reasoning</label>
+                  <input
+                    type="text"
+                    id="runner-reasoning"
+                    list="runner-reasoning-levels"
+                    placeholder="auto"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <datalist id="runner-reasoning-levels"></datalist>
+                  <button
+                    id="runner-options-refresh"
+                    class="ghost sm icon-btn"
+                    title="Refresh model list"
+                  >
+                    ↻
+                  </button>
+                  <button id="runner-options-save" class="primary sm">Apply</button>
+                </div>
+                <p id="runner-options-hint" class="muted small">
+                  Model/reasoning defaults to the active Codex CLI profile when empty.
+                </p>
+              </div>
               <div class="actions">
                 <button id="start-run" class="primary">Start</button>
                 <button id="start-once">Once</button>

@@ -3,6 +3,7 @@ Modular API routes for the codex-autorunner server.
 
 This package splits the monolithic api_routes.py into focused modules:
 - base: Index, state streaming, and general endpoints
+- codex: Codex model/reasoning options and discovery
 - docs: Document management (read/write) and chat
 - github: GitHub integration endpoints
 - repos: Run control (start/stop/resume/reset)
@@ -16,6 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from .base import build_base_routes
+from .codex import build_codex_routes
 from .docs import build_docs_routes
 from .github import build_github_routes
 from .repos import build_repos_routes
@@ -39,6 +41,7 @@ def build_repo_router(static_dir: Path) -> APIRouter:
 
     # Include all route modules
     router.include_router(build_base_routes(static_dir))
+    router.include_router(build_codex_routes())
     router.include_router(build_docs_routes())
     router.include_router(build_github_routes())
     router.include_router(build_repos_routes())
