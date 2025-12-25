@@ -123,6 +123,7 @@ export class TerminalManager {
     this.textInputSendBtnLabel = null;
     this.textInputHintBase = null;
     this.textInputHooks = [];
+    this.textInputSelection = { start: null, end: null };
 
     // Mobile controls state
     this.mobileControlsEl = null;
@@ -144,6 +145,7 @@ export class TerminalManager {
     this.mobileViewAtBottom = true;
     this.mobileViewRaf = null;
     this.mobileViewDirty = false;
+    this.mobileViewSuppressAtBottomRecalc = false;
 
     this.transcriptLines = [];
     this.transcriptLineCells = [];
@@ -870,8 +872,17 @@ export class TerminalManager {
         this.mobileViewAtBottom = atBottom;
       }
     }
-    this._renderMobileView();
+    const shouldScrollToBottom = this.mobileViewAtBottom;
+    this.mobileViewSuppressAtBottomRecalc = true;
     this.mobileViewEl.classList.remove("hidden");
+    this._renderMobileView();
+    this.mobileViewSuppressAtBottomRecalc = false;
+    if (shouldScrollToBottom) {
+      requestAnimationFrame(() => {
+        if (!this.mobileViewEl || !this.mobileViewActive) return;
+        this.mobileViewEl.scrollTop = this.mobileViewEl.scrollHeight;
+      });
+    }
   }
 
   _scheduleMobileViewRender() {
@@ -895,7 +906,10 @@ export class TerminalManager {
     }
     // This view mirrors the live output as plain text; it is intentionally read-only
     // and is hidden whenever the user wants to interact with the real TUI.
-    if (!this.mobileViewEl.classList.contains("hidden")) {
+    if (
+      !this.mobileViewEl.classList.contains("hidden") &&
+      !this.mobileViewSuppressAtBottomRecalc
+    ) {
       const threshold = 4;
       this.mobileViewAtBottom =
         this.mobileViewEl.scrollTop + this.mobileViewEl.clientHeight >=
@@ -1431,6 +1445,47 @@ export class TerminalManager {
     }
   }
 
+  _captureTextInputSelection() {
+    if (!this.textInputTextareaEl) return;
+    if (document.activeElement !== this.textInputTextareaEl) return;
+    const start = Number.isInteger(this.textInputTextareaEl.selectionStart)
+      ? this.textInputTextareaEl.selectionStart
+      : null;
+    const end = Number.isInteger(this.textInputTextareaEl.selectionEnd)
+      ? this.textInputTextareaEl.selectionEnd
+      : null;
+    if (start === null || end === null) return;
+    this.textInputSelection = { start, end };
+  }
+
+  _getTextInputSelection() {
+    if (!this.textInputTextareaEl) return { start: 0, end: 0 };
+    const textarea = this.textInputTextareaEl;
+    const value = textarea.value || "";
+    const max = value.length;
+    const focused = document.activeElement === textarea;
+    let start = Number.isInteger(textarea.selectionStart) ? textarea.selectionStart : null;
+    let end = Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : null;
+
+    if (!focused || start === null || end === null) {
+      if (
+        Number.isInteger(this.textInputSelection.start) &&
+        Number.isInteger(this.textInputSelection.end)
+      ) {
+        start = this.textInputSelection.start;
+        end = this.textInputSelection.end;
+      } else {
+        start = max;
+        end = max;
+      }
+    }
+
+    start = Math.min(Math.max(0, start ?? 0), max);
+    end = Math.min(Math.max(0, end ?? 0), max);
+    if (end < start) end = start;
+    return { start, end };
+  }
+
   _normalizeNewlines(text) {
     return (text || "").replace(/\r\n?/g, "\n");
   }
@@ -1754,12 +1809,11 @@ export class TerminalManager {
 
     const textarea = this.textInputTextareaEl;
     const value = textarea.value || "";
-    const start = Number.isInteger(textarea.selectionStart)
-      ? textarea.selectionStart
-      : value.length;
-    const end = Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : start;
-    const prefix = value.slice(0, start);
-    const suffix = value.slice(end);
+    const replaceSelection = options.replaceSelection !== false;
+    const selection = this._getTextInputSelection();
+    const insertAt = replaceSelection ? selection.start : selection.end;
+    const prefix = value.slice(0, insertAt);
+    const suffix = value.slice(replaceSelection ? selection.end : insertAt);
 
     let insert = String(text);
     if (options.separator === "newline") {
@@ -1771,6 +1825,7 @@ export class TerminalManager {
     textarea.value = `${prefix}${insert}${suffix}`;
     const cursor = prefix.length + insert.length;
     textarea.setSelectionRange(cursor, cursor);
+    this.textInputSelection = { start: cursor, end: cursor };
     this._persistTextInputDraft();
     this._updateComposerSticky();
     this._safeFocus(textarea);
@@ -1804,7 +1859,10 @@ export class TerminalManager {
       if (!imagePath) {
         throw new Error("Upload returned no path");
       }
-      this._insertTextIntoTextInput(imagePath, { separator: "newline" });
+      this._insertTextIntoTextInput(imagePath, {
+        separator: "newline",
+        replaceSelection: false,
+      });
       flash(`Image saved to ${imagePath}`);
     } catch (err) {
       const message = err?.message ? String(err.message) : "Image upload failed";
@@ -1899,14 +1957,24 @@ export class TerminalManager {
     this.textInputTextareaEl.addEventListener("input", () => {
       this._persistTextInputDraft();
       this._updateComposerSticky();
+      this._captureTextInputSelection();
     });
 
     this.textInputTextareaEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && e.shiftKey) {
+      if (e.key !== "Enter" || e.isComposing) return;
+      const sendOnEnter = this.isTouchDevice() && isMobileViewport();
+      const shouldSend = sendOnEnter ? !e.shiftKey : e.shiftKey;
+      if (shouldSend) {
         e.preventDefault();
         triggerSend();
       }
     });
+
+    const captureSelection = () => this._captureTextInputSelection();
+    this.textInputTextareaEl.addEventListener("select", captureSelection);
+    this.textInputTextareaEl.addEventListener("keyup", captureSelection);
+    this.textInputTextareaEl.addEventListener("mouseup", captureSelection);
+    this.textInputTextareaEl.addEventListener("touchend", captureSelection);
 
     if (this.textInputImageBtn && this.textInputImageInputEl) {
       this.textInputTextareaEl.addEventListener("paste", (e) => {
@@ -1925,6 +1993,7 @@ export class TerminalManager {
       });
 
       this.textInputImageBtn.addEventListener("click", () => {
+        this._captureTextInputSelection();
         this.textInputImageInputEl?.click();
       });
 
@@ -1940,6 +2009,7 @@ export class TerminalManager {
       this.textInputWasFocused = true;
       this._updateComposerSticky();
       this._updateViewportInsets();
+      this._captureTextInputSelection();
       this._captureTerminalScrollState();
       this.deferScrollRestore = true;
       if (this.isTouchDevice() && isMobileViewport()) {

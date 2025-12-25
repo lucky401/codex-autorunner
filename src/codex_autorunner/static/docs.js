@@ -1,4 +1,11 @@
-import { api, flash, statusPill, confirmModal, resolvePath } from "./utils.js";
+import {
+  api,
+  flash,
+  statusPill,
+  confirmModal,
+  resolvePath,
+  isMobileViewport,
+} from "./utils.js";
 import { loadState } from "./state.js";
 import { publish } from "./bus.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
@@ -291,7 +298,10 @@ function renderChat(kind = activeDoc) {
     chatUI.hint.textContent = statusText;
     chatUI.hint.classList.add("loading");
   } else {
-    chatUI.hint.textContent = "Shift+Enter to send · ↑ for history";
+    const sendHint = isMobileViewport()
+      ? "Enter to send · Shift+Enter for newline"
+      : "Shift+Enter to send · ↑ for history";
+    chatUI.hint.textContent = sendHint;
     chatUI.hint.classList.remove("loading");
   }
 
@@ -1198,13 +1208,17 @@ export function initDocs() {
   initDocVoice();
   reloadPatch(activeDoc, true);
 
-  // Shift+Enter sends, Enter adds newline (default textarea behavior)
+  // Desktop: Shift+Enter sends, Enter adds newline. Mobile: Enter sends, Shift+Enter adds newline.
   // Up/Down arrows navigate prompt history when input is empty
   chatUI.input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && e.shiftKey) {
-      e.preventDefault();
-      sendDocChat();
-      return;
+    if (e.key === "Enter" && !e.isComposing) {
+      const sendOnEnter = isMobileViewport();
+      const shouldSend = sendOnEnter ? !e.shiftKey : e.shiftKey;
+      if (shouldSend) {
+        e.preventDefault();
+        sendDocChat();
+        return;
+      }
     }
 
     // Up arrow: recall previous prompts from history

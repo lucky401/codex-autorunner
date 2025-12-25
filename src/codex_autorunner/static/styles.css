@@ -3098,7 +3098,8 @@ button.loading::after {
     display: none;
   }
 
-  html.mobile-chrome-hidden #docs .doc-chat-input-row button,
+  html.mobile-chrome-hidden #docs #doc-chat-voice,
+  html.mobile-chrome-hidden #docs #doc-chat-cancel,
   html.mobile-chrome-hidden #docs .doc-chat-meta {
     display: none;
   }
@@ -3957,7 +3958,9 @@ button.loading::after {
     overflow-y: auto;
     overflow-x: hidden;
     padding: 10px;
-    padding-bottom: calc(100px + env(safe-area-inset-bottom) + var(--vv-bottom, 0px));
+    padding-bottom: calc(
+      var(--compose-total-height, 120px) + env(safe-area-inset-bottom) + var(--vv-bottom, 0px)
+    );
     font-family: "JetBrains Mono", monospace;
     font-size: 10px;
     line-height: 1.15;
