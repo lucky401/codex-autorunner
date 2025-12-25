@@ -1006,6 +1006,11 @@ export class TerminalManager {
       if (!this.term || !event) return;
       if (event.ctrlKey) return;
       const buffer = this.term.buffer?.active;
+      const mouseTracking = this.term?.modes?.mouseTrackingMode;
+      // Let the TUI handle wheel events when mouse tracking is active.
+      if (mouseTracking && mouseTracking !== "none") {
+        return;
+      }
       // Only consume wheel events when xterm has scrollback; alt screen should pass through to TUI.
       if (!buffer || buffer.baseY <= 0) {
         return;
