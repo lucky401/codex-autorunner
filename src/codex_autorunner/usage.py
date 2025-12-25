@@ -1,7 +1,7 @@
 import dataclasses
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -269,3 +269,148 @@ def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
 
 def default_codex_home() -> Path:
     return _default_codex_home()
+
+
+def _bucket_start(dt: datetime, bucket: str) -> datetime:
+    dt = dt.astimezone(timezone.utc)
+    if bucket == "hour":
+        return dt.replace(minute=0, second=0, microsecond=0)
+    if bucket == "day":
+        return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    if bucket == "week":
+        start = dt - timedelta(days=dt.weekday())
+        return start.replace(hour=0, minute=0, second=0, microsecond=0)
+    raise UsageError(f"Unsupported bucket: {bucket}")
+
+
+def _bucket_label(dt: datetime, bucket: str) -> str:
+    if bucket == "hour":
+        return dt.strftime("%Y-%m-%dT%H:00Z")
+    return dt.date().isoformat()
+
+
+def _iter_buckets(start: datetime, end: datetime, bucket: str) -> List[datetime]:
+    if end < start:
+        return []
+    step = timedelta(hours=1)
+    if bucket == "day":
+        step = timedelta(days=1)
+    elif bucket == "week":
+        step = timedelta(days=7)
+    buckets: List[datetime] = []
+    cursor = start
+    while cursor <= end:
+        buckets.append(cursor)
+        cursor += step
+    return buckets
+
+
+def summarize_repo_usage_series(
+    repo_root: Path,
+    codex_home: Optional[Path] = None,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    bucket: str = "day",
+    segment: str = "none",
+) -> Dict[str, object]:
+    allowed_buckets = {"hour", "day", "week"}
+    allowed_segments = {"none", "model", "token_type", "model_token"}
+    if bucket not in allowed_buckets:
+        raise UsageError(f"Unsupported bucket: {bucket}")
+    if segment not in allowed_segments:
+        raise UsageError(f"Unsupported segment: {segment}")
+
+    repo_root = repo_root.resolve()
+    series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]] = {}
+    bucket_times: List[datetime] = []
+    min_bucket: Optional[datetime] = None
+    max_bucket: Optional[datetime] = None
+
+    token_fields = [
+        ("input", "input_tokens"),
+        ("cached", "cached_input_tokens"),
+        ("output", "output_tokens"),
+        ("reasoning", "reasoning_output_tokens"),
+    ]
+
+    for event in iter_token_events(codex_home, since=since, until=until):
+        if not event.cwd or not (
+            event.cwd == repo_root or repo_root in event.cwd.parents
+        ):
+            continue
+
+        bucket_start = _bucket_start(event.timestamp, bucket)
+        if min_bucket is None or bucket_start < min_bucket:
+            min_bucket = bucket_start
+        if max_bucket is None or bucket_start > max_bucket:
+            max_bucket = bucket_start
+
+        bucket_key = _bucket_label(bucket_start, bucket)
+        model = event.model or "unknown"
+        delta = event.delta
+
+        if segment == "none":
+            key = ("total", None, None)
+            series_map.setdefault(key, {})
+            series_map[key][bucket_key] = series_map[key].get(bucket_key, 0) + (
+                delta.total_tokens
+            )
+            continue
+
+        if segment == "model":
+            key = (model, model, None)
+            series_map.setdefault(key, {})
+            series_map[key][bucket_key] = series_map[key].get(bucket_key, 0) + (
+                delta.total_tokens
+            )
+            continue
+
+        if segment in ("token_type", "model_token"):
+            for label, field in token_fields:
+                value = getattr(delta, field)
+                if not value:
+                    continue
+                token_key = label
+                model_key = model if segment == "model_token" else None
+                key = (
+                    f"{model_key or 'all'}:{token_key}" if model_key else token_key,
+                    model_key,
+                    token_key,
+                )
+                series_map.setdefault(key, {})
+                series_map[key][bucket_key] = series_map[key].get(bucket_key, 0) + value
+            continue
+
+        raise UsageError(f"Unsupported segment: {segment}")
+
+    if since:
+        min_bucket = _bucket_start(since, bucket)
+    if until:
+        max_bucket = _bucket_start(until, bucket)
+
+    if min_bucket and max_bucket:
+        bucket_times = _iter_buckets(min_bucket, max_bucket, bucket)
+
+    buckets = [_bucket_label(dt, bucket) for dt in bucket_times]
+    series = []
+    for (key, model, token_type), values in series_map.items():
+        series_values = [int(values.get(bucket, 0)) for bucket in buckets]
+        series.append(
+            {
+                "key": key,
+                "model": model,
+                "token_type": token_type,
+                "total": sum(series_values),
+                "values": series_values,
+            }
+        )
+
+    series.sort(key=lambda item: item["total"], reverse=True)
+
+    return {
+        "bucket": bucket,
+        "segment": segment,
+        "buckets": buckets,
+        "series": series,
+    }

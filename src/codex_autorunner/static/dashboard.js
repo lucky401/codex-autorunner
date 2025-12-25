@@ -16,6 +16,11 @@ import { CONSTANTS } from "./constants.js";
 
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 let pendingSummaryOpen = false;
+const usageChartState = {
+  segment: "none",
+  bucket: "day",
+  windowDays: 30,
+};
 
 function renderState(state) {
   if (!state) return;
@@ -164,11 +169,123 @@ function renderUsage(data) {
   if (metaEl) metaEl.textContent = codexHome;
 }
 
+function buildUsageSeriesQuery() {
+  const params = new URLSearchParams();
+  const now = new Date();
+  const since = new Date(now.getTime() - usageChartState.windowDays * 86400000);
+  params.set("since", since.toISOString());
+  params.set("until", now.toISOString());
+  params.set("bucket", usageChartState.bucket);
+  params.set("segment", usageChartState.segment);
+  return params.toString();
+}
+
+function renderUsageChart(data) {
+  const container = document.getElementById("usage-chart-canvas");
+  if (!container) return;
+  const buckets = data?.buckets || [];
+  const series = data?.series || [];
+  if (!buckets.length || !series.length) {
+    container.innerHTML = '<div class="usage-chart-empty">No data</div>';
+    return;
+  }
+
+  const width = 320;
+  const height = 88;
+  const padding = 8;
+  const chartWidth = width - padding * 2;
+  const chartHeight = height - padding * 2;
+  const colors = [
+    "#6cf5d8",
+    "#6ca8ff",
+    "#f5b86c",
+    "#f56c8a",
+    "#84d1ff",
+    "#9be26f",
+    "#f2a0c5",
+  ];
+
+  let scaleMax = 1;
+  if (usageChartState.segment === "none") {
+    const values = series[0]?.values || [];
+    scaleMax = Math.max(...values, 1);
+  } else {
+    const totals = new Array(buckets.length).fill(0);
+    series.forEach((entry) => {
+      (entry.values || []).forEach((value, i) => {
+        totals[i] += value;
+      });
+    });
+    scaleMax = Math.max(...totals, 1);
+  }
+
+  const xFor = (index, count) => {
+    if (count <= 1) return padding + chartWidth / 2;
+    return padding + (index / (count - 1)) * chartWidth;
+  };
+  const yFor = (value) =>
+    padding + chartHeight - (value / scaleMax) * chartHeight;
+
+  let svg = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Token usage trend">`;
+
+  if (usageChartState.segment === "none") {
+    const values = series[0]?.values || [];
+    const points = values.map((value, i) => {
+      const x = xFor(i, values.length);
+      const y = yFor(value);
+      return `${x},${y}`;
+    });
+    svg += `<polyline fill="none" stroke="#6cf5d8" stroke-width="2" points="${points.join(
+      " "
+    )}" />`;
+  } else {
+    const count = buckets.length;
+    const accum = new Array(count).fill(0);
+    series.forEach((entry, idx) => {
+      const values = entry.values || [];
+      const top = values.map((value, i) => {
+        accum[i] += value;
+        return accum[i];
+      });
+      const bottom = top.map((value, i) => value - (values[i] || 0));
+      const pathTop = top
+        .map((value, i) => {
+          const x = xFor(i, count);
+          const y = yFor(value);
+          return `${x},${y}`;
+        })
+        .join(" ");
+      const pathBottom = bottom
+        .map((value, i) => {
+          const x = xFor(count - 1 - i, count);
+          const y = yFor(value);
+          return `${x},${y}`;
+        })
+        .join(" ");
+      const color = colors[idx % colors.length];
+      svg += `<polygon fill="${color}55" stroke="${color}" stroke-width="1" points="${pathTop} ${pathBottom}" />`;
+    });
+  }
+
+  svg += "</svg>";
+  container.innerHTML = svg;
+}
+
+async function loadUsageSeries() {
+  try {
+    const data = await api(`/api/usage/series?${buildUsageSeriesQuery()}`);
+    renderUsageChart(data);
+  } catch (err) {
+    renderUsageChart(null);
+  }
+}
+
 async function loadUsage() {
   setUsageLoading(true);
   try {
     const data = await api("/api/usage");
     renderUsage(data);
+    loadUsageSeries();
   } catch (err) {
     renderUsage(null);
     flash(err.message || "Failed to load usage", "error");
@@ -259,6 +376,17 @@ function initSettings() {
   }
 }
 
+function initUsageChartControls() {
+  const segmentSelect = document.getElementById("usage-chart-segment");
+  if (segmentSelect) {
+    segmentSelect.value = usageChartState.segment;
+    segmentSelect.addEventListener("change", () => {
+      usageChartState.segment = segmentSelect.value;
+      loadUsageSeries();
+    });
+  }
+}
+
 function bindAction(buttonId, action) {
   const btn = document.getElementById(buttonId);
   btn.addEventListener("click", async () => {
@@ -286,6 +414,7 @@ function openSummaryDoc() {
 
 export function initDashboard() {
   initSettings();
+  initUsageChartControls();
   subscribe("state:update", renderState);
   subscribe("docs:updated", handleDocsEvent);
   subscribe("docs:loaded", handleDocsEvent);

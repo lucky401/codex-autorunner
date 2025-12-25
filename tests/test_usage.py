@@ -1,20 +1,24 @@
 import json
 from pathlib import Path
+from typing import Optional
 
 from codex_autorunner.usage import (
     summarize_hub_usage,
     summarize_repo_usage,
+    summarize_repo_usage_series,
 )
 
 
-def _write_session(tmp_path: Path, cwd: Path, events: list[dict]) -> None:
+def _write_session(
+    tmp_path: Path, cwd: Path, events: list[dict], model: Optional[str] = None
+) -> None:
     target = tmp_path / "sessions" / "2025" / "12" / "01"
     target.mkdir(parents=True, exist_ok=True)
     lines = [
         {
             "timestamp": "2025-12-01T00:00:00Z",
             "type": "session_meta",
-            "payload": {"cwd": str(cwd)},
+            "payload": {"cwd": str(cwd), "model": model},
         }
     ]
     lines.extend(events)
@@ -160,3 +164,80 @@ def test_hub_usage_assigns_unmatched(tmp_path):
     assert per_repo["repo-two"].totals.total_tokens == 0
     assert unmatched.totals.total_tokens == 4
     assert unmatched.events == 1
+
+
+def test_usage_series_groups_by_model(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    codex_home = tmp_path / "codex"
+
+    _write_session(
+        codex_home,
+        repo_root,
+        [
+            {
+                "timestamp": "2025-12-01T00:01:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 6,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 4,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 10,
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 6,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 4,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 10,
+                        },
+                    },
+                },
+            }
+        ],
+        model="gpt-5",
+    )
+
+    _write_session(
+        codex_home,
+        repo_root,
+        [
+            {
+                "timestamp": "2025-12-02T00:01:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 2,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 3,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 5,
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 2,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 3,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 5,
+                        },
+                    },
+                },
+            }
+        ],
+        model="gpt-4o",
+    )
+
+    series = summarize_repo_usage_series(
+        repo_root, codex_home=codex_home, bucket="day", segment="model"
+    )
+
+    assert series["buckets"] == ["2025-12-01", "2025-12-02"]
+    values = {item["key"]: item["values"] for item in series["series"]}
+    assert values["gpt-5"] == [10, 0]
+    assert values["gpt-4o"] == [0, 5]

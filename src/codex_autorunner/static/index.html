@@ -212,6 +212,21 @@
                   <span class="usage-stat-lbl">reason</span>
                 </div>
               </div>
+              <div class="usage-chart">
+                <div class="usage-chart-header">
+                  <span class="usage-chart-title">Trend</span>
+                  <div class="usage-chart-controls">
+                    <label class="usage-chart-label" for="usage-chart-segment">Group</label>
+                    <select id="usage-chart-segment" class="usage-chart-select">
+                      <option value="none">Total</option>
+                      <option value="model">Model</option>
+                      <option value="token_type">Token type</option>
+                      <option value="model_token">Model + type</option>
+                    </select>
+                  </div>
+                </div>
+                <div id="usage-chart-canvas" class="usage-chart-canvas"></div>
+              </div>
               <div class="usage-rates-visual">
                 <div class="usage-rate-row">
                   <span class="usage-rate-label">Primary</span>

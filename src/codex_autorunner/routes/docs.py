@@ -32,6 +32,7 @@ from ..usage import (
     default_codex_home,
     parse_iso_datetime,
     summarize_repo_usage,
+    summarize_repo_usage_series,
 )
 from ..utils import atomic_write
 
@@ -222,5 +223,38 @@ def build_docs_routes() -> APIRouter:
             **summary.to_dict(),
         }
 
-    return router
+    @router.get("/api/usage/series")
+    def get_usage_series(
+        request: Request,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        bucket: str = "day",
+        segment: str = "none",
+    ):
+        engine = request.app.state.engine
+        try:
+            since_dt = parse_iso_datetime(since)
+            until_dt = parse_iso_datetime(until)
+        except UsageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        try:
+            series = summarize_repo_usage_series(
+                engine.repo_root,
+                default_codex_home(),
+                since=since_dt,
+                until=until_dt,
+                bucket=bucket,
+                segment=segment,
+            )
+        except UsageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {
+            "mode": "repo",
+            "repo": str(engine.repo_root),
+            "codex_home": str(default_codex_home()),
+            "since": since,
+            "until": until,
+            **series,
+        }
 
+    return router
