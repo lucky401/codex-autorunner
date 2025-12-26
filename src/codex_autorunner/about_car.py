@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, Optional
 
-from .config import Config
+from .config import Config, ROOT_CONFIG_FILENAME, ROOT_OVERRIDE_FILENAME
 
 
 ABOUT_CAR_BASENAME = "ABOUT_CAR.md"
@@ -31,12 +31,16 @@ def build_about_car_markdown(
     config_path: Optional[Path] = None,
 ) -> str:
     config_path = config_path or (repo_root / ".codex-autorunner" / "config.yml")
+    root_config_path = repo_root / ROOT_CONFIG_FILENAME
+    root_override_path = repo_root / ROOT_OVERRIDE_FILENAME
     todo_disp = _display_path(repo_root, todo_path)
     progress_disp = _display_path(repo_root, progress_path)
     opinions_disp = _display_path(repo_root, opinions_path)
     spec_disp = _display_path(repo_root, spec_path)
     summary_disp = _display_path(repo_root, summary_path)
     config_disp = _display_path(repo_root, config_path)
+    root_config_disp = _display_path(repo_root, root_config_path)
+    root_override_disp = _display_path(repo_root, root_override_path)
 
     return (
         f"{ABOUT_CAR_GENERATED_MARKER}\n"
@@ -63,6 +67,7 @@ def build_about_car_markdown(
         "- `car run/once` repeatedly runs Codex non-interactively, feeding it the work docs (and the prior run tail).\n"
         "- `car serve` starts a local web UI. The **Terminal** tab launches the configured `codex` binary in a PTY.\n"
         f"- Repo config lives at `{config_disp}` (doc paths, codex args, server host/port).\n"
+        f"- Root defaults live at `{root_config_disp}` with optional `{root_override_disp}` overrides.\n"
     )
 
 

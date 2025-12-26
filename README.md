@@ -23,6 +23,11 @@ CLI commands are available as `codex-autorunner` or the shorter `car`.
 5) If stuck: `codex-autorunner kill` then `codex-autorunner resume` (or the `car` equivalents)
 6) Check status/logs: `codex-autorunner status`, `codex-autorunner log --tail 200` (or `car ...`)
 
+## Configuration
+- Root defaults live in `codex-autorunner.yml` (committed). These defaults are used when CAR generates `.codex-autorunner/config.yml`.
+- Local overrides live in `codex-autorunner.override.yml` (gitignored). Use it for machine-specific tweaks; keep secrets in env vars.
+- Repo config lives at `.codex-autorunner/config.yml` (generated). Edit it for repo-specific changes.
+
 ## Run the web server/UI
 1) Ensure the repo is initialized (`codex-autorunner init`) so `.codex-autorunner/config.yml` exists.
 2) Start the API/UI backend: `codex-autorunner serve` (or `car serve`) — defaults to `127.0.0.1:4173`; override via `server.host`/`server.port` in `.codex-autorunner/config.yml`.

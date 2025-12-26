@@ -15,6 +15,8 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 CONFIG_FILENAME = ".codex-autorunner/config.yml"
+ROOT_CONFIG_FILENAME = "codex-autorunner.yml"
+ROOT_OVERRIDE_FILENAME = "codex-autorunner.override.yml"
 CONFIG_VERSION = 2
 TWELVE_HOUR_SECONDS = 12 * 60 * 60
 
@@ -216,6 +218,39 @@ def _merge_defaults(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str
     return merged
 
 
+def _load_yaml_dict(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_root_config(root: Path) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    base = _load_yaml_dict(root / ROOT_CONFIG_FILENAME)
+    if base:
+        merged = _merge_defaults(merged, base)
+    override = _load_yaml_dict(root / ROOT_OVERRIDE_FILENAME)
+    if override:
+        merged = _merge_defaults(merged, override)
+    return merged
+
+
+def load_root_defaults(root: Path, mode: str) -> Dict[str, Any]:
+    """Load repo/hub defaults from the root config + override file."""
+    raw = _load_root_config(root)
+    if not raw:
+        return {}
+    if "repo" in raw or "hub" in raw:
+        if mode == "hub":
+            return raw.get("hub", {}) if isinstance(raw.get("hub"), dict) else {}
+        return raw.get("repo", {}) if isinstance(raw.get("repo"), dict) else {}
+    return raw
+
+
 def _normalize_base_path(path: Optional[str]) -> str:
     """Normalize base path to either '' or a single-leading-slash path without trailing slash."""
     if not path:
@@ -277,12 +312,14 @@ def load_config(start: Path) -> Union[RepoConfig, HubConfig]:
         data = yaml.safe_load(f) or {}
 
     mode = data.get("mode", "repo")
+    root = config_path.parent.parent.resolve()
+    root_defaults = load_root_defaults(root, str(mode))
     if mode == "hub":
-        merged = _merge_defaults(DEFAULT_HUB_CONFIG, data)
+        merged = _merge_defaults(_merge_defaults(DEFAULT_HUB_CONFIG, root_defaults), data)
         _validate_hub_config(merged)
         return _build_hub_config(config_path, merged)
     if mode == "repo":
-        merged = _merge_defaults(DEFAULT_REPO_CONFIG, data)
+        merged = _merge_defaults(_merge_defaults(DEFAULT_REPO_CONFIG, root_defaults), data)
         _validate_repo_config(merged)
         return _build_repo_config(config_path, merged)
     raise ConfigError(f"Invalid mode '{mode}'; expected 'hub' or 'repo'")

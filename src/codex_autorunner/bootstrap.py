@@ -4,7 +4,13 @@ from typing import Optional
 import yaml
 
 from .about_car import ensure_about_car_file_for_repo
-from .config import CONFIG_FILENAME, DEFAULT_REPO_CONFIG, DEFAULT_HUB_CONFIG
+from .config import (
+    CONFIG_FILENAME,
+    DEFAULT_REPO_CONFIG,
+    DEFAULT_HUB_CONFIG,
+    _merge_defaults,
+    load_root_defaults,
+)
 from .manifest import load_manifest
 from .utils import atomic_write
 
@@ -56,7 +62,8 @@ def write_repo_config(repo_root: Path, force: bool = False) -> Path:
         return config_path
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(DEFAULT_REPO_CONFIG, f, sort_keys=False)
+        defaults = _merge_defaults(DEFAULT_REPO_CONFIG, load_root_defaults(repo_root, "repo"))
+        yaml.safe_dump(defaults, f, sort_keys=False)
     return config_path
 
 
@@ -66,7 +73,8 @@ def write_hub_config(hub_root: Path, force: bool = False) -> Path:
         return config_path
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(DEFAULT_HUB_CONFIG, f, sort_keys=False)
+        defaults = _merge_defaults(DEFAULT_HUB_CONFIG, load_root_defaults(hub_root, "hub"))
+        yaml.safe_dump(defaults, f, sort_keys=False)
     return config_path
 
 
