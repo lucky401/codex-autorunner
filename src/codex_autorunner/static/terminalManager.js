@@ -151,6 +151,7 @@ export class TerminalManager {
     this.transcriptLineCells = [];
     this.transcriptCursor = 0;
     this.transcriptMaxLines = 2000;
+    this.transcriptHydrated = false;
     this.transcriptAnsiState = {
       mode: "text",
       oscEsc: false,
@@ -516,6 +517,7 @@ export class TerminalManager {
     this.transcriptLines = [];
     this.transcriptLineCells = [];
     this.transcriptCursor = 0;
+    this.transcriptHydrated = false;
     this.transcriptAnsiState = {
       mode: "text",
       oscEsc: false,
@@ -536,7 +538,22 @@ export class TerminalManager {
 
   _restoreTranscript() {
     try {
-      const raw = sessionStorage.getItem(this._transcriptStorageKey());
+      const key = this._transcriptStorageKey();
+      let raw = null;
+      let fromSessionStorage = false;
+      try {
+        raw = localStorage.getItem(key);
+      } catch (_err) {
+        raw = null;
+      }
+      if (!raw) {
+        try {
+          raw = sessionStorage.getItem(key);
+          fromSessionStorage = Boolean(raw);
+        } catch (_err) {
+          raw = null;
+        }
+      }
       if (!raw) return;
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed?.lines)) {
@@ -550,6 +567,13 @@ export class TerminalManager {
       if (Number.isInteger(parsed?.cursor)) {
         this.transcriptCursor = Math.max(0, parsed.cursor);
       }
+      if (fromSessionStorage) {
+        try {
+          localStorage.setItem(key, raw);
+        } catch (_err) {
+          // ignore storage errors
+        }
+      }
     } catch (_err) {
       // ignore restore errors
     }
@@ -559,17 +583,34 @@ export class TerminalManager {
     try {
       const key = this._transcriptStorageKey();
       if (clear) {
-        sessionStorage.removeItem(key);
+        try {
+          localStorage.removeItem(key);
+        } catch (_err) {
+          // ignore storage errors
+        }
+        try {
+          sessionStorage.removeItem(key);
+        } catch (_err) {
+          // ignore storage errors
+        }
         return;
       }
-      sessionStorage.setItem(
-        key,
-        JSON.stringify({
-          lines: this.transcriptLines.map((line) => this._cellsToSegments(line)),
-          line: this._cellsToSegments(this.transcriptLineCells),
-          cursor: this.transcriptCursor,
-        })
-      );
+      const payload = JSON.stringify({
+        lines: this.transcriptLines.map((line) => this._cellsToSegments(line)),
+        line: this._cellsToSegments(this.transcriptLineCells),
+        cursor: this.transcriptCursor,
+      });
+      try {
+        localStorage.setItem(key, payload);
+        return;
+      } catch (_err) {
+        // ignore storage errors
+      }
+      try {
+        sessionStorage.setItem(key, payload);
+      } catch (_err) {
+        // ignore storage errors
+      }
     } catch (_err) {
       // ignore storage errors
     }
@@ -654,6 +695,31 @@ export class TerminalManager {
       }
     }
     return html;
+  }
+
+  _cellsToPlainText(cells) {
+    if (!Array.isArray(cells) || !cells.length) return "";
+    let text = "";
+    for (const cell of cells) {
+      if (!cell) {
+        text += " ";
+        continue;
+      }
+      text += cell.t || " ";
+    }
+    return text;
+  }
+
+  _hydrateTerminalFromTranscript() {
+    if (!this.term || this.transcriptHydrated) return;
+    const lines = this._getTranscriptLines();
+    if (!lines.length) return;
+    const output = lines.map((line) => this._cellsToPlainText(line)).join("\r\n");
+    if (output) {
+      this.term.write(output);
+      this.transcriptHydrated = true;
+      this._updateJumpBottomVisibility();
+    }
   }
 
   _ansiClassName() {
@@ -975,6 +1041,7 @@ export class TerminalManager {
       cursorBlink: true,
       rows: 24,
       cols: 100,
+      scrollback: this.transcriptMaxLines,
       theme: CONSTANTS.THEME.XTERM,
     });
 
@@ -1279,6 +1346,8 @@ export class TerminalManager {
             // ignore
           }
         }
+        this.transcriptHydrated = false;
+        this._hydrateTerminalFromTranscript();
       }
 
       if (isAttach) this._setStatus("Connected (reattached)");
