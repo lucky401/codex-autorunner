@@ -2,7 +2,7 @@ from pathlib import Path
 
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.engine import Engine
-from codex_autorunner.prompt import build_prompt
+from codex_autorunner.prompt import build_prompt, build_prompt_text
 
 
 def test_prompt_calls_out_work_doc_paths(tmp_path: Path) -> None:
@@ -20,3 +20,18 @@ def test_prompt_calls_out_work_doc_paths(tmp_path: Path) -> None:
     assert ".codex-autorunner/SPEC.md" in prompt
     assert ".codex-autorunner/SUMMARY.md" in prompt
     assert "Edit these files directly; do not create new copies elsewhere" in prompt
+
+
+def test_build_prompt_text_includes_prev_run_block() -> None:
+    template = "TODO={{TODO}}\nPATH={{TODO_PATH}}\n{{PREV_RUN_OUTPUT}}"
+    rendered = build_prompt_text(
+        template=template,
+        docs={"todo": "Do the thing"},
+        doc_paths={"todo": "TODO.md"},
+        prev_run_output="finished",
+    )
+
+    assert "TODO=Do the thing" in rendered
+    assert "PATH=TODO.md" in rendered
+    assert "<PREV_RUN_OUTPUT>" in rendered
+    assert "finished" in rendered

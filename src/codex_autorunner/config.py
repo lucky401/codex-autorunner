@@ -263,6 +263,18 @@ def load_root_defaults(root: Path, mode: str) -> Dict[str, Any]:
     return raw
 
 
+def resolve_config_data(
+    root: Path, mode: str, overrides: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    if mode not in ("repo", "hub"):
+        raise ConfigError(f"Invalid mode '{mode}'; expected 'hub' or 'repo'")
+    base = DEFAULT_HUB_CONFIG if mode == "hub" else DEFAULT_REPO_CONFIG
+    merged = _merge_defaults(base, load_root_defaults(root, mode))
+    if overrides:
+        merged = _merge_defaults(merged, overrides)
+    return merged
+
+
 def _normalize_base_path(path: Optional[str]) -> str:
     """Normalize base path to either '' or a single-leading-slash path without trailing slash."""
     if not path:
@@ -309,6 +321,18 @@ def _load_dotenv_for_config(config_path: Path) -> None:
         pass
 
 
+def load_config_data(config_path: Path) -> Dict[str, Any]:
+    """Load, merge, and return a raw config dict for the given config path."""
+    _load_dotenv_for_config(config_path)
+    with config_path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ConfigError("Config file must be a mapping")
+    mode = data.get("mode", "repo")
+    root = config_path.parent.parent.resolve()
+    return resolve_config_data(root, mode, data)
+
+
 def load_config(start: Path) -> Union[RepoConfig, HubConfig]:
     """
     Load the nearest config walking upward from the provided path.
@@ -319,19 +343,12 @@ def load_config(start: Path) -> Union[RepoConfig, HubConfig]:
         raise ConfigError(
             f"Missing config file; expected to find {CONFIG_FILENAME} in {start} or parents"
         )
-    _load_dotenv_for_config(config_path)
-    with config_path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-
-    mode = data.get("mode", "repo")
-    root = config_path.parent.parent.resolve()
-    root_defaults = load_root_defaults(root, str(mode))
+    merged = load_config_data(config_path)
+    mode = merged.get("mode", "repo")
     if mode == "hub":
-        merged = _merge_defaults(_merge_defaults(DEFAULT_HUB_CONFIG, root_defaults), data)
         _validate_hub_config(merged)
         return _build_hub_config(config_path, merged)
     if mode == "repo":
-        merged = _merge_defaults(_merge_defaults(DEFAULT_REPO_CONFIG, root_defaults), data)
         _validate_repo_config(merged)
         return _build_repo_config(config_path, merged)
     raise ConfigError(f"Invalid mode '{mode}'; expected 'hub' or 'repo'")

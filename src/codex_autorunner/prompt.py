@@ -1,54 +1,78 @@
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 from .config import Config
 from .docs import DocsManager
 from .prompts import DEFAULT_PROMPT_TEMPLATE, FINAL_SUMMARY_PROMPT_TEMPLATE
 
 
-def build_prompt(
-    config: Config, docs: DocsManager, prev_run_output: Optional[str]
-) -> str:
-    def _display_path(path: Path) -> str:
-        try:
-            return str(path.relative_to(config.root))
-        except ValueError:
-            return str(path)
+def _display_path(root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
-    doc_paths = {
-        "todo": _display_path(config.doc_path("todo")),
-        "progress": _display_path(config.doc_path("progress")),
-        "opinions": _display_path(config.doc_path("opinions")),
-        "spec": _display_path(config.doc_path("spec")),
-        "summary": _display_path(config.doc_path("summary")),
+
+def build_doc_paths(config: Config) -> Mapping[str, str]:
+    return {
+        "todo": _display_path(config.root, config.doc_path("todo")),
+        "progress": _display_path(config.root, config.doc_path("progress")),
+        "opinions": _display_path(config.root, config.doc_path("opinions")),
+        "spec": _display_path(config.root, config.doc_path("spec")),
+        "summary": _display_path(config.root, config.doc_path("summary")),
     }
 
+
+def load_prompt_template(config: Config) -> str:
     template_path: Path = config.prompt_template if config.prompt_template else None
     if template_path and template_path.exists():
-        template = template_path.read_text(encoding="utf-8")
-    else:
-        template = DEFAULT_PROMPT_TEMPLATE
+        return template_path.read_text(encoding="utf-8")
+    return DEFAULT_PROMPT_TEMPLATE
 
+
+def build_prompt_text(
+    *, template: str, docs: Mapping[str, str], doc_paths: Mapping[str, str], prev_run_output: Optional[str]
+) -> str:
     prev_section = ""
     if prev_run_output:
         prev_section = "<PREV_RUN_OUTPUT>\n" + prev_run_output + "\n</PREV_RUN_OUTPUT>"
 
     replacements = {
-        "{{TODO}}": docs.read_doc("todo"),
-        "{{PROGRESS}}": docs.read_doc("progress"),
-        "{{OPINIONS}}": docs.read_doc("opinions"),
-        "{{SPEC}}": docs.read_doc("spec"),
-        "{{SUMMARY}}": docs.read_doc("summary"),
+        "{{TODO}}": docs.get("todo", ""),
+        "{{PROGRESS}}": docs.get("progress", ""),
+        "{{OPINIONS}}": docs.get("opinions", ""),
+        "{{SPEC}}": docs.get("spec", ""),
+        "{{SUMMARY}}": docs.get("summary", ""),
         "{{PREV_RUN_OUTPUT}}": prev_section,
-        "{{TODO_PATH}}": doc_paths["todo"],
-        "{{PROGRESS_PATH}}": doc_paths["progress"],
-        "{{OPINIONS_PATH}}": doc_paths["opinions"],
-        "{{SPEC_PATH}}": doc_paths["spec"],
-        "{{SUMMARY_PATH}}": doc_paths["summary"],
+        "{{TODO_PATH}}": doc_paths.get("todo", ""),
+        "{{PROGRESS_PATH}}": doc_paths.get("progress", ""),
+        "{{OPINIONS_PATH}}": doc_paths.get("opinions", ""),
+        "{{SPEC_PATH}}": doc_paths.get("spec", ""),
+        "{{SUMMARY_PATH}}": doc_paths.get("summary", ""),
     }
     for marker, value in replacements.items():
         template = template.replace(marker, value)
     return template
+
+
+def build_prompt(
+    config: Config, docs: DocsManager, prev_run_output: Optional[str]
+) -> str:
+    doc_paths = build_doc_paths(config)
+    template = load_prompt_template(config)
+    doc_contents = {
+        "todo": docs.read_doc("todo"),
+        "progress": docs.read_doc("progress"),
+        "opinions": docs.read_doc("opinions"),
+        "spec": docs.read_doc("spec"),
+        "summary": docs.read_doc("summary"),
+    }
+    return build_prompt_text(
+        template=template,
+        docs=doc_contents,
+        doc_paths=doc_paths,
+        prev_run_output=prev_run_output,
+    )
 
 
 def build_final_summary_prompt(
@@ -61,36 +85,19 @@ def build_final_summary_prompt(
     override. It's a separate, purpose-built job.
     """
 
-    def _display_path(path: Path) -> str:
-        try:
-            return str(path.relative_to(config.root))
-        except ValueError:
-            return str(path)
-
-    doc_paths = {
-        "todo": _display_path(config.doc_path("todo")),
-        "progress": _display_path(config.doc_path("progress")),
-        "opinions": _display_path(config.doc_path("opinions")),
-        "spec": _display_path(config.doc_path("spec")),
-        "summary": _display_path(config.doc_path("summary")),
+    doc_paths = build_doc_paths(config)
+    doc_contents = {
+        "todo": docs.read_doc("todo"),
+        "progress": docs.read_doc("progress"),
+        "opinions": docs.read_doc("opinions"),
+        "spec": docs.read_doc("spec"),
+        "summary": docs.read_doc("summary"),
     }
-
-    template = FINAL_SUMMARY_PROMPT_TEMPLATE
     # Keep a hook for future expansion (template doesn't currently include it).
     _ = prev_run_output
-
-    replacements = {
-        "{{TODO}}": docs.read_doc("todo"),
-        "{{PROGRESS}}": docs.read_doc("progress"),
-        "{{OPINIONS}}": docs.read_doc("opinions"),
-        "{{SPEC}}": docs.read_doc("spec"),
-        "{{SUMMARY}}": docs.read_doc("summary"),
-        "{{TODO_PATH}}": doc_paths["todo"],
-        "{{PROGRESS_PATH}}": doc_paths["progress"],
-        "{{OPINIONS_PATH}}": doc_paths["opinions"],
-        "{{SPEC_PATH}}": doc_paths["spec"],
-        "{{SUMMARY_PATH}}": doc_paths["summary"],
-    }
-    for marker, value in replacements.items():
-        template = template.replace(marker, value)
-    return template
+    return build_prompt_text(
+        template=FINAL_SUMMARY_PROMPT_TEMPLATE,
+        docs=doc_contents,
+        doc_paths=doc_paths,
+        prev_run_output=None,
+    )
