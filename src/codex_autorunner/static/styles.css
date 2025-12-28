@@ -2940,8 +2940,9 @@ button.terminal-text-send-icon.disconnected {
 /* Toast */
 .toast {
   position: fixed;
-  top: calc(8px + env(safe-area-inset-top, 0px));
+  top: calc(8px + env(safe-area-inset-top, 0px) + var(--vv-top, 0px));
   right: 8px;
+  bottom: auto;
   padding: 6px 12px;
   border-radius: var(--radius);
   background: var(--panel);
@@ -4299,7 +4300,8 @@ button.loading::after {
   .toast {
     left: 8px;
     right: 8px;
-    top: calc(8px + var(--mobile-top-pad));
+    top: calc(8px + var(--mobile-top-pad) + var(--vv-top, 0px));
+    bottom: auto;
     text-align: center;
   }
   

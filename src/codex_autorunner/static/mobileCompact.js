@@ -11,6 +11,15 @@ const SEND_BUTTON_SELECTOR = "#doc-chat-send, #terminal-text-send";
 let baseViewportHeight = window.innerHeight;
 let viewportPoll = null;
 
+function ensureComposeEnterHint() {
+  const inputs = Array.from(document.querySelectorAll(COMPOSE_INPUT_SELECTOR));
+  for (const input of inputs) {
+    if (!(input instanceof HTMLTextAreaElement)) continue;
+    input.enterKeyHint = "enter";
+    input.setAttribute("enterkeyhint", "enter");
+  }
+}
+
 function isVisible(el) {
   if (!el) return false;
   return Boolean(el.offsetParent || el.getClientRects().length);
@@ -37,16 +46,18 @@ function updateViewportInset() {
     baseViewportHeight = viewportHeight;
   }
   let bottom = 0;
-  if (window.visualViewport) {
-    const vv = window.visualViewport;
-    const referenceHeight = Math.max(baseViewportHeight, viewportHeight);
-    bottom = Math.max(0, referenceHeight - (vv.height + vv.offsetTop));
+  let top = 0;
+  const vv = window.visualViewport;
+  if (vv) {
+    const layoutHeight = document.documentElement?.clientHeight || viewportHeight;
+    const vvOffset = Math.max(0, vv.offsetTop);
+    top = vvOffset;
+    bottom = Math.max(0, layoutHeight - (vv.height + vvOffset));
   }
-  const keyboardFallback = window.visualViewport
-    ? 0
-    : Math.max(0, baseViewportHeight - viewportHeight);
+  const keyboardFallback = vv ? 0 : Math.max(0, baseViewportHeight - viewportHeight);
   const inset = bottom || keyboardFallback;
   document.documentElement.style.setProperty("--vv-bottom", `${inset}px`);
+  document.documentElement.style.setProperty("--vv-top", `${top}px`);
 }
 
 function isTerminalComposeOpen() {
@@ -122,6 +133,7 @@ function isTerminalTextarea(el) {
 
 export function initMobileCompact() {
   setMobileChromeHidden(false);
+  ensureComposeEnterHint();
 
   const maybeHide = () => {
     if (!isMobileViewport()) return;
@@ -168,6 +180,7 @@ export function initMobileCompact() {
       const target = e.target;
       if (!(target instanceof HTMLElement)) return;
       if (!target.matches(COMPOSE_INPUT_SELECTOR)) return;
+      ensureComposeEnterHint();
       updateViewportInset();
       updateComposeFixed();
       setMobileChromeHidden(false);

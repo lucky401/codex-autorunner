@@ -1712,17 +1712,20 @@ export class TerminalManager {
       this.baseViewportHeight = viewportHeight;
     }
     let bottom = 0;
-    if (window.visualViewport) {
-      const vv = window.visualViewport;
-      const referenceHeight = Math.max(this.baseViewportHeight, viewportHeight);
-      bottom = Math.max(0, referenceHeight - (vv.height + vv.offsetTop));
+    let top = 0;
+    const vv = window.visualViewport;
+    if (vv) {
+      const layoutHeight = document.documentElement?.clientHeight || viewportHeight;
+      const vvOffset = Math.max(0, vv.offsetTop);
+      top = vvOffset;
+      bottom = Math.max(0, layoutHeight - (vv.height + vvOffset));
     }
-    const keyboardFallback = window.visualViewport
-      ? 0
-      : Math.max(0, this.baseViewportHeight - viewportHeight);
+    const keyboardFallback = vv ? 0 : Math.max(0, this.baseViewportHeight - viewportHeight);
     const inset = bottom || keyboardFallback;
     document.documentElement.style.setProperty("--vv-bottom", `${inset}px`);
+    document.documentElement.style.setProperty("--vv-top", `${top}px`);
     this.terminalSectionEl?.style.setProperty("--vv-bottom", `${inset}px`);
+    this.terminalSectionEl?.style.setProperty("--vv-top", `${top}px`);
   }
 
   _updateComposerSticky() {
@@ -2519,12 +2522,12 @@ export class TerminalManager {
 
     this.textInputTextareaEl.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || e.isComposing) return;
-      const sendOnEnter = this.isTouchDevice() && isMobileViewport();
-      const shouldSend = sendOnEnter ? !e.shiftKey : e.metaKey || e.ctrlKey;
+      const shouldSend = e.metaKey || e.ctrlKey;
       if (shouldSend) {
         e.preventDefault();
         triggerSend();
       }
+      e.stopPropagation();
     });
 
     const captureSelection = () => this._captureTextInputSelection();
