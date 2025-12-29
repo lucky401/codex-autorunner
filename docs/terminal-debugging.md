@@ -34,6 +34,7 @@ With `terminal_debug=1`, the browser console logs:
 - `first_live_reset` — whether we reset on first live data after empty replay
 - `alt-buffer state` — whether xterm is in the alternate buffer and the current
   alt scrollback size
+- `buffer snapshot` — buffer type/length/baseY/viewportY/rows after replay end
 
 ## Server attach debug
 
@@ -47,9 +48,15 @@ server logs one line on attach with:
 ## Common failure modes
 
 - No scrollback on iOS while attached:
+  - Confirm that the terminal scroll container is handling touch scrolling.
+    We install a touch handler that maps swipes to `scrollLines` and apply
+    `overscroll-behavior-y: contain` to prevent pull-to-refresh.
   - Check `alt-buffer state` logs. If `active=true` and `scrollback=0`, the
     client is in alt-screen without captured scrollback. This usually points
     to replay/render timing or missing alt-screen tracking.
+  - Check `buffer snapshot` logs. If `length` is close to `rows` with `alt=false`,
+    the issue is likely scroll UX (container not scrolling) rather than missing
+    server replay data.
   - If `active=false` but the UI is a TUI, the server may have misdetected
     alt-screen state or the session started before alt-screen tracking was
     added. Restart the terminal session to refresh tracking.

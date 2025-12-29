@@ -1777,6 +1777,8 @@ export class TerminalManager {
     if (this.touchScrollInstalled || !this.term || !this.term.element) return;
     if (!this.isTouchDevice()) return;
 
+    // Mobile Safari doesn't scroll the canvas-based xterm viewport reliably,
+    // so translate touch movement into scrollLines when scrollback exists.
     const viewport = this.term.element.querySelector(".xterm-viewport");
     if (!viewport) return;
 
@@ -1799,6 +1801,10 @@ export class TerminalManager {
     const handleTouchMove = (event) => {
       if (!event.touches || event.touches.length !== 1) return;
       if (!this.term || this.mobileViewActive) return;
+      const mouseTracking = this.term?.modes?.mouseTrackingMode;
+      if (mouseTracking && mouseTracking !== "none") {
+        return;
+      }
       const buffer = this.term.buffer?.active;
       if (!buffer || buffer.baseY <= 0) return;
       const currentY = event.touches[0].clientY;
