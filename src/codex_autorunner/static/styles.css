@@ -2809,6 +2809,7 @@ label {
   height: calc(100vh - 100px);
   height: calc(100dvh - 100px);
   overflow: hidden;
+  overscroll-behavior-y: contain;
   touch-action: pan-y;
 }
 
@@ -2833,6 +2834,11 @@ label {
 
 .terminal-container .xterm {
   padding: 6px;
+}
+
+.terminal-container .xterm-viewport {
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
 }
 
 .terminal-jump-btn {
@@ -4349,6 +4355,8 @@ button.loading::after {
     overflow-wrap: anywhere;
     color: var(--text);
     -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
   }
 
   .mobile-terminal-view.hidden {

@@ -261,13 +261,12 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             safe_log(
                 logger,
                 logging.INFO,
-                "Terminal connect debug: mode=%s session=%s attach=%s alt_screen=%s buffer_bytes=%s buffer_chunks=%s",
-                mode,
-                session_id,
-                attach_only,
-                active_session.alt_screen_active,
-                buffer_bytes,
-                buffer_chunks,
+                (
+                    "Terminal connect debug: mode="
+                    f"{mode} session={session_id} attach={attach_only} "
+                    f"alt_screen={active_session.alt_screen_active} "
+                    f"buffer_bytes={buffer_bytes} buffer_chunks={buffer_chunks}"
+                ),
             )
         queue = active_session.add_subscriber()
 

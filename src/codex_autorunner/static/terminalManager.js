@@ -317,6 +317,26 @@ export class TerminalManager {
     }
   }
 
+  _logBufferSnapshot(reason) {
+    if (!this.terminalDebug || !this.term) return;
+    const buffer = this.term.buffer?.active;
+    this._logTerminalDebug("buffer snapshot", {
+      reason,
+      alt: this._isAltBufferActive(),
+      type: buffer && typeof buffer.type === "string" ? buffer.type : null,
+      length: buffer ? buffer.length : null,
+      baseY: buffer ? buffer.baseY : null,
+      viewportY: buffer ? buffer.viewportY : null,
+      cursorY: buffer ? buffer.cursorY : null,
+      rows: this.term.rows,
+      cols: this.term.cols,
+      scrollback:
+        typeof this.term.options?.scrollback === "number"
+          ? this.term.options.scrollback
+          : null,
+    });
+  }
+
   _resetTerminalDebugCounters() {
     this.replayChunkCount = 0;
     this.replayByteCount = 0;
@@ -2066,9 +2086,15 @@ export class TerminalManager {
                 this._scheduleMobileViewRender();
                 this.term.write(chunk);
               }
+              if (this.terminalDebug) {
+                this.term.write("", () => {
+                  this._logBufferSnapshot("replay_end_post");
+                });
+              }
             } else {
               this.clearTranscriptOnFirstLiveData = !this.transcriptResetForConnect;
               this.pendingReplayPrelude = shouldApplyPrelude ? prelude : null;
+              this._logBufferSnapshot("replay_end_empty");
             }
           } else if (payload.type === "ack") {
             const ackId = payload.id;
