@@ -1477,6 +1477,11 @@ export class TerminalManager {
   }
 
   _scheduleMobileViewRender() {
+    if (this.awaitingReplayEnd) {
+      // Capture alt-screen scrollback during replay before renders coalesce.
+      this._renderMobileView();
+      return;
+    }
     this.mobileViewDirty = true;
     if (this.mobileViewRaf) return;
     this.mobileViewRaf = requestAnimationFrame(() => {
