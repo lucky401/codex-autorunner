@@ -55,8 +55,25 @@ class PTYSession:
     def write(self, data: bytes) -> None:
         if self.closed:
             return
-        os.write(self.fd, data)
-        self.last_active = time.time()
+        view = memoryview(data)
+        offset = 0
+        total = len(view)
+        while offset < total:
+            try:
+                written = os.write(self.fd, view[offset : offset + 16384])
+            except BlockingIOError:
+                select.select([], [self.fd], [], 0.1)
+                continue
+            except InterruptedError:
+                continue
+            except OSError:
+                self.terminate()
+                return
+            if written <= 0:
+                break
+            offset += written
+        if offset:
+            self.last_active = time.time()
 
     def read(self, max_bytes: int = 4096) -> bytes:
         if self.closed:
