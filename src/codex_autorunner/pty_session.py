@@ -29,6 +29,8 @@ ALT_SCREEN_MAX_LEN = max(len(seq) for seq, _state in ALT_SCREEN_SEQS)
 PTY_WRITE_CHUNK_BYTES = 16 * 1024
 # Cap per-flush work to keep the event loop responsive.
 PTY_WRITE_FLUSH_MAX_BYTES = 256 * 1024
+# Hard cap to prevent unbounded buffering when the PTY can't accept input.
+PTY_PENDING_MAX_BYTES = 1024 * 1024
 
 
 def default_env(env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -167,6 +169,11 @@ class ActiveSession:
         """Queue terminal input and flush without blocking the event loop."""
         if self.pty.closed or not data:
             return
+        if len(self._pending_input) >= PTY_PENDING_MAX_BYTES:
+            return
+        remaining = PTY_PENDING_MAX_BYTES - len(self._pending_input)
+        if len(data) > remaining:
+            data = data[-remaining:]
         self._pending_input.extend(data)
         self._flush_pending_input()
 
