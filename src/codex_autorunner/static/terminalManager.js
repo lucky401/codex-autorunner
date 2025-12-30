@@ -268,7 +268,9 @@ export class TerminalManager {
     this.jumpBottomBtn?.addEventListener("click", () => {
       this.term?.scrollToBottom();
       this._updateJumpBottomVisibility();
-      this.term?.focus();
+      if (!this.isTouchDevice()) {
+        this.term?.focus();
+      }
     });
     this._updateButtons(false);
     this._setStatus("Disconnected");
