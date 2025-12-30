@@ -140,8 +140,32 @@ plist_path.write_text(new_text)
 PY
 }
 
+_service_pid() {
+  launchctl print "${domain}" 2>/dev/null | awk '/pid =/ {print $3; exit}'
+}
+
+_wait_pid_exit() {
+  local pid start
+  pid="$1"
+  start="$(date +%s)"
+  while kill -0 "${pid}" >/dev/null 2>&1; do
+    if (( $(date +%s) - start >= 5 )); then
+      return 1
+    fi
+    sleep 0.1
+  done
+  return 0
+}
+
 _reload() {
+  local pid
+  pid="$(_service_pid)"
   launchctl unload -w "${PLIST_PATH}" >/dev/null 2>&1 || true
+  if [[ -n "${pid}" && "${pid}" != "0" ]]; then
+    if ! _wait_pid_exit "${pid}"; then
+      kill -9 "${pid}" >/dev/null 2>&1 || true
+    fi
+  fi
   launchctl load -w "${PLIST_PATH}" >/dev/null
   launchctl kickstart -k "${domain}" >/dev/null
 }
