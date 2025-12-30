@@ -25,7 +25,7 @@ const TEXT_INPUT_STORAGE_KEYS = Object.freeze({
 
 const TEXT_INPUT_SIZE_LIMITS = Object.freeze({
   warnBytes: 100 * 1024,
-  maxBytes: 500 * 1024,
+  chunkBytes: 256 * 1024,
 });
 
 const TEXT_INPUT_HOOK_STORAGE_PREFIX = "codex_terminal_text_input_hook:";
@@ -173,6 +173,7 @@ export class TerminalManager {
     this.textInputImageInputEl = null;
     this.textInputEnabled = false;
     this.textInputPending = null;
+    this.textInputPendingChunks = null;
     this.textInputSendBtnLabel = null;
     this.textInputHintBase = null;
     this.textInputHooks = [];
@@ -2090,17 +2091,7 @@ export class TerminalManager {
       if (isResume) this.term?.write("\r\nLaunching codex resume...\r\n");
 
       if (this.textInputPending) {
-        try {
-          this.socket.send(
-            JSON.stringify({
-              type: "input",
-              id: this.textInputPending.id,
-              data: this.textInputPending.payload,
-            })
-          );
-        } catch (_err) {
-          // ignore
-        }
+        this._sendPendingTextInputChunk();
       }
     };
 
@@ -2164,26 +2155,7 @@ export class TerminalManager {
               this._logBufferSnapshot("replay_end_empty");
             }
           } else if (payload.type === "ack") {
-            const ackId = payload.id;
-            if (this.textInputPending && ackId === this.textInputPending.id) {
-              if (payload.ok === false) {
-                flash(payload.message || "Send failed; your text is preserved", "error");
-                this._updateTextInputSendUi();
-              } else {
-                const shouldSendEnter = this.textInputPending.sendEnter;
-                const current = this.textInputTextareaEl?.value || "";
-                if (current === this.textInputPending.originalText) {
-                  if (this.textInputTextareaEl) {
-                    this.textInputTextareaEl.value = "";
-                    this._persistTextInputDraft();
-                  }
-                }
-                if (shouldSendEnter) {
-                  this._sendEnterForTextInput();
-                }
-                this._clearPendingTextInput();
-              }
-            }
+            this._handleTextInputAck(payload);
           } else if (payload.type === "exit") {
             this.term?.write(
               `\r\n[session ended${
@@ -2388,6 +2360,56 @@ export class TerminalManager {
     return (text || "").replace(/\r\n?/g, "\n");
   }
 
+  _makeTextInputId() {
+    return (
+      (window.crypto &&
+        typeof window.crypto.randomUUID === "function" &&
+        window.crypto.randomUUID()) ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    );
+  }
+
+  _splitTextByBytes(text, maxBytes) {
+    const chunkLimit = Math.max(
+      4,
+      Number.isFinite(maxBytes) ? maxBytes : TEXT_INPUT_SIZE_LIMITS.chunkBytes
+    );
+    const chunks = [];
+    let totalBytes = 0;
+    let chunkBytes = 0;
+    let chunkParts = [];
+
+    for (let i = 0; i < text.length; ) {
+      const codePoint = text.codePointAt(i);
+      const charLen = codePoint > 0xffff ? 2 : 1;
+      const charBytes =
+        codePoint <= 0x7f
+          ? 1
+          : codePoint <= 0x7ff
+            ? 2
+            : codePoint <= 0xffff
+              ? 3
+              : 4;
+
+      if (chunkBytes + charBytes > chunkLimit && chunkParts.length) {
+        chunks.push(chunkParts.join(""));
+        chunkParts = [];
+        chunkBytes = 0;
+      }
+
+      chunkParts.push(text.slice(i, i + charLen));
+      chunkBytes += charBytes;
+      totalBytes += charBytes;
+      i += charLen;
+    }
+
+    if (chunkParts.length) {
+      chunks.push(chunkParts.join(""));
+    }
+
+    return { chunks, totalBytes };
+  }
+
   _updateTextInputSendUi() {
     if (!this.textInputSendBtn) return;
     const connected = Boolean(this.socket && this.socket.readyState === WebSocket.OPEN);
@@ -2445,7 +2467,27 @@ export class TerminalManager {
       if (typeof parsed.id !== "string" || typeof parsed.payload !== "string") return null;
       if (typeof parsed.originalText !== "string") return null;
       if (parsed.sendEnter !== undefined && typeof parsed.sendEnter !== "boolean") return null;
-      return parsed;
+      const pending = {
+        id: parsed.id,
+        payload: parsed.payload,
+        originalText: parsed.originalText,
+        sentAt: typeof parsed.sentAt === "number" ? parsed.sentAt : Date.now(),
+        lastRetryAt: typeof parsed.lastRetryAt === "number" ? parsed.lastRetryAt : null,
+        sendEnter: parsed.sendEnter === true,
+        chunkSize:
+          Number.isFinite(parsed.chunkSize) && parsed.chunkSize > 0
+            ? parsed.chunkSize
+            : TEXT_INPUT_SIZE_LIMITS.chunkBytes,
+        chunkIndex: Number.isInteger(parsed.chunkIndex) ? parsed.chunkIndex : 0,
+        chunkIds: Array.isArray(parsed.chunkIds)
+          ? parsed.chunkIds.filter((id) => typeof id === "string")
+          : null,
+        inFlightId: typeof parsed.inFlightId === "string" ? parsed.inFlightId : null,
+        totalBytes: Number.isFinite(parsed.totalBytes) ? parsed.totalBytes : null,
+      };
+      if (pending.chunkIndex < 0) pending.chunkIndex = 0;
+      if (pending.chunkIds && pending.chunkIds.length === 0) pending.chunkIds = null;
+      return pending;
     } catch (_err) {
       return null;
     }
@@ -2461,10 +2503,14 @@ export class TerminalManager {
 
   _queuePendingTextInput(payload, originalText, options = {}) {
     const sendEnter = Boolean(options.sendEnter);
-    const id =
-      (window.crypto && typeof window.crypto.randomUUID === "function" && window.crypto.randomUUID()) ||
-      `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const { chunks, totalBytes } = this._splitTextByBytes(
+      payload,
+      TEXT_INPUT_SIZE_LIMITS.chunkBytes
+    );
+    const chunkIds = chunks.map(() => this._makeTextInputId());
+    const id = this._makeTextInputId();
 
+    this.textInputPendingChunks = chunks;
     this.textInputPending = {
       id,
       payload,
@@ -2472,6 +2518,11 @@ export class TerminalManager {
       sentAt: Date.now(),
       lastRetryAt: null,
       sendEnter,
+      chunkIndex: 0,
+      chunkIds,
+      chunkSize: TEXT_INPUT_SIZE_LIMITS.chunkBytes,
+      inFlightId: null,
+      totalBytes,
     };
     this._savePendingTextInput(this.textInputPending);
     this._updateTextInputSendUi();
@@ -2480,12 +2531,137 @@ export class TerminalManager {
 
   _clearPendingTextInput() {
     this.textInputPending = null;
+    this.textInputPendingChunks = null;
     try {
       localStorage.removeItem(TEXT_INPUT_STORAGE_KEYS.pending);
     } catch (_err) {
       // ignore
     }
     this._updateTextInputSendUi();
+  }
+
+  _ensurePendingTextInputChunks() {
+    if (!this.textInputPending) return null;
+    if (Array.isArray(this.textInputPendingChunks) && this.textInputPendingChunks.length) {
+      return this.textInputPendingChunks;
+    }
+
+    const pending = this.textInputPending;
+    const chunkSize =
+      Number.isFinite(pending.chunkSize) && pending.chunkSize > 0
+        ? pending.chunkSize
+        : TEXT_INPUT_SIZE_LIMITS.chunkBytes;
+    const { chunks, totalBytes } = this._splitTextByBytes(pending.payload || "", chunkSize);
+    if (!chunks.length) {
+      this._clearPendingTextInput();
+      return null;
+    }
+
+    this.textInputPendingChunks = chunks;
+    if (!Array.isArray(pending.chunkIds) || pending.chunkIds.length !== chunks.length) {
+      pending.chunkIds = chunks.map(() => this._makeTextInputId());
+    }
+    if (!Number.isInteger(pending.chunkIndex) || pending.chunkIndex < 0) {
+      pending.chunkIndex = 0;
+    }
+    if (pending.chunkIndex >= chunks.length) {
+      pending.chunkIndex = Math.max(0, chunks.length - 1);
+    }
+    if (
+      pending.inFlightId &&
+      (!Array.isArray(pending.chunkIds) || !pending.chunkIds.includes(pending.inFlightId))
+    ) {
+      pending.inFlightId = null;
+    }
+    pending.totalBytes = totalBytes;
+    this._savePendingTextInput(pending);
+    return chunks;
+  }
+
+  _sendPendingTextInputChunk() {
+    if (!this.textInputPending) return false;
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return false;
+
+    const chunks = this._ensurePendingTextInputChunks();
+    if (!chunks || !chunks.length) return false;
+
+    const pending = this.textInputPending;
+    const index = Number.isInteger(pending.chunkIndex) ? pending.chunkIndex : 0;
+    if (index >= chunks.length) {
+      this._clearPendingTextInput();
+      return false;
+    }
+
+    const chunkId =
+      pending.inFlightId ||
+      (Array.isArray(pending.chunkIds) ? pending.chunkIds[index] : null) ||
+      this._makeTextInputId();
+    pending.inFlightId = chunkId;
+    if (Array.isArray(pending.chunkIds)) {
+      pending.chunkIds[index] = chunkId;
+    } else {
+      pending.chunkIds = [chunkId];
+    }
+    this._savePendingTextInput(pending);
+
+    try {
+      this.socket.send(
+        JSON.stringify({
+          type: "input",
+          id: chunkId,
+          data: chunks[index],
+        })
+      );
+      this._markSessionActive();
+      return true;
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  _handleTextInputAck(payload) {
+    if (!this.textInputPending || !payload) return false;
+    const ackId = payload.id;
+    if (!ackId || typeof ackId !== "string") return false;
+
+    const chunks = this._ensurePendingTextInputChunks();
+    if (!chunks || !chunks.length) return false;
+
+    const pending = this.textInputPending;
+    const index = Number.isInteger(pending.chunkIndex) ? pending.chunkIndex : 0;
+    const expectedId =
+      pending.inFlightId ||
+      (Array.isArray(pending.chunkIds) ? pending.chunkIds[index] : null);
+    if (ackId !== expectedId) return false;
+
+    if (payload.ok === false) {
+      flash(payload.message || "Send failed; your text is preserved", "error");
+      this._updateTextInputSendUi();
+      return true;
+    }
+
+    pending.inFlightId = null;
+    pending.chunkIndex = index + 1;
+    this._savePendingTextInput(pending);
+
+    if (pending.chunkIndex >= chunks.length) {
+      const shouldSendEnter = pending.sendEnter;
+      const current = this.textInputTextareaEl?.value || "";
+      if (current === pending.originalText) {
+        if (this.textInputTextareaEl) {
+          this.textInputTextareaEl.value = "";
+          this._persistTextInputDraft();
+        }
+      }
+      if (shouldSendEnter) {
+        this._sendEnterForTextInput();
+      }
+      this._clearPendingTextInput();
+      return true;
+    }
+
+    this._sendPendingTextInputChunk();
+    return true;
   }
 
   _sendText(text, options = {}) {
@@ -2502,23 +2678,23 @@ export class TerminalManager {
       payload = `${payload}\n`;
     }
 
-    const encoded = textEncoder.encode(payload);
-    if (encoded.byteLength > TEXT_INPUT_SIZE_LIMITS.maxBytes) {
+    const { chunks, totalBytes } = this._splitTextByBytes(
+      payload,
+      TEXT_INPUT_SIZE_LIMITS.chunkBytes
+    );
+    if (!chunks.length) return false;
+    if (totalBytes > TEXT_INPUT_SIZE_LIMITS.warnBytes) {
+      const chunkNote = chunks.length > 1 ? ` in ${chunks.length} chunks` : "";
       flash(
-        `Text is too large to send (${Math.round(encoded.byteLength / 1024)}KB).`,
-        "error"
-      );
-      return false;
-    }
-    if (encoded.byteLength > TEXT_INPUT_SIZE_LIMITS.warnBytes) {
-      flash(
-        `Large paste (${Math.round(encoded.byteLength / 1024)}KB); sending may be slow.`,
+        `Large paste (${Math.round(totalBytes / 1024)}KB); sending${chunkNote} may be slow.`,
         "info"
       );
     }
 
     this._markSessionActive();
-    this.socket.send(encoded);
+    for (const chunk of chunks) {
+      this.socket.send(textEncoder.encode(chunk));
+    }
     return true;
   }
 
@@ -2543,25 +2719,21 @@ export class TerminalManager {
       payload = `${payload}\n`;
     }
 
-    const encoded = textEncoder.encode(payload);
-    if (encoded.byteLength > TEXT_INPUT_SIZE_LIMITS.maxBytes) {
+    const socketOpen = Boolean(this.socket && this.socket.readyState === WebSocket.OPEN);
+    this._queuePendingTextInput(payload, originalText, { sendEnter });
+
+    const totalBytes = this.textInputPending?.totalBytes || 0;
+    const chunkCount = this.textInputPendingChunks?.length || 0;
+    if (totalBytes > TEXT_INPUT_SIZE_LIMITS.warnBytes) {
+      const chunkNote = chunkCount > 1 ? ` in ${chunkCount} chunks` : "";
       flash(
-        `Text is too large to send (${Math.round(encoded.byteLength / 1024)}KB).`,
-        "error"
-      );
-      return false;
-    }
-    if (encoded.byteLength > TEXT_INPUT_SIZE_LIMITS.warnBytes) {
-      flash(
-        `Large paste (${Math.round(encoded.byteLength / 1024)}KB); sending may be slow.`,
+        `Large paste (${Math.round(totalBytes / 1024)}KB); sending${chunkNote} may be slow.`,
         "info"
       );
     }
 
-    const socketOpen = Boolean(this.socket && this.socket.readyState === WebSocket.OPEN);
     if (!socketOpen) {
       const savedSessionId = this._getSavedSessionId();
-      this._queuePendingTextInput(payload, originalText, { sendEnter });
       if (!this.socket || this.socket.readyState !== WebSocket.CONNECTING) {
         if (savedSessionId) {
           this.connect({ mode: "attach", quiet: true });
@@ -2572,23 +2744,12 @@ export class TerminalManager {
       return true;
     }
 
-    const id = this._queuePendingTextInput(payload, originalText, { sendEnter });
-
-    try {
-      this.socket.send(
-        JSON.stringify({
-          type: "input",
-          id,
-          data: payload,
-        })
-      );
-      this._markSessionActive();
-      return true;
-    } catch (_err) {
+    if (!this._sendPendingTextInputChunk()) {
       flash("Send failed; your text is preserved", "error");
       this._updateTextInputSendUi();
       return false;
     }
+    return true;
   }
 
   _retryPendingTextInput() {
@@ -2612,16 +2773,9 @@ export class TerminalManager {
     }
     this.textInputPending.lastRetryAt = now;
     this._savePendingTextInput(this.textInputPending);
-    try {
-      this.socket.send(
-        JSON.stringify({
-          type: "input",
-          id: this.textInputPending.id,
-          data: this.textInputPending.payload,
-        })
-      );
+    if (this._sendPendingTextInputChunk()) {
       flash("Retrying send…", "info");
-    } catch (_err) {
+    } else {
       flash("Retry failed; your text is preserved", "error");
     }
   }
