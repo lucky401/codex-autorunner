@@ -841,6 +841,13 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             polling_cfg.get("timeout_seconds"), int
         ):
             raise ConfigError("telegram_bot.polling.timeout_seconds must be an integer")
+        if (
+            isinstance(polling_cfg.get("timeout_seconds"), int)
+            and polling_cfg.get("timeout_seconds") <= 0
+        ):
+            raise ConfigError(
+                "telegram_bot.polling.timeout_seconds must be greater than 0"
+            )
         if "allowed_updates" in polling_cfg and not isinstance(
             polling_cfg.get("allowed_updates"), list
         ):

@@ -7,9 +7,13 @@ import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Iterable, Optional
+from typing import Any, Awaitable, Iterable, Optional, Sequence
 
-from .app_server_client import ApprovalDecision, CodexAppServerClient
+from .app_server_client import (
+    ApprovalDecision,
+    CodexAppServerClient,
+    CodexAppServerError,
+)
 from .logging_utils import log_event
 from .manifest import load_manifest
 from .telegram_adapter import (
@@ -38,7 +42,7 @@ from .telegram_state import (
     normalize_approval_mode,
     topic_key,
 )
-from .utils import subprocess_env
+from .utils import resolve_executable, subprocess_env
 
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
 DEFAULT_POLL_TIMEOUT_SECONDS = 30
@@ -49,6 +53,8 @@ DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
 DEFAULT_STATE_FILE = ".codex-autorunner/telegram_state.json"
 DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
+APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
+APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
 
 
 class TelegramBotConfigError(Exception):
@@ -211,6 +217,8 @@ class TelegramBotConfig:
             issues.append("no allowed user ids configured (set allowed_user_ids)")
         if not self.app_server_command:
             issues.append("app_server_command must be set")
+        if self.poll_timeout_seconds <= 0:
+            issues.append("poll_timeout_seconds must be greater than 0")
         if issues:
             raise TelegramBotConfigError("; ".join(issues))
 
@@ -257,10 +265,12 @@ class TelegramBotService:
             config.state_file, default_approval_mode=config.defaults.approval_mode
         )
         self._router = TopicRouter(self._store)
+        app_server_cwd = hub_root or config.root
+        app_server_env = _app_server_env(config.app_server_command, app_server_cwd)
         self._client = CodexAppServerClient(
             config.app_server_command,
-            cwd=hub_root or config.root,
-            env=subprocess_env(),
+            cwd=app_server_cwd,
+            env=app_server_env,
             approval_handler=self._handle_approval_request,
             logger=self._logger,
         )
@@ -281,7 +291,7 @@ class TelegramBotService:
                 f"Unsupported telegram_bot.mode '{self._config.mode}'"
             )
         self._config.validate()
-        await self._client.start()
+        await self._start_app_server_with_backoff()
         await self._prime_bot_identity()
         log_event(
             self._logger,
@@ -325,6 +335,23 @@ class TelegramBotService:
             username = payload.get("username")
             if isinstance(username, str) and username:
                 self._bot_username = username
+
+    async def _start_app_server_with_backoff(self) -> None:
+        delay = APP_SERVER_START_BACKOFF_INITIAL_SECONDS
+        while True:
+            try:
+                await self._client.start()
+                return
+            except CodexAppServerError as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.start_failed",
+                    delay_seconds=round(delay, 2),
+                    exc=exc,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, APP_SERVER_START_BACKOFF_MAX_SECONDS)
 
     def _spawn_task(self, coro: Awaitable[Any]) -> None:
         task = asyncio.create_task(coro)
@@ -1106,6 +1133,21 @@ def _parse_command(raw: Any) -> list[str]:
     if isinstance(raw, str):
         return [part for part in shlex.split(raw) if part]
     return []
+
+
+def _app_server_env(command: Sequence[str], cwd: Path) -> dict[str, str]:
+    extra_paths: list[str] = []
+    if command:
+        binary = command[0]
+        resolved = resolve_executable(binary)
+        candidate: Optional[Path] = Path(resolved) if resolved else None
+        if candidate is None:
+            candidate = Path(binary).expanduser()
+            if not candidate.is_absolute():
+                candidate = (cwd / candidate).resolve()
+        if candidate.exists():
+            extra_paths.append(str(candidate.parent))
+    return subprocess_env(extra_paths=extra_paths)
 
 
 def _parse_int_list(raw: Any) -> list[int]:

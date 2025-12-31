@@ -11,6 +11,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
   - `CAR_TELEGRAM_CHAT_ID`
   - `OPENAI_API_KEY` (or the Codex-required key)
   - `CAR_TELEGRAM_APP_SERVER_COMMAND` (optional full command, e.g. `/opt/homebrew/bin/codex app-server`)
+- If the app-server command is a script (ex: Node-based `codex`), prefer an absolute path so the bot can prepend its directory to `PATH` under launchd.
 - Configure `telegram_bot` in `codex-autorunner.yml` or `.codex-autorunner/config.yml`.
 - Ensure `telegram_bot.allowed_user_ids` includes your Telegram user id.
 
@@ -41,6 +42,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
   - `telegram.send_message`
   - `telegram.turn.completed`
 - App-server events are logged with `app_server.*` events.
+- Startup retries log `telegram.app_server.start_failed` with the next backoff delay.
 
 ## Troubleshooting
 
@@ -54,6 +56,9 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - Turns failing:
   - Check `telegram.turn.failed` and `app_server.*` logs.
   - Verify the Codex app-server is installed and in `telegram_bot.app_server_command` or `CAR_TELEGRAM_APP_SERVER_COMMAND`.
+- App-server disconnect loops:
+  - Look for repeated `app_server.disconnected` or `telegram.app_server.start_failed` events.
+  - Confirm the `codex app-server` binary is healthy/compatible with this autorunner build.
 - Approvals not appearing:
   - Ensure `/approvals safe` is set on the topic.
 

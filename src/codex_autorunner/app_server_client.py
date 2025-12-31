@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 from importlib import metadata as importlib_metadata
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,10 @@ APPROVAL_METHODS = {
     "item/commandExecution/requestApproval",
     "item/fileChange/requestApproval",
 }
+
+_RESTART_BACKOFF_INITIAL_SECONDS = 0.5
+_RESTART_BACKOFF_MAX_SECONDS = 30.0
+_RESTART_BACKOFF_JITTER_RATIO = 0.1
 
 
 class CodexAppServerError(Exception):
@@ -104,15 +109,27 @@ class CodexAppServerClient:
         self._turns: Dict[str, _TurnState] = {}
         self._next_id = 1
         self._initialized = False
+        self._initializing = False
         self._closed = False
         self._disconnected = asyncio.Event()
         self._disconnected.set()
+        self._client_version = _client_version()
+        self._include_client_version = True
+        self._restart_task: Optional[asyncio.Task] = None
+        self._restart_backoff_seconds = _RESTART_BACKOFF_INITIAL_SECONDS
 
     async def start(self) -> None:
         await self._ensure_process()
 
     async def close(self) -> None:
         self._closed = True
+        if self._restart_task is not None:
+            self._restart_task.cancel()
+            try:
+                await self._restart_task
+            except asyncio.CancelledError:
+                pass
+            self._restart_task = None
         await self._terminate_process()
         self._fail_pending(CodexAppServerDisconnected("Client closed"))
 
@@ -249,15 +266,39 @@ class CodexAppServerClient:
         self._initialized = False
 
     async def _initialize_handshake(self) -> None:
-        params = {
-            "clientInfo": {
-                "name": "codex-autorunner",
-                "version": _client_version(),
-            }
-        }
-        await self._request_raw("initialize", params=params)
+        client_info: Dict[str, Any] = {"name": "codex-autorunner"}
+        if self._include_client_version:
+            client_info["version"] = self._client_version
+        params = {"clientInfo": client_info}
+        self._initializing = True
+        try:
+            await self._request_raw("initialize", params=params)
+        except CodexAppServerResponseError as exc:
+            if self._include_client_version:
+                self._include_client_version = False
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.initialize.retry",
+                    reason="response_error",
+                    error_code=exc.code,
+                )
+            raise
+        except CodexAppServerDisconnected:
+            if self._include_client_version:
+                self._include_client_version = False
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.initialize.retry",
+                    reason="disconnect",
+                )
+            raise
+        finally:
+            self._initializing = False
         await self._send_message(self._build_message("initialized", params=None))
         self._initialized = True
+        self._restart_backoff_seconds = _RESTART_BACKOFF_INITIAL_SECONDS
         log_event(self._logger, logging.INFO, "app_server.initialized")
 
     async def _request_raw(
@@ -538,6 +579,7 @@ class CodexAppServerClient:
 
     async def _handle_disconnect(self) -> None:
         self._initialized = False
+        self._initializing = False
         self._disconnected.set()
         log_event(
             self._logger,
@@ -550,7 +592,7 @@ class CodexAppServerClient:
                 CodexAppServerDisconnected("App-server disconnected")
             )
         if self._auto_restart and not self._closed:
-            asyncio.create_task(self._restart_after_disconnect())
+            self._schedule_restart()
 
     def _fail_pending(self, error: Exception) -> None:
         for future in list(self._pending.values()):
@@ -562,15 +604,44 @@ class CodexAppServerClient:
                 state.future.set_exception(error)
         self._turns.clear()
 
+    def _schedule_restart(self) -> None:
+        if self._restart_task is not None and not self._restart_task.done():
+            return
+        self._restart_task = asyncio.create_task(self._restart_after_disconnect())
+
     async def _restart_after_disconnect(self) -> None:
-        await asyncio.sleep(0.05)
+        delay = max(self._restart_backoff_seconds, _RESTART_BACKOFF_INITIAL_SECONDS)
+        jitter = delay * _RESTART_BACKOFF_JITTER_RATIO
+        if jitter:
+            delay += random.uniform(0, jitter)
+        await asyncio.sleep(delay)
         if self._closed:
             return
         try:
             await self._ensure_process()
-            log_event(self._logger, logging.INFO, "app_server.restarted")
+            self._restart_backoff_seconds = _RESTART_BACKOFF_INITIAL_SECONDS
+            log_event(
+                self._logger,
+                logging.INFO,
+                "app_server.restarted",
+                delay_seconds=round(delay, 2),
+            )
         except Exception as exc:
-            log_event(self._logger, logging.WARNING, "app_server.restart.failed", exc=exc)
+            next_delay = min(
+                max(self._restart_backoff_seconds * 2, _RESTART_BACKOFF_INITIAL_SECONDS),
+                _RESTART_BACKOFF_MAX_SECONDS,
+            )
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.restart.failed",
+                delay_seconds=round(delay, 2),
+                next_delay_seconds=round(next_delay, 2),
+                exc=exc,
+            )
+            self._restart_backoff_seconds = next_delay
+            if not self._closed:
+                self._schedule_restart()
 
     async def _terminate_process(self) -> None:
         if self._reader_task is not None:
