@@ -16,7 +16,9 @@ set -euo pipefail
 #   PREV_VENV_LINK         symlink path used for rollback (default: ${PIPX_ROOT}/venvs/codex-autorunner.prev)
 #   HEALTH_TIMEOUT_SECONDS seconds to wait for health (default: 30)
 #   HEALTH_INTERVAL_SECONDS poll interval (default: 0.5)
-#   HEALTH_PATH            request path (default: /car/openapi.json)
+#   HEALTH_PATH            request path (default: derived from base_path)
+#   HEALTH_CONNECT_TIMEOUT_SECONDS connection timeout for each health request (default: 2)
+#   HEALTH_REQUEST_TIMEOUT_SECONDS total timeout for each health request (default: 5)
 #   KEEP_OLD_VENVS         how many old next-* venvs to keep (default: 3)
 
 LABEL="${LABEL:-com.codex.autorunner}"
@@ -34,7 +36,9 @@ PREV_VENV_LINK="${PREV_VENV_LINK:-$PIPX_ROOT/venvs/codex-autorunner.prev}"
 
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
 HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-0.5}"
-HEALTH_PATH="${HEALTH_PATH:-/car/openapi.json}"
+HEALTH_CONNECT_TIMEOUT_SECONDS="${HEALTH_CONNECT_TIMEOUT_SECONDS:-2}"
+HEALTH_REQUEST_TIMEOUT_SECONDS="${HEALTH_REQUEST_TIMEOUT_SECONDS:-5}"
+HEALTH_PATH="${HEALTH_PATH:-}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
 
 write_status() {
@@ -170,15 +174,122 @@ _reload() {
   launchctl kickstart -k "${domain}" >/dev/null
 }
 
+_plist_arg_value() {
+  local key
+  key="$1"
+  "${PIPX_PYTHON}" - "$key" "${PLIST_PATH}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+key = sys.argv[1]
+path = Path(sys.argv[2])
+try:
+    text = path.read_text(encoding="utf-8")
+except Exception:
+    sys.exit(0)
+
+pattern = re.compile(r"(?:--%s(?:=|\s+))([^\s<]+)" % re.escape(key))
+match = pattern.search(text)
+if not match:
+    sys.exit(0)
+
+value = match.group(1).strip("\"'")
+if value:
+    sys.stdout.write(value)
+PY
+}
+
+_normalize_base_path() {
+  local base
+  base="$1"
+  if [[ -z "${base}" ]]; then
+    echo ""
+    return
+  fi
+  if [[ "${base:0:1}" != "/" ]]; then
+    base="/${base}"
+  fi
+  base="${base%/}"
+  if [[ "${base}" == "/" ]]; then
+    base=""
+  fi
+  echo "${base}"
+}
+
+_config_base_path() {
+  local root
+  root="$1"
+  "${PIPX_PYTHON}" - "$root" <<'PY'
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except Exception:
+    sys.exit(0)
+
+root = Path(sys.argv[1]).expanduser()
+config_path = root / ".codex-autorunner" / "config.yml"
+if not config_path.exists():
+    sys.exit(0)
+
+try:
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+except Exception:
+    sys.exit(0)
+
+if not isinstance(data, dict):
+    sys.exit(0)
+
+server = data.get("server")
+if isinstance(server, dict):
+    base_path = server.get("base_path")
+    if isinstance(base_path, str) and base_path.strip():
+        sys.stdout.write(base_path.strip())
+PY
+}
+
+_detect_base_path() {
+  local base hub_root
+  base="$(_plist_arg_value base-path)"
+  if [[ -n "${base}" ]]; then
+    _normalize_base_path "${base}"
+    return
+  fi
+  hub_root="$(_plist_arg_value path)"
+  if [[ -z "${hub_root}" ]]; then
+    echo ""
+    return
+  fi
+  base="$(_config_base_path "${hub_root}")"
+  _normalize_base_path "${base}"
+}
+
+if [[ -z "${HEALTH_PATH}" ]]; then
+  base_path="$(_detect_base_path)"
+  if [[ -n "${base_path}" ]]; then
+    HEALTH_PATH="${base_path}/openapi.json"
+  else
+    HEALTH_PATH="/openapi.json"
+  fi
+fi
+
+if [[ "${HEALTH_PATH:0:1}" != "/" ]]; then
+  HEALTH_PATH="/${HEALTH_PATH}"
+fi
+
 _health_check_once() {
   local port url
-  port="$(sed -n 's/.*--port \([0-9][0-9]*\).*/\1/p' "${PLIST_PATH}" | head -n1 || true)"
+  port="$(_plist_arg_value port)"
   if [[ -z "${port}" ]]; then
     port="4173"
   fi
   # Always use loopback; hub may bind 0.0.0.0. HEALTH_PATH is absolute.
   url="http://127.0.0.1:${port}${HEALTH_PATH}"
-  curl -fsS "${url}" >/dev/null 2>&1
+  curl -fsS --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
+    --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
+    "${url}" >/dev/null 2>&1
 }
 
 _wait_healthy() {
