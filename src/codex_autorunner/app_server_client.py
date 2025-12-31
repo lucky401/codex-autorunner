@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from importlib import metadata as importlib_metadata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Union
@@ -248,7 +249,12 @@ class CodexAppServerClient:
         self._initialized = False
 
     async def _initialize_handshake(self) -> None:
-        params = {"clientInfo": {"name": "codex-autorunner"}}
+        params = {
+            "clientInfo": {
+                "name": "codex-autorunner",
+                "version": _client_version(),
+            }
+        }
         await self._request_raw("initialize", params=params)
         await self._send_message(self._build_message("initialized", params=None))
         self._initialized = True
@@ -621,6 +627,13 @@ def _summarize_params(method: str, params: Optional[Dict[str, Any]]) -> Dict[str
     if method == "thread/list":
         return {}
     return {"param_keys": list(params.keys())[:10]}
+
+
+def _client_version() -> str:
+    try:
+        return importlib_metadata.version("codex-autorunner")
+    except Exception:
+        return "unknown"
 
 
 async def _maybe_await(value: Any) -> Any:
