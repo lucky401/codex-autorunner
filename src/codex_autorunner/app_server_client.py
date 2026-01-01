@@ -189,7 +189,15 @@ class CodexAppServerClient:
 
     async def thread_list(self, **kwargs: Any) -> Any:
         params = kwargs if kwargs else {}
-        return await self.request("thread/list", params)
+        result = await self.request("thread/list", params)
+        if isinstance(result, dict) and "threads" not in result:
+            for key in ("data", "items", "results"):
+                value = result.get(key)
+                if isinstance(value, list):
+                    result = dict(result)
+                    result["threads"] = value
+                    break
+        return result
 
     async def turn_start(
         self,

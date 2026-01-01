@@ -850,7 +850,7 @@ class TelegramBotService:
             )
             return
         try:
-            threads = await self._client.thread_list()
+            threads = await self._client.thread_list(cwd=record.workspace_path)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -867,9 +867,10 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        if isinstance(threads, dict) and isinstance(threads.get("threads"), list):
-            threads = threads.get("threads")
-        filtered = _filter_threads(threads, record.workspace_path)
+        normalized = _coerce_thread_list(threads)
+        filtered = _filter_threads(
+            normalized, record.workspace_path, assume_scoped=True
+        )
         if not filtered:
             await self._send_message(
                 message.chat_id,
@@ -1163,24 +1164,106 @@ def _parse_int_list(raw: Any) -> list[int]:
     return values
 
 
-def _filter_threads(threads: Any, workspace_path: str) -> list[dict[str, Any]]:
+_THREAD_PATH_KEYS = (
+    "cwd",
+    "path",
+    "workspace",
+    "workspace_path",
+    "workspacePath",
+    "projectRoot",
+    "project_root",
+    "repoPath",
+    "repo_path",
+    "root",
+    "rootPath",
+)
+_THREAD_PATH_CONTAINERS = ("workspace", "project", "repo", "metadata", "context", "config")
+
+
+def _coerce_thread_list(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return _normalize_thread_entries(payload)
+    if isinstance(payload, dict):
+        for key in ("threads", "data", "items", "results"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return _normalize_thread_entries(value)
+            if isinstance(value, dict):
+                return _normalize_thread_mapping(value)
+        if any(key in payload for key in ("id", "threadId", "thread_id")):
+            return _normalize_thread_entries([payload])
+    return []
+
+
+def _normalize_thread_entries(entries: Iterable[Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            item = dict(entry)
+            if "id" not in item:
+                for key in ("threadId", "thread_id"):
+                    value = item.get(key)
+                    if isinstance(value, str):
+                        item["id"] = value
+                        break
+            normalized.append(item)
+        elif isinstance(entry, str):
+            normalized.append({"id": entry})
+    return normalized
+
+
+def _normalize_thread_mapping(mapping: dict[str, Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for key, value in mapping.items():
+        if not isinstance(key, str):
+            continue
+        item = dict(value) if isinstance(value, dict) else {}
+        item.setdefault("id", key)
+        normalized.append(item)
+    return normalized
+
+
+def _extract_thread_path(entry: dict[str, Any]) -> Optional[str]:
+    for key in _THREAD_PATH_KEYS:
+        value = entry.get(key)
+        if isinstance(value, str):
+            return value
+    for container_key in _THREAD_PATH_CONTAINERS:
+        nested = entry.get(container_key)
+        if isinstance(nested, dict):
+            for key in _THREAD_PATH_KEYS:
+                value = nested.get(key)
+                if isinstance(value, str):
+                    return value
+    return None
+
+
+def _filter_threads(
+    threads: Any, workspace_path: str, *, assume_scoped: bool = False
+) -> list[dict[str, Any]]:
     if not isinstance(threads, list):
         return []
-    workspace = Path(workspace_path).resolve()
+    workspace = Path(workspace_path).expanduser().resolve()
     filtered: list[dict[str, Any]] = []
+    unscoped: list[dict[str, Any]] = []
+    saw_path = False
     for entry in threads:
         if not isinstance(entry, dict):
             continue
-        cwd = entry.get("cwd") or entry.get("path")
+        cwd = _extract_thread_path(entry)
         if not isinstance(cwd, str):
+            unscoped.append(entry)
             continue
+        saw_path = True
         try:
-            candidate = Path(cwd).resolve()
-            if _path_within(workspace, candidate):
-                filtered.append(entry)
+            candidate = Path(cwd).expanduser().resolve()
         except Exception:
             continue
-    return filtered
+        if _path_within(workspace, candidate):
+            filtered.append(entry)
+    if filtered or saw_path or not assume_scoped:
+        return filtered
+    return unscoped
 
 
 def _path_within(root: Path, target: Path) -> bool:

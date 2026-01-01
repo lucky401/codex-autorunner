@@ -141,3 +141,21 @@ async def test_normal_message_runs_turn(tmp_path: Path) -> None:
         await service._client.close()
     assert any("Bound to" in msg["text"] for msg in fake_bot.messages)
     assert any("fixture reply" in msg["text"] for msg in fake_bot.messages)
+
+
+@pytest.mark.anyio
+async def test_resume_lists_threads_from_data_shape(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("thread_list_data_shape"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    resume_message = build_message("/resume", message_id=11)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_resume(resume_message, "")
+    finally:
+        await service._client.close()
+    assert any("Select a thread to resume" in msg["text"] for msg in fake_bot.messages)
