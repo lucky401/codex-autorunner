@@ -168,6 +168,10 @@ class CodexAppServerClient:
         result = await self.request("thread/start", params)
         if not isinstance(result, dict):
             raise CodexAppServerProtocolError("thread/start returned non-object result")
+        thread_id = _extract_thread_id(result)
+        if thread_id and "id" not in result:
+            result = dict(result)
+            result["id"] = thread_id
         return result
 
     async def thread_resume(self, thread_id: str, **kwargs: Any) -> Dict[str, Any]:
@@ -176,6 +180,10 @@ class CodexAppServerClient:
         result = await self.request("thread/resume", params)
         if not isinstance(result, dict):
             raise CodexAppServerProtocolError("thread/resume returned non-object result")
+        resumed_id = _extract_thread_id(result)
+        if resumed_id and "id" not in result:
+            result = dict(result)
+            result["id"] = resumed_id
         return result
 
     async def thread_list(self, **kwargs: Any) -> Any:
@@ -724,6 +732,22 @@ def _extract_turn_id(payload: Any) -> Optional[str]:
     if isinstance(turn, dict):
         for key in ("id", "turnId", "turn_id"):
             value = turn.get(key)
+            if isinstance(value, str):
+                return value
+    return None
+
+
+def _extract_thread_id(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("threadId", "thread_id", "id"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    thread = payload.get("thread")
+    if isinstance(thread, dict):
+        for key in ("id", "threadId", "thread_id"):
+            value = thread.get(key)
             if isinstance(value, str):
                 return value
     return None

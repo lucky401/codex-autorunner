@@ -55,6 +55,19 @@ async def test_turn_completion_and_agent_message(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("scenario", ["thread_id_key", "thread_id_snake"])
+async def test_thread_start_accepts_alt_thread_id_keys(
+    tmp_path: Path, scenario: str
+) -> None:
+    client = CodexAppServerClient(fixture_command(scenario), cwd=tmp_path)
+    try:
+        thread = await client.thread_start(str(tmp_path))
+        assert isinstance(thread.get("id"), str)
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_approval_flow(tmp_path: Path) -> None:
     approvals: list[dict] = []
 

@@ -98,10 +98,16 @@ class FixtureServer:
         if method == "thread/start":
             thread_id = f"thread-{self._next_thread}"
             self._next_thread += 1
+            if self._scenario == "thread_id_key":
+                result = {"threadId": thread_id, "cwd": params.get("cwd")}
+            elif self._scenario == "thread_id_snake":
+                result = {"thread_id": thread_id, "cwd": params.get("cwd")}
+            else:
+                result = {"id": thread_id, "cwd": params.get("cwd")}
             self.send(
                 {
                     "id": req_id,
-                    "result": {"id": thread_id, "cwd": params.get("cwd")},
+                    "result": result,
                 }
             )
             return
