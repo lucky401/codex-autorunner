@@ -60,7 +60,7 @@ async def test_turn_start_normalizes_sandbox_policy(tmp_path: Path) -> None:
     try:
         thread = await client.thread_start(str(tmp_path))
         handle = await client.turn_start(
-            thread["id"], "hi", sandbox_policy="dangerFullAccess"
+            thread["id"], "hi", sandbox_policy="danger-full-access"
         )
         result = await handle.wait()
         assert result.status == "completed"

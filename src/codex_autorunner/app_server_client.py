@@ -755,10 +755,10 @@ def _extract_thread_id(payload: Any) -> Optional[str]:
 
 
 _SANDBOX_POLICY_CANONICAL = {
-    "dangerfullaccess": "danger-full-access",
-    "readonly": "read-only",
-    "workspacewrite": "workspace-write",
-    "externalsandbox": "external-sandbox",
+    "dangerfullaccess": "dangerFullAccess",
+    "readonly": "readOnly",
+    "workspacewrite": "workspaceWrite",
+    "externalsandbox": "externalSandbox",
 }
 
 
@@ -766,26 +766,26 @@ def _normalize_sandbox_policy(value: Any) -> Any:
     if value is None:
         return None
     if isinstance(value, dict):
+        type_value = value.get("type")
+        if isinstance(type_value, str):
+            canonical = _normalize_sandbox_policy_type(type_value)
+            if canonical != type_value:
+                updated = dict(value)
+                updated["type"] = canonical
+                return updated
         return value
     if isinstance(value, str):
         raw = value.strip()
         if not raw:
             return None
-        normalized = _normalize_sandbox_policy_name(raw)
-        canonical = _SANDBOX_POLICY_CANONICAL.get(
-            normalized.replace("-", ""), normalized
-        )
+        canonical = _normalize_sandbox_policy_type(raw)
         return {"type": canonical}
     return value
 
 
-def _normalize_sandbox_policy_name(raw: str) -> str:
-    cleaned = raw.strip().replace("_", "-")
+def _normalize_sandbox_policy_type(raw: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "", raw.strip())
     if not cleaned:
-        return ""
-    if cleaned.isupper():
-        return cleaned.lower()
-    normalized = re.sub(r"(?<!^)([A-Z])", r"-\1", cleaned)
-    normalized = normalized.lower()
-    normalized = re.sub(r"-+", "-", normalized)
-    return normalized
+        return raw.strip()
+    canonical = _SANDBOX_POLICY_CANONICAL.get(cleaned.lower())
+    return canonical or raw.strip()

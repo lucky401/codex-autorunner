@@ -123,7 +123,7 @@ class FixtureServer:
                 sandbox_policy = params.get("sandboxPolicy")
                 if not (
                     isinstance(sandbox_policy, dict)
-                    and sandbox_policy.get("type") == "danger-full-access"
+                    and sandbox_policy.get("type") == "dangerFullAccess"
                 ):
                     self._send_error(req_id, "invalid sandboxPolicy")
                     return
