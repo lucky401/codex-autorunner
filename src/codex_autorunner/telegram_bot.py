@@ -938,21 +938,14 @@ class TelegramBotService:
         )
 
     async def _handle_status(self, message: TelegramMessage) -> None:
-        key = topic_key(message.chat_id, message.thread_id)
-        record = self._router.get_topic(key)
-        if record is None:
-            await self._send_message(
-                message.chat_id,
-                "Topic not bound.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
+        record = self._router.ensure_topic(message.chat_id, message.thread_id)
         lines = [
             f"Workspace: {record.workspace_path or 'unbound'}",
             f"Active thread: {record.active_thread_id or 'none'}",
             f"Approval mode: {record.approval_mode}",
         ]
+        if not record.workspace_path:
+            lines.append("Use /bind <repo_id> or /bind <path>.")
         await self._send_message(
             message.chat_id,
             "\n".join(lines),
@@ -964,8 +957,8 @@ class TelegramBotService:
         key = topic_key(message.chat_id, message.thread_id)
         mode = args.strip().lower()
         if not mode:
-            record = self._router.get_topic(key)
-            current = record.approval_mode if record else "unknown"
+            record = self._router.ensure_topic(message.chat_id, message.thread_id)
+            current = record.approval_mode
             await self._send_message(
                 message.chat_id,
                 f"Approval mode: {current}. Use /approvals yolo|safe.",

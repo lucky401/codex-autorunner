@@ -163,6 +163,12 @@ class TelegramStateStore:
 
         return self._update_topic(key, apply)
 
+    def ensure_topic(self, key: str) -> TelegramTopicRecord:
+        def apply(_record: TelegramTopicRecord) -> None:
+            pass
+
+        return self._update_topic(key, apply)
+
     def _load_unlocked(self) -> TelegramState:
         try:
             data = read_json(self._path)
@@ -286,6 +292,12 @@ class TopicRouter:
 
     def get_topic(self, key: str) -> Optional[TelegramTopicRecord]:
         return self._store.get_topic(key)
+
+    def ensure_topic(
+        self, chat_id: int, thread_id: Optional[int]
+    ) -> TelegramTopicRecord:
+        key = self.topic_key(chat_id, thread_id)
+        return self._store.ensure_topic(key)
 
     def bind_topic(
         self,

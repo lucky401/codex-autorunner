@@ -48,6 +48,17 @@ def test_state_store_defaults(tmp_path: Path) -> None:
     assert record.approval_mode == APPROVAL_MODE_YOLO
 
 
+def test_state_store_ensure_topic(tmp_path: Path) -> None:
+    state_path = tmp_path / "telegram_state.json"
+    store = TelegramStateStore(state_path, default_approval_mode=APPROVAL_MODE_SAFE)
+    key = topic_key(444, None)
+    record = store.ensure_topic(key)
+    assert record.workspace_path is None
+    assert record.approval_mode == APPROVAL_MODE_SAFE
+    loaded = store.get_topic(key)
+    assert loaded is not None
+
+
 def test_topic_queue_serializes() -> None:
     async def runner() -> tuple[int, list[str]]:
         queue = TopicQueue()

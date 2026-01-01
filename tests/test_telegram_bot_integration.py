@@ -1,0 +1,143 @@
+import sys
+from pathlib import Path
+from typing import Optional
+
+import pytest
+
+from codex_autorunner.telegram_adapter import TelegramMessage
+from codex_autorunner.telegram_bot import TelegramBotConfig, TelegramBotService
+from codex_autorunner.telegram_state import topic_key
+
+
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
+
+
+def fixture_command(scenario: str) -> list[str]:
+    return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
+
+
+def make_config(root: Path, command: list[str]) -> TelegramBotConfig:
+    raw = {
+        "enabled": True,
+        "mode": "polling",
+        "allowed_chat_ids": [123],
+        "allowed_user_ids": [456],
+        "require_topics": False,
+        "app_server_command": command,
+    }
+    env = {
+        "CAR_TELEGRAM_BOT_TOKEN": "test-token",
+        "CAR_TELEGRAM_CHAT_ID": "123",
+    }
+    return TelegramBotConfig.from_raw(raw, root=root, env=env)
+
+
+def build_message(
+    text: str,
+    *,
+    chat_id: int = 123,
+    thread_id: Optional[int] = None,
+    user_id: int = 456,
+    message_id: int = 1,
+    update_id: int = 1,
+) -> TelegramMessage:
+    return TelegramMessage(
+        update_id=update_id,
+        message_id=message_id,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        from_user_id=user_id,
+        text=text,
+        date=0,
+        is_topic_message=thread_id is not None,
+    )
+
+
+class FakeBot:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, object]] = []
+
+    async def send_message_chunks(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        message_thread_id: Optional[int] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Optional[dict[str, object]] = None,
+        parse_mode: Optional[str] = None,
+        disable_web_page_preview: bool = True,
+        max_len: int = 4096,
+    ) -> list[dict[str, object]]:
+        self.messages.append(
+            {
+                "chat_id": chat_id,
+                "thread_id": message_thread_id,
+                "text": text,
+                "reply_to": reply_to_message_id,
+                "reply_markup": reply_markup,
+            }
+        )
+        return [{"message_id": len(self.messages)}]
+
+    async def answer_callback_query(
+        self,
+        _callback_query_id: str,
+        *,
+        text: Optional[str] = None,
+        show_alert: bool = False,
+    ) -> dict[str, object]:
+        return {}
+
+    async def edit_message_text(
+        self,
+        _chat_id: int,
+        _message_id: int,
+        _text: str,
+        *,
+        reply_markup: Optional[dict[str, object]] = None,
+        parse_mode: Optional[str] = None,
+        disable_web_page_preview: bool = True,
+    ) -> dict[str, object]:
+        return {}
+
+
+@pytest.mark.anyio
+async def test_status_creates_record(tmp_path: Path) -> None:
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    message = build_message("/status", thread_id=55)
+    try:
+        await service._handle_status(message)
+    finally:
+        await service._client.close()
+    assert fake_bot.messages
+    text = fake_bot.messages[-1]["text"]
+    assert "Workspace: unbound" in text
+    assert "Topic not bound" not in text
+    record = service._router.get_topic(topic_key(message.chat_id, message.thread_id))
+    assert record is not None
+
+
+@pytest.mark.anyio
+async def test_normal_message_runs_turn(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        runtime = service._router.runtime_for(
+            topic_key(bind_message.chat_id, bind_message.thread_id)
+        )
+        message = build_message("hello", message_id=11)
+        await service._handle_normal_message(message, runtime)
+    finally:
+        await service._client.close()
+    assert any("Bound to" in msg["text"] for msg in fake_bot.messages)
+    assert any("fixture reply" in msg["text"] for msg in fake_bot.messages)
