@@ -56,12 +56,12 @@ from .voice import VoiceConfig, VoiceService, VoiceServiceError
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
 DEFAULT_POLL_TIMEOUT_SECONDS = 30
 DEFAULT_PAGE_SIZE = 10
-DEFAULT_BIND_LIMIT = 12
 DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
 DEFAULT_STATE_FILE = ".codex-autorunner/telegram_state.json"
 DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
+DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
 RESUME_PICKER_PROMPT = (
@@ -1608,14 +1608,41 @@ class TelegramBotService:
         message_id = response.get("message_id") if isinstance(response, dict) else None
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ApprovalDecision] = loop.create_future()
-        self._pending_approvals[request_id] = PendingApproval(
+        pending = PendingApproval(
             request_id=request_id,
             chat_id=ctx.chat_id,
             thread_id=ctx.thread_id,
             message_id=message_id if isinstance(message_id, int) else None,
             future=future,
         )
-        return await future
+        self._pending_approvals[request_id] = pending
+        try:
+            return await asyncio.wait_for(
+                future, timeout=DEFAULT_APPROVAL_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            self._pending_approvals.pop(request_id, None)
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.approval.timeout",
+                request_id=request_id,
+                turn_id=turn_id,
+                chat_id=ctx.chat_id,
+                thread_id=ctx.thread_id,
+                timeout_seconds=DEFAULT_APPROVAL_TIMEOUT_SECONDS,
+            )
+            if pending.message_id is not None:
+                await self._edit_message_text(
+                    pending.chat_id,
+                    pending.message_id,
+                    "Approval timed out.",
+                    reply_markup={"inline_keyboard": []},
+                )
+            return "cancel"
+        except asyncio.CancelledError:
+            self._pending_approvals.pop(request_id, None)
+            raise
 
     async def _handle_approval_callback(
         self, callback: TelegramCallbackQuery, parsed: ApprovalCallback
@@ -1643,6 +1670,7 @@ class TelegramBotService:
                     pending.chat_id,
                     pending.message_id,
                     _format_approval_decision(parsed.decision),
+                    reply_markup={"inline_keyboard": []},
                 )
             except Exception:
                 return
@@ -1905,7 +1933,7 @@ class TelegramBotService:
         except Exception:
             return []
         repo_ids = [repo.id for repo in manifest.repos if repo.enabled]
-        return repo_ids[:DEFAULT_BIND_LIMIT]
+        return repo_ids
 
     def _resolve_workspace(self, arg: str) -> Optional[tuple[str, Optional[str]]]:
         arg = (arg or "").strip()
