@@ -711,10 +711,14 @@ class TelegramBotService:
             self._model_options.pop(key, None)
             self._model_pending.pop(key, None)
         if command:
-            self._enqueue_topic_work(
-                key,
-                lambda: self._handle_command(command, message, runtime),
-            )
+            spec = self._command_specs.get(command.name)
+            if spec and spec.allow_during_turn:
+                self._spawn_task(self._handle_command(command, message, runtime))
+            else:
+                self._enqueue_topic_work(
+                    key,
+                    lambda: self._handle_command(command, message, runtime),
+                )
             return
 
         if has_media:
