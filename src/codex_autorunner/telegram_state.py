@@ -368,9 +368,12 @@ class TelegramStateStore:
             raise ValueError("workspace_path is required")
 
         def apply(record: TelegramTopicRecord) -> None:
+            # Switching workspaces should restart the app-server thread in the new repo.
             record.workspace_path = workspace_path
             if repo_id is not None:
                 record.repo_id = repo_id
+            record.active_thread_id = None
+            record.rollout_path = None
 
         return self._update_topic(key, apply)
 
