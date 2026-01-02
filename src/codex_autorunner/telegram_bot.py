@@ -10,7 +10,7 @@ import shlex
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Iterable, Optional, Sequence
+from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
 
 from .app_server_client import (
     ApprovalDecision,
@@ -57,6 +57,10 @@ from .voice import VoiceConfig, VoiceService, VoiceServiceError
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
 DEFAULT_POLL_TIMEOUT_SECONDS = 30
 DEFAULT_PAGE_SIZE = 10
+DEFAULT_THREAD_LIST_LIMIT = 10
+DEFAULT_MODEL_LIST_LIMIT = 25
+DEFAULT_MCP_LIST_LIMIT = 50
+DEFAULT_SKILLS_LIST_LIMIT = 50
 DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
@@ -71,9 +75,66 @@ RESUME_PICKER_PROMPT = (
 )
 BIND_PICKER_PROMPT = "Select a repo to bind (buttons below or reply with number/id)."
 WORKING_PLACEHOLDER = "Working..."
+COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
+MAX_MENTION_BYTES = 200_000
+VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
+APPROVAL_POLICY_VALUES = {"untrusted", "on-failure", "on-request", "never"}
+APPROVAL_PRESETS = {
+    "read-only": ("on-request", "readOnly"),
+    "auto": ("on-request", "workspaceWrite"),
+    "full-access": ("never", "dangerFullAccess"),
+}
 DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_IMAGE_PROMPT = "Describe the image."
+COMPACT_SUMMARY_PROMPT = (
+    "Summarize the conversation so far into a concise context block I can paste into "
+    "a new thread. Include goals, constraints, decisions, and current state."
+)
+INIT_PROMPT = "\n".join(
+    [
+        "Generate a file named AGENTS.md that serves as a contributor guide for this repository.",
+        "Your goal is to produce a clear, concise, and well-structured document with descriptive headings and actionable explanations for each section.",
+        "Follow the outline below, but adapt as needed - add sections if relevant, and omit those that do not apply to this project.",
+        "",
+        "Document Requirements",
+        "",
+        "- Title the document \"Repository Guidelines\".",
+        "- Use Markdown headings (#, ##, etc.) for structure.",
+        "- Keep the document concise. 200-400 words is optimal.",
+        "- Keep explanations short, direct, and specific to this repository.",
+        "- Provide examples where helpful (commands, directory paths, naming patterns).",
+        "- Maintain a professional, instructional tone.",
+        "",
+        "Recommended Sections",
+        "",
+        "Project Structure & Module Organization",
+        "",
+        "- Outline the project structure, including where the source code, tests, and assets are located.",
+        "",
+        "Build, Test, and Development Commands",
+        "",
+        "- List key commands for building, testing, and running locally (e.g., npm test, make build).",
+        "- Briefly explain what each command does.",
+        "",
+        "Coding Style & Naming Conventions",
+        "",
+        "- Specify indentation rules, language-specific style preferences, and naming patterns.",
+        "- Include any formatting or linting tools used.",
+        "",
+        "Testing Guidelines",
+        "",
+        "- Identify testing frameworks and coverage requirements.",
+        "- State test naming conventions and how to run tests.",
+        "",
+        "Commit & Pull Request Guidelines",
+        "",
+        "- Summarize commit message conventions found in the project's Git history.",
+        "- Outline pull request requirements (descriptions, linked issues, screenshots, etc.).",
+        "",
+        "(Optional) Add other sections if relevant, such as Security & Configuration Tips, Architecture Overview, or Agent-Specific Instructions.",
+    ]
+)
 IMAGE_CONTENT_TYPES = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -343,6 +404,14 @@ class SelectionState:
     page: int = 0
 
 
+@dataclass(frozen=True)
+class CommandSpec:
+    name: str
+    description: str
+    handler: Callable[[TelegramMessage, str, Any], Awaitable[None]]
+    allow_during_turn: bool = False
+
+
 class TelegramBotService:
     def __init__(
         self,
@@ -370,6 +439,7 @@ class TelegramBotService:
             cwd=app_server_cwd,
             env=app_server_env,
             approval_handler=self._handle_approval_request,
+            notification_handler=self._handle_app_server_notification,
             logger=self._logger,
         )
         self._bot = TelegramBotClient(config.bot_token or "", logger=self._logger)
@@ -394,6 +464,8 @@ class TelegramBotService:
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
         self._bot_username: Optional[str] = None
+        self._token_usage_by_thread: dict[str, dict[str, Any]] = {}
+        self._command_specs = self._build_command_specs()
 
     async def run_polling(self) -> None:
         if self._config.mode != "polling":
@@ -817,37 +889,250 @@ class TelegramBotService:
             message_id=message.message_id,
         )
         key = topic_key(message.chat_id, message.thread_id)
-        if name == "bind":
-            await self._handle_bind(message, args)
-            return
-        if name == "new":
-            await self._handle_new(message)
-            return
-        if name == "resume":
-            await self._handle_resume(message, args)
-            return
-        if name == "status":
-            await self._handle_status(message)
-            return
-        if name == "approvals":
-            await self._handle_approvals(message, args)
-            return
-        if name == "help":
+        spec = self._command_specs.get(name)
+        if spec is None:
+            self._resume_options.pop(key, None)
+            self._bind_options.pop(key, None)
             await self._send_message(
                 message.chat_id,
-                _help_text(),
+                f"Unsupported command: /{name}. Send /help for options.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
-        if name == "interrupt":
-            await self._handle_interrupt(message, runtime)
+        if runtime.current_turn_id and not spec.allow_during_turn:
+            await self._send_message(
+                message.chat_id,
+                COMMAND_DISABLED_TEMPLATE.format(name=name),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
             return
-        self._resume_options.pop(key, None)
-        self._bind_options.pop(key, None)
+        await spec.handler(message, args, runtime)
+
+    def _build_command_specs(self) -> dict[str, CommandSpec]:
+        return {
+            "bind": CommandSpec(
+                "bind",
+                "bind this topic to a workspace",
+                lambda message, args, _runtime: self._handle_bind(message, args),
+            ),
+            "new": CommandSpec(
+                "new",
+                "start a new session",
+                lambda message, _args, _runtime: self._handle_new(message),
+            ),
+            "resume": CommandSpec(
+                "resume",
+                "pick a previous session",
+                lambda message, args, _runtime: self._handle_resume(message, args),
+            ),
+            "review": CommandSpec(
+                "review",
+                "run a code review",
+                self._handle_review,
+            ),
+            "model": CommandSpec(
+                "model",
+                "list or set the model",
+                self._handle_model,
+            ),
+            "approvals": CommandSpec(
+                "approvals",
+                "set approval and sandbox policy",
+                self._handle_approvals,
+            ),
+            "status": CommandSpec(
+                "status",
+                "show current binding and thread status",
+                self._handle_status,
+                allow_during_turn=True,
+            ),
+            "diff": CommandSpec(
+                "diff",
+                "show git diff for the bound workspace",
+                self._handle_diff,
+                allow_during_turn=True,
+            ),
+            "mention": CommandSpec(
+                "mention",
+                "include a file in a new request",
+                self._handle_mention,
+                allow_during_turn=True,
+            ),
+            "skills": CommandSpec(
+                "skills",
+                "list available skills",
+                self._handle_skills,
+                allow_during_turn=True,
+            ),
+            "mcp": CommandSpec(
+                "mcp",
+                "list MCP server status",
+                self._handle_mcp,
+                allow_during_turn=True,
+            ),
+            "experimental": CommandSpec(
+                "experimental",
+                "toggle experimental features",
+                self._handle_experimental,
+            ),
+            "init": CommandSpec(
+                "init",
+                "generate AGENTS.md guidance",
+                self._handle_init,
+            ),
+            "compact": CommandSpec(
+                "compact",
+                "compact the conversation (summary)",
+                self._handle_compact,
+            ),
+            "rollout": CommandSpec(
+                "rollout",
+                "show current thread rollout path",
+                self._handle_rollout,
+                allow_during_turn=True,
+            ),
+            "logout": CommandSpec(
+                "logout",
+                "log out of the Codex account",
+                self._handle_logout,
+            ),
+            "feedback": CommandSpec(
+                "feedback",
+                "send feedback and logs",
+                self._handle_feedback,
+                allow_during_turn=True,
+            ),
+            "interrupt": CommandSpec(
+                "interrupt",
+                "stop the active turn",
+                lambda message, _args, runtime: self._handle_interrupt(message, runtime),
+                allow_during_turn=True,
+            ),
+            "quit": CommandSpec(
+                "quit",
+                "end the session (Telegram-local)",
+                self._handle_quit,
+                allow_during_turn=True,
+            ),
+            "exit": CommandSpec(
+                "exit",
+                "end the session (Telegram-local)",
+                self._handle_quit,
+                allow_during_turn=True,
+            ),
+            "help": CommandSpec(
+                "help",
+                "show this help message",
+                self._handle_help,
+                allow_during_turn=True,
+            ),
+        }
+
+    def _parse_command_args(self, args: str) -> list[str]:
+        if not args:
+            return []
+        try:
+            return [part for part in shlex.split(args) if part]
+        except ValueError:
+            return [part for part in args.split() if part]
+
+    def _effective_policies(
+        self, record: "TelegramTopicRecord"
+    ) -> tuple[Optional[str], Optional[Any]]:
+        approval_policy, sandbox_policy = self._config.defaults.policies_for_mode(
+            record.approval_mode
+        )
+        if record.approval_policy is not None:
+            approval_policy = record.approval_policy
+        if record.sandbox_policy is not None:
+            sandbox_policy = record.sandbox_policy
+        return approval_policy, sandbox_policy
+
+    def _apply_thread_result(
+        self,
+        chat_id: int,
+        thread_id: Optional[int],
+        result: Any,
+        *,
+        active_thread_id: Optional[str] = None,
+        overwrite_defaults: bool = False,
+    ) -> "TelegramTopicRecord":
+        info = _extract_thread_info(result)
+        if active_thread_id is None:
+            active_thread_id = info.get("thread_id")
+
+        def apply(record: "TelegramTopicRecord") -> None:
+            if active_thread_id:
+                record.active_thread_id = active_thread_id
+            if info.get("workspace_path"):
+                record.workspace_path = info["workspace_path"]
+            if info.get("rollout_path"):
+                record.rollout_path = info["rollout_path"]
+            if info.get("model") and (overwrite_defaults or record.model is None):
+                record.model = info["model"]
+            if info.get("effort") and (overwrite_defaults or record.effort is None):
+                record.effort = info["effort"]
+            if info.get("summary") and (overwrite_defaults or record.summary is None):
+                record.summary = info["summary"]
+            if info.get("approval_policy") and (
+                overwrite_defaults or record.approval_policy is None
+            ):
+                record.approval_policy = info["approval_policy"]
+            if info.get("sandbox_policy") and (
+                overwrite_defaults or record.sandbox_policy is None
+            ):
+                record.sandbox_policy = info["sandbox_policy"]
+
+        return self._router.update_topic(chat_id, thread_id, apply)
+
+    async def _require_bound_record(
+        self, message: TelegramMessage, *, prompt: Optional[str] = None
+    ) -> Optional["TelegramTopicRecord"]:
+        key = topic_key(message.chat_id, message.thread_id)
+        record = self._router.get_topic(key)
+        if record is None or not record.workspace_path:
+            await self._send_message(
+                message.chat_id,
+                prompt
+                or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
+        return record
+
+    async def _ensure_thread_id(
+        self, message: TelegramMessage, record: "TelegramTopicRecord"
+    ) -> Optional[str]:
+        thread_id = record.active_thread_id
+        if thread_id:
+            return thread_id
+        thread = await self._client.thread_start(record.workspace_path or "")
+        thread_id = _extract_thread_id(thread)
+        if not thread_id:
+            await self._send_message(
+                message.chat_id,
+                "Failed to start a new Codex thread.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
+        self._apply_thread_result(
+            message.chat_id,
+            message.thread_id,
+            thread,
+            active_thread_id=thread_id,
+        )
+        return thread_id
+
+    async def _handle_help(
+        self, message: TelegramMessage, _args: str, _runtime: Any
+    ) -> None:
         await self._send_message(
             message.chat_id,
-            f"Unsupported command: /{name}. Send /help for options.",
+            _format_help_text(self._command_specs),
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
@@ -878,7 +1163,7 @@ class TelegramBotService:
         try:
             if not thread_id:
                 thread = await self._client.thread_start(record.workspace_path)
-                thread_id = thread.get("id") if isinstance(thread, dict) else None
+                thread_id = _extract_thread_id(thread)
                 if not thread_id:
                     await self._send_message(
                         message.chat_id,
@@ -887,12 +1172,24 @@ class TelegramBotService:
                         reply_to=message.message_id,
                     )
                     return
-            self._router.set_active_thread(
-                message.chat_id, message.thread_id, thread_id
-            )
-            approval_policy, sandbox_policy = self._config.defaults.policies_for_mode(
-                record.approval_mode
-            )
+                record = self._apply_thread_result(
+                    message.chat_id,
+                    message.thread_id,
+                    thread,
+                    active_thread_id=thread_id,
+                )
+            else:
+                record = self._router.set_active_thread(
+                    message.chat_id, message.thread_id, thread_id
+                )
+            approval_policy, sandbox_policy = self._effective_policies(record)
+            turn_kwargs: dict[str, Any] = {}
+            if record.model:
+                turn_kwargs["model"] = record.model
+            if record.effort:
+                turn_kwargs["effort"] = record.effort
+            if record.summary:
+                turn_kwargs["summary"] = record.summary
             log_event(
                 self._logger,
                 logging.INFO,
@@ -918,6 +1215,7 @@ class TelegramBotService:
                     input_items=input_items,
                     approval_policy=approval_policy,
                     sandbox_policy=sandbox_policy,
+                    **turn_kwargs,
                 )
                 runtime.current_turn_id = turn_handle.turn_id
                 ctx = TurnContext(
@@ -1408,7 +1706,7 @@ class TelegramBotService:
             )
             return
         thread = await self._client.thread_start(record.workspace_path)
-        thread_id = thread.get("id") if isinstance(thread, dict) else None
+        thread_id = _extract_thread_id(thread)
         if not thread_id:
             await self._send_message(
                 message.chat_id,
@@ -1417,7 +1715,9 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        self._router.set_active_thread(message.chat_id, message.thread_id, thread_id)
+        self._apply_thread_result(
+            message.chat_id, message.thread_id, thread, active_thread_id=thread_id
+        )
         await self._send_message(
             message.chat_id,
             f"Started new thread {thread_id}.",
@@ -1427,18 +1727,23 @@ class TelegramBotService:
 
     async def _handle_resume(self, message: TelegramMessage, args: str) -> None:
         key = topic_key(message.chat_id, message.thread_id)
-        if args.strip().isdigit():
+        argv = self._parse_command_args(args)
+        trimmed = args.strip()
+        if trimmed.isdigit():
             state = self._resume_options.get(key)
             if state:
                 page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
-                choice = int(args.strip())
+                choice = int(trimmed)
                 if 0 < choice <= len(page_items):
                     thread_id = page_items[choice - 1][0]
                     await self._resume_thread_by_id(key, thread_id)
                     return
-        if args.strip() and not args.strip().isdigit():
-            await self._resume_thread_by_id(key, args.strip())
-            return
+        if trimmed and not trimmed.isdigit():
+            if argv and argv[0].lower() in ("list", "ls"):
+                trimmed = ""
+            else:
+                await self._resume_thread_by_id(key, trimmed)
+                return
         record = self._router.get_topic(key)
         if record is None or not record.workspace_path:
             await self._send_message(
@@ -1449,7 +1754,10 @@ class TelegramBotService:
             )
             return
         try:
-            threads = await self._client.thread_list(cwd=record.workspace_path)
+            threads = await self._client.thread_list(
+                cursor=None,
+                limit=DEFAULT_THREAD_LIST_LIMIT,
+            )
         except Exception as exc:
             log_event(
                 self._logger,
@@ -1511,7 +1819,7 @@ class TelegramBotService:
     ) -> None:
         self._resume_options.pop(key, None)
         try:
-            await self._client.thread_resume(thread_id)
+            result = await self._client.thread_resume(thread_id)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -1529,17 +1837,40 @@ class TelegramBotService:
             )
             return
         chat_id, thread_id_val = _split_topic_key(key)
-        self._router.set_active_thread(chat_id, thread_id_val, thread_id)
+        self._apply_thread_result(
+            chat_id,
+            thread_id_val,
+            result,
+            active_thread_id=thread_id,
+            overwrite_defaults=True,
+        )
         await self._answer_callback(callback, "Resumed thread")
         await self._finalize_selection(key, callback, f"Resumed thread {thread_id}.")
 
-    async def _handle_status(self, message: TelegramMessage) -> None:
+    async def _handle_status(
+        self, message: TelegramMessage, _args: str = "", runtime: Optional[Any] = None
+    ) -> None:
         record = self._router.ensure_topic(message.chat_id, message.thread_id)
+        if runtime is None:
+            runtime = self._router.runtime_for(
+                topic_key(message.chat_id, message.thread_id)
+            )
+        approval_policy, sandbox_policy = self._effective_policies(record)
         lines = [
             f"Workspace: {record.workspace_path or 'unbound'}",
             f"Active thread: {record.active_thread_id or 'none'}",
+            f"Active turn: {runtime.current_turn_id or 'none'}",
+            f"Model: {record.model or 'default'}",
+            f"Effort: {record.effort or 'default'}",
             f"Approval mode: {record.approval_mode}",
+            f"Approval policy: {approval_policy or 'default'}",
+            f"Sandbox policy: {_format_sandbox_policy(sandbox_policy)}",
         ]
+        if record.summary:
+            lines.append(f"Summary: {record.summary}")
+        if record.active_thread_id:
+            token_usage = self._token_usage_by_thread.get(record.active_thread_id)
+            lines.extend(_format_token_usage(token_usage))
         if not record.workspace_path:
             lines.append("Use /bind <repo_id> or /bind <path>.")
         await self._send_message(
@@ -1549,38 +1880,849 @@ class TelegramBotService:
             reply_to=message.message_id,
         )
 
-    async def _handle_approvals(self, message: TelegramMessage, args: str) -> None:
-        key = topic_key(message.chat_id, message.thread_id)
-        mode = args.strip().lower()
-        if not mode:
-            record = self._router.ensure_topic(message.chat_id, message.thread_id)
-            current = record.approval_mode
+    async def _handle_approvals(
+        self, message: TelegramMessage, args: str, _runtime: Optional[Any] = None
+    ) -> None:
+        argv = self._parse_command_args(args)
+        record = self._router.ensure_topic(message.chat_id, message.thread_id)
+        if not argv:
+            approval_policy, sandbox_policy = self._effective_policies(record)
             await self._send_message(
                 message.chat_id,
-                f"Approval mode: {current}. Use /approvals yolo|safe.",
+                "\n".join(
+                    [
+                        f"Approval mode: {record.approval_mode}",
+                        f"Approval policy: {approval_policy or 'default'}",
+                        f"Sandbox policy: {_format_sandbox_policy(sandbox_policy)}",
+                        "Usage: /approvals yolo|safe|read-only|auto|full-access",
+                    ]
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
+        persist = False
+        if "--persist" in argv:
+            persist = True
+            argv = [arg for arg in argv if arg != "--persist"]
+        if not argv:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /approvals yolo|safe|read-only|auto|full-access",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        mode = argv[0].lower()
         if mode in ("yolo", "off", "disable", "disabled"):
-            target = "yolo"
-        elif mode in ("safe", "on", "enable", "enabled"):
-            target = "safe"
-        else:
+            self._router.set_approval_mode(message.chat_id, message.thread_id, "yolo")
+            self._router.update_topic(
+                message.chat_id,
+                message.thread_id,
+                lambda record: _clear_policy_overrides(record),
+            )
             await self._send_message(
                 message.chat_id,
-                "Usage: /approvals yolo|safe",
+                _format_persist_note(
+                    "Approval mode set to yolo.", persist=persist
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
-        self._router.set_approval_mode(message.chat_id, message.thread_id, target)
+        if mode in ("safe", "on", "enable", "enabled"):
+            self._router.set_approval_mode(message.chat_id, message.thread_id, "safe")
+            self._router.update_topic(
+                message.chat_id,
+                message.thread_id,
+                lambda record: _clear_policy_overrides(record),
+            )
+            await self._send_message(
+                message.chat_id,
+                _format_persist_note(
+                    "Approval mode set to safe.", persist=persist
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        preset = _normalize_approval_preset(mode)
+        if mode == "preset" and len(argv) > 1:
+            preset = _normalize_approval_preset(argv[1])
+        if preset:
+            approval_policy, sandbox_policy = APPROVAL_PRESETS[preset]
+            self._router.update_topic(
+                message.chat_id,
+                message.thread_id,
+                lambda record: _set_policy_overrides(
+                    record,
+                    approval_policy=approval_policy,
+                    sandbox_policy=sandbox_policy,
+                ),
+            )
+            await self._send_message(
+                message.chat_id,
+                _format_persist_note(
+                    f"Approval policy set to {approval_policy} with sandbox {sandbox_policy}.",
+                    persist=persist,
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        approval_policy = argv[0] if argv[0] in APPROVAL_POLICY_VALUES else None
+        if approval_policy:
+            sandbox_policy = argv[1] if len(argv) > 1 else None
+            self._router.update_topic(
+                message.chat_id,
+                message.thread_id,
+                lambda record: _set_policy_overrides(
+                    record,
+                    approval_policy=approval_policy,
+                    sandbox_policy=sandbox_policy,
+                ),
+            )
+            await self._send_message(
+                message.chat_id,
+                _format_persist_note(
+                    f"Approval policy set to {approval_policy} with sandbox {sandbox_policy or 'default'}.",
+                    persist=persist,
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         await self._send_message(
             message.chat_id,
-            f"Approval mode set to {target}.",
+            "Usage: /approvals yolo|safe|read-only|auto|full-access",
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
+
+    async def _handle_model(
+        self, message: TelegramMessage, args: str, _runtime: Any
+    ) -> None:
+        argv = self._parse_command_args(args)
+        if not argv or argv[0].lower() in ("list", "ls"):
+            try:
+                result = await self._client.request(
+                    "model/list",
+                    {"cursor": None, "limit": DEFAULT_MODEL_LIST_LIMIT},
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.model.list.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "Failed to list models; check logs for details.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                _format_model_list(result),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if argv[0].lower() in ("clear", "reset"):
+            self._router.update_topic(
+                message.chat_id,
+                message.thread_id,
+                lambda record: _set_model_overrides(record, None, clear_effort=True),
+            )
+            await self._send_message(
+                message.chat_id,
+                "Model overrides cleared.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if argv[0].lower() == "set" and len(argv) > 1:
+            model = argv[1]
+            effort = argv[2] if len(argv) > 2 else None
+        else:
+            model = argv[0]
+            effort = argv[1] if len(argv) > 1 else None
+        if effort and effort not in VALID_REASONING_EFFORTS:
+            await self._send_message(
+                message.chat_id,
+                f"Unknown effort '{effort}'. Allowed: {', '.join(sorted(VALID_REASONING_EFFORTS))}.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        self._router.update_topic(
+            message.chat_id,
+            message.thread_id,
+            lambda record: _set_model_overrides(
+                record,
+                model,
+                effort=effort,
+            ),
+        )
+        effort_note = f" (effort={effort})" if effort else ""
+        await self._send_message(
+            message.chat_id,
+            f"Model set to {model}{effort_note}. Will apply on the next turn.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_review(
+        self, message: TelegramMessage, args: str, runtime: Any
+    ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        thread_id = await self._ensure_thread_id(message, record)
+        if not thread_id:
+            return
+        argv = self._parse_command_args(args)
+        delivery = "inline"
+        if argv and argv[0].lower() == "detached":
+            delivery = "detached"
+            argv = argv[1:]
+        target: dict[str, Any] = {"type": "uncommittedChanges"}
+        if argv:
+            keyword = argv[0].lower()
+            if keyword == "base":
+                if len(argv) < 2:
+                    await self._send_message(
+                        message.chat_id,
+                        "Usage: /review base <branch>",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                target = {"type": "baseBranch", "branch": argv[1]}
+            elif keyword == "commit":
+                if len(argv) < 2:
+                    await self._send_message(
+                        message.chat_id,
+                        "Usage: /review commit <sha>",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                target = {"type": "commit", "commit": argv[1]}
+            elif keyword == "custom":
+                instructions = " ".join(argv[1:]).strip()
+                if not instructions:
+                    await self._send_message(
+                        message.chat_id,
+                        "Usage: /review custom <instructions>",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                target = {"type": "custom", "instructions": instructions}
+            else:
+                target = {"type": "custom", "instructions": " ".join(argv)}
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.review.starting",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            codex_thread_id=thread_id,
+            delivery=delivery,
+            target=target.get("type"),
+        )
+        approval_policy, sandbox_policy = self._effective_policies(record)
+        review_kwargs: dict[str, Any] = {}
+        if approval_policy:
+            review_kwargs["approval_policy"] = approval_policy
+        if sandbox_policy:
+            review_kwargs["sandbox_policy"] = sandbox_policy
+        if record.model:
+            review_kwargs["model"] = record.model
+        if record.effort:
+            review_kwargs["effort"] = record.effort
+        if record.summary:
+            review_kwargs["summary"] = record.summary
+        turn_handle = None
+        placeholder_id: Optional[int] = None
+        try:
+            async with self._turn_semaphore:
+                placeholder_id = await self._send_placeholder(
+                    message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                turn_handle = await self._client.review_start(
+                    thread_id,
+                    target=target,
+                    delivery=delivery,
+                    **review_kwargs,
+                )
+                runtime.current_turn_id = turn_handle.turn_id
+                ctx = TurnContext(
+                    topic_key=topic_key(message.chat_id, message.thread_id),
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to_message_id=message.message_id,
+                    placeholder_message_id=placeholder_id,
+                )
+                self._turn_contexts[turn_handle.turn_id] = ctx
+                result = await turn_handle.wait()
+        except Exception as exc:
+            if turn_handle is not None:
+                self._turn_contexts.pop(turn_handle.turn_id, None)
+            runtime.current_turn_id = None
+            runtime.interrupt_requested = False
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.review.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=placeholder_id,
+                response="Codex review failed; check logs for details.",
+            )
+            return
+        finally:
+            if turn_handle is not None:
+                self._turn_contexts.pop(turn_handle.turn_id, None)
+            runtime.current_turn_id = None
+            runtime.interrupt_requested = False
+        response = _compose_agent_response(result.agent_messages)
+        if result.status == "interrupted" or runtime.interrupt_requested:
+            response = _compose_interrupt_response(response)
+            runtime.interrupt_requested = False
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.review.completed",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            turn_id=turn_handle.turn_id if turn_handle else None,
+            agent_message_count=len(result.agent_messages),
+        )
+        await self._deliver_turn_response(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            placeholder_id=placeholder_id,
+            response=response,
+        )
+
+    async def _handle_diff(
+        self, message: TelegramMessage, _args: str, _runtime: Any
+    ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        command = (
+            "git rev-parse --is-inside-work-tree >/dev/null 2>&1 || "
+            "{ echo 'Not a git repo'; exit 0; }\n"
+            "git diff --color;\n"
+            "git ls-files --others --exclude-standard | "
+            "while read -r f; do git diff --color --no-index -- /dev/null \"$f\"; done"
+        )
+        try:
+            result = await self._client.request(
+                "command/exec",
+                {
+                    "cwd": record.workspace_path,
+                    "command": ["bash", "-lc", command],
+                    "timeoutMs": 10000,
+                },
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.diff.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Failed to compute diff; check logs for details.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        output = _render_command_output(result)
+        if not output.strip():
+            output = "(No diff output.)"
+        await self._send_message(
+            message.chat_id,
+            output,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_mention(
+        self, message: TelegramMessage, args: str, runtime: Any
+    ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        argv = self._parse_command_args(args)
+        if not argv:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /mention <path> [request]",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        workspace = Path(record.workspace_path or "").expanduser().resolve()
+        path = Path(argv[0]).expanduser()
+        if not path.is_absolute():
+            path = workspace / path
+        try:
+            path = path.resolve()
+        except Exception:
+            await self._send_message(
+                message.chat_id,
+                "Could not resolve that path.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if not _path_within(workspace, path):
+            await self._send_message(
+                message.chat_id,
+                "File must be within the bound workspace.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if not path.exists() or not path.is_file():
+            await self._send_message(
+                message.chat_id,
+                "File not found.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        try:
+            data = path.read_bytes()
+        except Exception:
+            await self._send_message(
+                message.chat_id,
+                "Failed to read file.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if len(data) > MAX_MENTION_BYTES:
+            await self._send_message(
+                message.chat_id,
+                f"File too large (max {MAX_MENTION_BYTES} bytes).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if _looks_binary(data):
+            await self._send_message(
+                message.chat_id,
+                "File appears to be binary; refusing to include it.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        text = data.decode("utf-8", errors="replace")
+        try:
+            display_path = str(path.relative_to(workspace))
+        except ValueError:
+            display_path = str(path)
+        request = " ".join(argv[1:]).strip()
+        if not request:
+            request = "Please review this file."
+        prompt = "\n".join(
+            [
+                "Please use the file below as authoritative context.",
+                "",
+                f'<file path="{display_path}">',
+                text,
+                "</file>",
+                "",
+                f"My request: {request}",
+            ]
+        )
+        await self._handle_normal_message(
+            message,
+            runtime,
+            text_override=prompt,
+            record=record,
+        )
+
+    async def _handle_skills(
+        self, message: TelegramMessage, _args: str, _runtime: Any
+    ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        try:
+            result = await self._client.request(
+                "skills/list",
+                {"cwds": [record.workspace_path], "forceReload": False},
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.skills.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Failed to list skills; check logs for details.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            _format_skills_list(result, record.workspace_path),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_mcp(
+        self, message: TelegramMessage, _args: str, _runtime: Any
+    ) -> None:
+        try:
+            result = await self._client.request(
+                "mcpServerStatus/list",
+                {"cursor": None, "limit": DEFAULT_MCP_LIST_LIMIT},
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.mcp.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Failed to list MCP servers; check logs for details.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            _format_mcp_list(result),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_experimental(
+        self, message: TelegramMessage, args: str, _runtime: Any
+    ) -> None:
+        argv = self._parse_command_args(args)
+        if not argv:
+            try:
+                result = await self._client.request(
+                    "config/read",
+                    {"includeLayers": False},
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.experimental.read_failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "Failed to read config; check logs for details.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                _format_feature_flags(result),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if len(argv) < 2:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /experimental enable|disable <feature>",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        action = argv[0].lower()
+        feature = argv[1].strip()
+        if not feature:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /experimental enable|disable <feature>",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if action in ("enable", "on", "true", "1"):
+            value = True
+        elif action in ("disable", "off", "false", "0"):
+            value = False
+        else:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /experimental enable|disable <feature>",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        key_path = feature if feature.startswith("features.") else f"features.{feature}"
+        try:
+            await self._client.request(
+                "config/value/write",
+                {
+                    "keyPath": key_path,
+                    "value": value,
+                    "mergeStrategy": "replace",
+                },
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.experimental.write_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Failed to update feature flag; check logs for details.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            f"Feature {key_path} set to {value}.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_init(
+        self, message: TelegramMessage, _args: str, runtime: Any
+    ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        await self._handle_normal_message(
+            message,
+            runtime,
+            text_override=INIT_PROMPT,
+            record=record,
+        )
+
+    async def _handle_compact(
+        self, message: TelegramMessage, args: str, runtime: Any
+    ) -> None:
+        argv = self._parse_command_args(args)
+        if argv and argv[0].lower() in ("soft", "summary", "summarize"):
+            record = await self._require_bound_record(message)
+            if not record:
+                return
+            await self._handle_normal_message(
+                message,
+                runtime,
+                text_override=COMPACT_SUMMARY_PROMPT,
+                record=record,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            "Compact is not available via the app-server. Use /new or /compact soft for a summary.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_rollout(
+        self, message: TelegramMessage, _args: str, _runtime: Any
+    ) -> None:
+        record = self._router.get_topic(topic_key(message.chat_id, message.thread_id))
+        if record is None or not record.active_thread_id:
+            await self._send_message(
+                message.chat_id,
+                "No active thread to inspect.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if record.rollout_path:
+            await self._send_message(
+                message.chat_id,
+                f"Rollout path: {record.rollout_path}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        try:
+            threads = await self._client.thread_list(
+                cursor=None,
+                limit=DEFAULT_THREAD_LIST_LIMIT,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.rollout.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Failed to look up rollout path; check logs for details.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        entry = _find_thread_entry(threads, record.active_thread_id)
+        rollout_path = _extract_rollout_path(entry) if entry else None
+        if rollout_path:
+            self._router.update_topic(
+                message.chat_id,
+                message.thread_id,
+                lambda record: _set_rollout_path(record, rollout_path),
+            )
+            await self._send_message(
+                message.chat_id,
+                f"Rollout path: {rollout_path}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            "Rollout path not found for this thread.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_logout(
+        self, message: TelegramMessage, _args: str, _runtime: Any
+    ) -> None:
+        try:
+            await self._client.request("account/logout", params=None)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.logout.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Logout failed; check logs for details.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            "Logged out.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_feedback(
+        self, message: TelegramMessage, args: str, _runtime: Any
+    ) -> None:
+        reason = args.strip()
+        if not reason:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /feedback <reason>",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        record = self._router.get_topic(topic_key(message.chat_id, message.thread_id))
+        params: dict[str, Any] = {
+            "classification": "bug",
+            "reason": reason,
+            "includeLogs": True,
+        }
+        if record and record.active_thread_id:
+            params["threadId"] = record.active_thread_id
+        try:
+            result = await self._client.request("feedback/upload", params)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.feedback.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Feedback upload failed; check logs for details.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        report_id = None
+        if isinstance(result, dict):
+            report_id = result.get("threadId") or result.get("id")
+        message_text = "Feedback sent."
+        if isinstance(report_id, str):
+            message_text = f"Feedback sent (report {report_id})."
+        await self._send_message(
+            message.chat_id,
+            message_text,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_quit(
+        self, message: TelegramMessage, _args: str, _runtime: Any
+    ) -> None:
+        await self._send_message(
+            message.chat_id,
+            "This command is not applicable in Telegram. Use /new to start fresh or /resume to switch threads.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
+        method = message.get("method")
+        if method != "thread/tokenUsage/updated":
+            return
+        params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        thread_id = params.get("threadId")
+        token_usage = params.get("tokenUsage")
+        if not isinstance(thread_id, str) or not isinstance(token_usage, dict):
+            return
+        self._token_usage_by_thread[thread_id] = token_usage
 
     async def _handle_approval_request(self, message: dict[str, Any]) -> ApprovalDecision:
         req_id = message.get("id")
@@ -1993,6 +3135,381 @@ class TelegramBotService:
         return None
 
 
+def _extract_thread_id(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("threadId", "thread_id", "id"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    thread = payload.get("thread")
+    if isinstance(thread, dict):
+        for key in ("id", "threadId", "thread_id"):
+            value = thread.get(key)
+            if isinstance(value, str):
+                return value
+    return None
+
+
+def _extract_thread_info(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    thread = payload.get("thread") if isinstance(payload.get("thread"), dict) else None
+    workspace_path = _extract_thread_path(payload)
+    if not workspace_path and isinstance(thread, dict):
+        workspace_path = _extract_thread_path(thread)
+    rollout_path = None
+    if isinstance(thread, dict):
+        rollout_path = thread.get("path") if isinstance(thread.get("path"), str) else None
+    if rollout_path is None and isinstance(payload.get("path"), str):
+        rollout_path = payload.get("path")
+    model = None
+    for key in ("model", "modelId"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            model = value
+            break
+    if model is None and isinstance(thread, dict):
+        for key in ("model", "modelId"):
+            value = thread.get(key)
+            if isinstance(value, str):
+                model = value
+                break
+    effort = payload.get("reasoningEffort") or payload.get("effort")
+    if not isinstance(effort, str) and isinstance(thread, dict):
+        effort = thread.get("reasoningEffort") or thread.get("effort")
+    if not isinstance(effort, str):
+        effort = None
+    summary = payload.get("summary") or payload.get("summaryMode")
+    if not isinstance(summary, str) and isinstance(thread, dict):
+        summary = thread.get("summary") or thread.get("summaryMode")
+    if not isinstance(summary, str):
+        summary = None
+    approval_policy = payload.get("approvalPolicy") or payload.get("approval_policy")
+    if not isinstance(approval_policy, str) and isinstance(thread, dict):
+        approval_policy = thread.get("approvalPolicy") or thread.get("approval_policy")
+    if not isinstance(approval_policy, str):
+        approval_policy = None
+    sandbox_policy = payload.get("sandboxPolicy") or payload.get("sandbox")
+    if not isinstance(sandbox_policy, (dict, str)) and isinstance(thread, dict):
+        sandbox_policy = thread.get("sandboxPolicy") or thread.get("sandbox")
+    if not isinstance(sandbox_policy, (dict, str)):
+        sandbox_policy = None
+    return {
+        "thread_id": _extract_thread_id(payload),
+        "workspace_path": workspace_path,
+        "rollout_path": rollout_path,
+        "model": model,
+        "effort": effort,
+        "summary": summary,
+        "approval_policy": approval_policy,
+        "sandbox_policy": sandbox_policy,
+    }
+
+
+def _normalize_approval_preset(raw: str) -> Optional[str]:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", raw.strip().lower()).strip("-")
+    if cleaned in ("readonly", "read-only", "read_only"):
+        return "read-only"
+    if cleaned in ("fullaccess", "full-access", "full_access", "full"):
+        return "full-access"
+    if cleaned in ("auto", "agent"):
+        return "auto"
+    return None
+
+
+def _clear_policy_overrides(record: "TelegramTopicRecord") -> None:
+    record.approval_policy = None
+    record.sandbox_policy = None
+
+
+def _set_policy_overrides(
+    record: "TelegramTopicRecord",
+    *,
+    approval_policy: Optional[str] = None,
+    sandbox_policy: Optional[Any] = None,
+) -> None:
+    if approval_policy is not None:
+        record.approval_policy = approval_policy
+    if sandbox_policy is not None:
+        record.sandbox_policy = sandbox_policy
+
+
+def _set_model_overrides(
+    record: "TelegramTopicRecord",
+    model: Optional[str],
+    *,
+    effort: Optional[str] = None,
+    clear_effort: bool = False,
+) -> None:
+    record.model = model
+    if effort is not None:
+        record.effort = effort
+    elif clear_effort:
+        record.effort = None
+
+
+def _set_rollout_path(record: "TelegramTopicRecord", rollout_path: str) -> None:
+    record.rollout_path = rollout_path
+
+
+def _format_persist_note(message: str, *, persist: bool) -> str:
+    if not persist:
+        return message
+    return f"{message} (Persistence is not supported in Telegram; applied to this topic only.)"
+
+
+def _format_sandbox_policy(sandbox_policy: Any) -> str:
+    if sandbox_policy is None:
+        return "default"
+    if isinstance(sandbox_policy, str):
+        return sandbox_policy
+    if isinstance(sandbox_policy, dict):
+        sandbox_type = sandbox_policy.get("type")
+        if isinstance(sandbox_type, str):
+            suffix = ""
+            if "networkAccess" in sandbox_policy:
+                suffix = f", network={sandbox_policy.get('networkAccess')}"
+            return f"{sandbox_type}{suffix}"
+    return str(sandbox_policy)
+
+
+def _format_token_usage(token_usage: Optional[dict[str, Any]]) -> list[str]:
+    if not token_usage:
+        return []
+    lines: list[str] = []
+    total = token_usage.get("total") if isinstance(token_usage, dict) else None
+    last = token_usage.get("last") if isinstance(token_usage, dict) else None
+    if isinstance(total, dict):
+        total_line = _format_token_row("Token usage (total)", total)
+        if total_line:
+            lines.append(total_line)
+    if isinstance(last, dict):
+        last_line = _format_token_row("Token usage (last)", last)
+        if last_line:
+            lines.append(last_line)
+    context = token_usage.get("modelContextWindow") if isinstance(token_usage, dict) else None
+    if isinstance(context, int):
+        lines.append(f"Context window: {context}")
+    return lines
+
+
+def _format_token_row(label: str, usage: dict[str, Any]) -> Optional[str]:
+    input_tokens = usage.get("inputTokens")
+    output_tokens = usage.get("outputTokens")
+    reasoning_tokens = usage.get("reasoningTokens")
+    parts: list[str] = []
+    if isinstance(input_tokens, int):
+        parts.append(f"in={input_tokens}")
+    if isinstance(output_tokens, int):
+        parts.append(f"out={output_tokens}")
+    if isinstance(reasoning_tokens, int):
+        parts.append(f"reasoning={reasoning_tokens}")
+    if not parts:
+        return None
+    return f"{label}: " + " ".join(parts)
+
+
+def _format_model_list(result: Any) -> str:
+    entries: list[dict[str, Any]] = []
+    if isinstance(result, list):
+        entries = [entry for entry in result if isinstance(entry, dict)]
+    elif isinstance(result, dict):
+        for key in ("data", "models", "items", "results"):
+            value = result.get(key)
+            if isinstance(value, list):
+                entries = [entry for entry in value if isinstance(entry, dict)]
+                break
+    if not entries:
+        return "No models found."
+    lines = ["Available models:"]
+    for entry in entries[:DEFAULT_MODEL_LIST_LIMIT]:
+        model = entry.get("model") or entry.get("id") or "(unknown)"
+        display_name = entry.get("displayName")
+        label = str(model)
+        if isinstance(display_name, str) and display_name and display_name != model:
+            label = f"{model} ({display_name})"
+        efforts = entry.get("supportedReasoningEfforts")
+        effort_values: list[str] = []
+        if isinstance(efforts, list):
+            for effort in efforts:
+                if isinstance(effort, dict):
+                    value = effort.get("reasoningEffort")
+                    if isinstance(value, str):
+                        effort_values.append(value)
+        if effort_values:
+            label = f"{label} [effort: {', '.join(effort_values)}]"
+        default_effort = entry.get("defaultReasoningEffort")
+        if isinstance(default_effort, str):
+            label = f"{label} (default {default_effort})"
+        lines.append(label)
+    if len(entries) > DEFAULT_MODEL_LIST_LIMIT:
+        lines.append(f"...and {len(entries) - DEFAULT_MODEL_LIST_LIMIT} more.")
+    lines.append("Use /model <id> [effort] to set.")
+    return "\n".join(lines)
+
+
+def _format_feature_flags(result: Any) -> str:
+    config = result.get("config") if isinstance(result, dict) else None
+    if config is None and isinstance(result, dict):
+        config = result
+    if not isinstance(config, dict):
+        return "No feature flags found."
+    features = config.get("features")
+    if not isinstance(features, dict) or not features:
+        return "No feature flags found."
+    lines = ["Feature flags:"]
+    for key in sorted(features.keys()):
+        value = features.get(key)
+        lines.append(f"{key}: {value}")
+    return "\n".join(lines)
+
+
+def _format_skills_list(result: Any, workspace_path: Optional[str]) -> str:
+    entries: list[dict[str, Any]] = []
+    if isinstance(result, dict):
+        data = result.get("data")
+        if isinstance(data, list):
+            entries = [entry for entry in data if isinstance(entry, dict)]
+    elif isinstance(result, list):
+        entries = [entry for entry in result if isinstance(entry, dict)]
+    skills: list[tuple[str, str]] = []
+    for entry in entries:
+        cwd = entry.get("cwd")
+        if isinstance(workspace_path, str) and isinstance(cwd, str):
+            if Path(cwd).expanduser().resolve() != Path(workspace_path).expanduser().resolve():
+                continue
+        items = entry.get("skills")
+        if isinstance(items, list):
+            for skill in items:
+                if not isinstance(skill, dict):
+                    continue
+                name = skill.get("name")
+                if not isinstance(name, str) or not name:
+                    continue
+                description = skill.get("shortDescription") or skill.get("description")
+                desc_text = (
+                    description.strip() if isinstance(description, str) and description else ""
+                )
+                skills.append((name, desc_text))
+    if not skills:
+        return "No skills found."
+    lines = ["Skills:"]
+    for name, desc in skills[:DEFAULT_SKILLS_LIST_LIMIT]:
+        if desc:
+            lines.append(f"{name} - {desc}")
+        else:
+            lines.append(name)
+    if len(skills) > DEFAULT_SKILLS_LIST_LIMIT:
+        lines.append(f"...and {len(skills) - DEFAULT_SKILLS_LIST_LIMIT} more.")
+    lines.append("Use $<SkillName> in your next message to invoke a skill.")
+    return "\n".join(lines)
+
+
+def _format_mcp_list(result: Any) -> str:
+    entries: list[dict[str, Any]] = []
+    if isinstance(result, dict):
+        data = result.get("data")
+        if isinstance(data, list):
+            entries = [entry for entry in data if isinstance(entry, dict)]
+    elif isinstance(result, list):
+        entries = [entry for entry in result if isinstance(entry, dict)]
+    if not entries:
+        return "No MCP servers found."
+    lines = ["MCP servers:"]
+    for entry in entries:
+        name = entry.get("name") or "(unknown)"
+        auth = entry.get("authStatus") or "unknown"
+        tools = entry.get("tools")
+        tool_names: list[str] = []
+        if isinstance(tools, dict):
+            tool_names = sorted(tools.keys())
+        elif isinstance(tools, list):
+            tool_names = [str(item) for item in tools]
+        line = f"{name} ({auth})"
+        if tool_names:
+            line = f"{line} - tools: {', '.join(tool_names)}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
+    order = [
+        "bind",
+        "new",
+        "resume",
+        "review",
+        "model",
+        "approvals",
+        "status",
+        "diff",
+        "mention",
+        "skills",
+        "mcp",
+        "experimental",
+        "init",
+        "compact",
+        "rollout",
+        "feedback",
+        "logout",
+        "interrupt",
+        "quit",
+        "exit",
+        "help",
+    ]
+    lines = ["Commands:"]
+    for name in order:
+        spec = command_specs.get(name)
+        if spec:
+            lines.append(f"/{name} - {spec.description}")
+    return "\n".join(lines)
+
+
+def _render_command_output(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    if isinstance(result, dict):
+        stdout = result.get("stdout") or result.get("stdOut") or result.get("output")
+        stderr = result.get("stderr") or result.get("stdErr")
+        if isinstance(stdout, str) and isinstance(stderr, str):
+            if stdout and stderr:
+                return stdout.rstrip("\n") + "\n" + stderr
+            if stdout:
+                return stdout
+            return stderr
+        if isinstance(stdout, str):
+            return stdout
+        if isinstance(stderr, str):
+            return stderr
+    return ""
+
+
+def _looks_binary(data: bytes) -> bool:
+    return b"\x00" in data
+
+
+def _find_thread_entry(payload: Any, thread_id: str) -> Optional[dict[str, Any]]:
+    for entry in _coerce_thread_list(payload):
+        if entry.get("id") == thread_id:
+            return entry
+    return None
+
+
+def _extract_rollout_path(entry: Any) -> Optional[str]:
+    if not isinstance(entry, dict):
+        return None
+    for key in ("rollout_path", "rolloutPath", "path"):
+        value = entry.get(key)
+        if isinstance(value, str):
+            return value
+    thread = entry.get("thread")
+    if isinstance(thread, dict):
+        value = thread.get("path")
+        if isinstance(value, str):
+            return value
+    return None
+
+
 def _parse_command(raw: Any) -> list[str]:
     if isinstance(raw, list):
         return [str(item) for item in raw if item]
@@ -2038,7 +3555,6 @@ def _parse_int_list(raw: Any) -> list[int]:
 
 _THREAD_PATH_KEYS = (
     "cwd",
-    "path",
     "workspace",
     "workspace_path",
     "workspacePath",
@@ -2289,18 +3805,3 @@ def _format_selection_prompt(base: str, page: int, total_pages: int) -> str:
         return base
     trimmed = base.rstrip(".")
     return f"{trimmed} (page {page + 1}/{total_pages})."
-
-
-def _help_text() -> str:
-    return "\n".join(
-        [
-            "Commands:",
-            "/bind <repo_id|path> - bind this topic to a workspace",
-            "/new - start a new session",
-            "/resume - pick a previous session",
-            "/interrupt - stop a running turn",
-            "/approvals yolo|safe - toggle approvals",
-            "/status - show current binding",
-            "/help - show this message",
-        ]
-    )

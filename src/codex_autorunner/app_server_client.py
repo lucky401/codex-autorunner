@@ -12,6 +12,7 @@ from .logging_utils import log_event
 
 ApprovalDecision = Union[str, Dict[str, Any]]
 ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
+NotificationHandler = Callable[[Dict[str, Any]], Awaitable[None]]
 
 APPROVAL_METHODS = {
     "item/commandExecution/requestApproval",
@@ -91,6 +92,7 @@ class CodexAppServerClient:
         default_approval_decision: str = "cancel",
         auto_restart: bool = True,
         request_timeout: Optional[float] = None,
+        notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._command = [str(arg) for arg in command]
@@ -100,6 +102,7 @@ class CodexAppServerClient:
         self._default_approval_decision = default_approval_decision
         self._auto_restart = auto_restart
         self._request_timeout = request_timeout
+        self._notification_handler = notification_handler
         self._logger = logger or logging.getLogger(__name__)
 
         self._process: Optional[asyncio.subprocess.Process] = None
@@ -227,6 +230,35 @@ class CodexAppServerClient:
         turn_id = _extract_turn_id(result)
         if not turn_id:
             raise CodexAppServerProtocolError("turn/start response missing turn id")
+        self._ensure_turn_state(turn_id)
+        return TurnHandle(self, turn_id)
+
+    async def review_start(
+        self,
+        thread_id: str,
+        *,
+        target: Dict[str, Any],
+        delivery: str = "inline",
+        approval_policy: Optional[str] = None,
+        sandbox_policy: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> TurnHandle:
+        params: Dict[str, Any] = {
+            "threadId": thread_id,
+            "target": target,
+            "delivery": delivery,
+        }
+        if approval_policy:
+            params["approvalPolicy"] = approval_policy
+        if sandbox_policy:
+            params["sandboxPolicy"] = _normalize_sandbox_policy(sandbox_policy)
+        params.update(kwargs)
+        result = await self.request("review/start", params)
+        if not isinstance(result, dict):
+            raise CodexAppServerProtocolError("review/start returned non-object result")
+        turn_id = _extract_turn_id(result)
+        if not turn_id:
+            raise CodexAppServerProtocolError("review/start response missing turn id")
         self._ensure_turn_state(turn_id)
         return TurnHandle(self, turn_id)
 
@@ -558,11 +590,13 @@ class CodexAppServerClient:
     async def _handle_notification(self, message: Dict[str, Any]) -> None:
         method = message.get("method")
         params = message.get("params") or {}
+        handled = False
         if method == "item/completed":
             turn_id = _extract_turn_id(params) or _extract_turn_id(
                 params.get("item") if isinstance(params, dict) else None
             )
             if not turn_id:
+                handled = True
                 return
             state = self._ensure_turn_state(turn_id)
             item = params.get("item") if isinstance(params, dict) else None
@@ -570,6 +604,9 @@ class CodexAppServerClient:
                 text = item.get("text")
                 if isinstance(text, str):
                     state.agent_messages.append(text)
+            review_text = _extract_review_text(item)
+            if review_text:
+                state.agent_messages.append(review_text)
             item_type = item.get("type") if isinstance(item, dict) else None
             log_event(
                 self._logger,
@@ -579,9 +616,11 @@ class CodexAppServerClient:
                 item_type=item_type,
             )
             state.raw_events.append(message)
+            handled = True
         elif method == "turn/completed":
             turn_id = _extract_turn_id(params)
             if not turn_id:
+                handled = True
                 return
             state = self._ensure_turn_state(turn_id)
             state.raw_events.append(message)
@@ -604,6 +643,19 @@ class CodexAppServerClient:
                         agent_messages=list(state.agent_messages),
                         raw_events=list(state.raw_events),
                     )
+                )
+            handled = True
+        if self._notification_handler is not None:
+            try:
+                await _maybe_await(self._notification_handler(message))
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.notification_handler.failed",
+                    method=method,
+                    handled=handled,
+                    exc=exc,
                 )
 
     def _ensure_turn_state(self, turn_id: str) -> _TurnState:
@@ -741,6 +793,8 @@ def _summarize_params(method: str, params: Optional[Dict[str, Any]]) -> Dict[str
         return {"thread_id": params.get("threadId")}
     if method == "thread/list":
         return {}
+    if method == "review/start":
+        return {"thread_id": params.get("threadId")}
     return {"param_keys": list(params.keys())[:10]}
 
 
@@ -770,6 +824,24 @@ def _extract_turn_id(payload: Any) -> Optional[str]:
             value = turn.get(key)
             if isinstance(value, str):
                 return value
+    return None
+
+
+def _extract_review_text(item: Any) -> Optional[str]:
+    if not isinstance(item, dict):
+        return None
+    exited = item.get("exitedReviewMode")
+    if isinstance(exited, dict):
+        review = exited.get("review")
+        if isinstance(review, str) and review.strip():
+            return review
+    if item.get("type") == "review":
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            return text
+    review = item.get("review")
+    if isinstance(review, str) and review.strip():
+        return review
     return None
 
 

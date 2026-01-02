@@ -56,6 +56,12 @@ class TelegramTopicRecord:
     repo_id: Optional[str] = None
     workspace_path: Optional[str] = None
     active_thread_id: Optional[str] = None
+    model: Optional[str] = None
+    effort: Optional[str] = None
+    summary: Optional[str] = None
+    approval_policy: Optional[str] = None
+    sandbox_policy: Optional[Any] = None
+    rollout_path: Optional[str] = None
     approval_mode: str = APPROVAL_MODE_YOLO
     last_active_at: Optional[str] = None
 
@@ -72,6 +78,28 @@ class TelegramTopicRecord:
         active_thread_id = payload.get("active_thread_id") or payload.get("activeThreadId")
         if not isinstance(active_thread_id, str):
             active_thread_id = None
+        model = payload.get("model")
+        if not isinstance(model, str):
+            model = None
+        effort = payload.get("effort") or payload.get("reasoningEffort")
+        if not isinstance(effort, str):
+            effort = None
+        summary = payload.get("summary") or payload.get("summaryMode")
+        if not isinstance(summary, str):
+            summary = None
+        approval_policy = payload.get("approval_policy") or payload.get("approvalPolicy")
+        if not isinstance(approval_policy, str):
+            approval_policy = None
+        sandbox_policy = payload.get("sandbox_policy") or payload.get("sandboxPolicy")
+        if not isinstance(sandbox_policy, (dict, str)):
+            sandbox_policy = None
+        rollout_path = (
+            payload.get("rollout_path")
+            or payload.get("rolloutPath")
+            or payload.get("path")
+        )
+        if not isinstance(rollout_path, str):
+            rollout_path = None
         approval_mode = payload.get("approval_mode") or payload.get("approvalMode")
         approval_mode = normalize_approval_mode(
             approval_mode, default=default_approval_mode
@@ -83,6 +111,12 @@ class TelegramTopicRecord:
             repo_id=repo_id,
             workspace_path=workspace_path,
             active_thread_id=active_thread_id,
+            model=model,
+            effort=effort,
+            summary=summary,
+            approval_policy=approval_policy,
+            sandbox_policy=sandbox_policy,
+            rollout_path=rollout_path,
             approval_mode=approval_mode,
             last_active_at=last_active_at,
         )
@@ -92,6 +126,12 @@ class TelegramTopicRecord:
             "repo_id": self.repo_id,
             "workspace_path": self.workspace_path,
             "active_thread_id": self.active_thread_id,
+            "model": self.model,
+            "effort": self.effort,
+            "summary": self.summary,
+            "approval_policy": self.approval_policy,
+            "sandbox_policy": self.sandbox_policy,
+            "rollout_path": self.rollout_path,
             "approval_mode": self.approval_mode,
             "last_active_at": self.last_active_at,
         }
@@ -167,6 +207,11 @@ class TelegramStateStore:
         def apply(_record: TelegramTopicRecord) -> None:
             pass
 
+        return self._update_topic(key, apply)
+
+    def update_topic(
+        self, key: str, apply: Callable[[TelegramTopicRecord], None]
+    ) -> TelegramTopicRecord:
         return self._update_topic(key, apply)
 
     def _load_unlocked(self) -> TelegramState:
@@ -298,6 +343,15 @@ class TopicRouter:
     ) -> TelegramTopicRecord:
         key = self.topic_key(chat_id, thread_id)
         return self._store.ensure_topic(key)
+
+    def update_topic(
+        self,
+        chat_id: int,
+        thread_id: Optional[int],
+        apply: Callable[[TelegramTopicRecord], None],
+    ) -> TelegramTopicRecord:
+        key = self.topic_key(chat_id, thread_id)
+        return self._store.update_topic(key, apply)
 
     def bind_topic(
         self,
