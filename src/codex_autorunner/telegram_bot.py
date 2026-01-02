@@ -2117,6 +2117,8 @@ class TelegramBotService:
         if record.active_thread_id:
             token_usage = self._token_usage_by_thread.get(record.active_thread_id)
             lines.extend(_format_token_usage(token_usage))
+        rate_limits = await self._read_rate_limits()
+        lines.extend(_format_rate_limits(rate_limits))
         if not record.workspace_path:
             lines.append("Use /bind <repo_id> or /bind <path>.")
         await self._send_message(
@@ -2125,6 +2127,17 @@ class TelegramBotService:
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
+
+    async def _read_rate_limits(self) -> Optional[dict[str, Any]]:
+        for method in ("account/rateLimits/read", "account/read"):
+            try:
+                result = await self._client.request(method, params=None, timeout=5.0)
+            except (CodexAppServerError, asyncio.TimeoutError):
+                continue
+            rate_limits = _extract_rate_limits(result)
+            if rate_limits:
+                return rate_limits
+        return None
 
     async def _handle_approvals(
         self, message: TelegramMessage, args: str, _runtime: Optional[Any] = None
@@ -3660,6 +3673,96 @@ def _format_token_usage(token_usage: Optional[dict[str, Any]]) -> list[str]:
     if isinstance(context, int):
         lines.append(f"Context window: {context}")
     return lines
+
+
+def _extract_rate_limits(payload: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("rateLimits", "rate_limits", "limits"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            return value
+    if "primary" in payload or "secondary" in payload:
+        return payload
+    return None
+
+
+def _format_rate_limits(rate_limits: Optional[dict[str, Any]]) -> list[str]:
+    if not isinstance(rate_limits, dict):
+        return []
+    parts: list[str] = []
+    for key in ("primary", "secondary"):
+        entry = rate_limits.get(key)
+        if not isinstance(entry, dict):
+            continue
+        used_value = entry.get("used_percent", entry.get("usedPercent"))
+        used = _coerce_number(used_value)
+        if used is None:
+            used = _compute_used_percent(entry)
+        used_text = _format_percent(used)
+        window_minutes = _coerce_int(entry.get("window_minutes", entry.get("windowMinutes")))
+        if window_minutes is None:
+            window_seconds = _coerce_int(entry.get("window_seconds", entry.get("windowSeconds")))
+            if window_seconds is not None:
+                window_minutes = max(int(round(window_seconds / 60)), 1)
+        label = _format_rate_limit_window(window_minutes) or key
+        if used_text:
+            parts.append(f"{label} used {used_text}")
+    if not parts:
+        return []
+    return [f"Rate limits: {', '.join(parts)}"]
+
+
+def _compute_used_percent(entry: dict[str, Any]) -> Optional[float]:
+    remaining = _coerce_number(entry.get("remaining"))
+    limit = _coerce_number(entry.get("limit"))
+    if remaining is None or limit is None or limit <= 0:
+        return None
+    used = (limit - remaining) / limit * 100
+    return max(min(used, 100.0), 0.0)
+
+
+def _coerce_number(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    number = _coerce_number(value)
+    if number is None:
+        return None
+    return int(number)
+
+
+def _format_percent(value: Any) -> Optional[str]:
+    number = _coerce_number(value)
+    if number is None:
+        return None
+    if number.is_integer():
+        return f"{int(number)}%"
+    return f"{number:.1f}%"
+
+
+def _format_rate_limit_window(window_minutes: Optional[int]) -> Optional[str]:
+    if not isinstance(window_minutes, int) or window_minutes <= 0:
+        return None
+    if window_minutes == 300:
+        return "5h"
+    if window_minutes == 10080:
+        return "weekly"
+    if window_minutes % 1440 == 0:
+        return f"{window_minutes // 1440}d"
+    if window_minutes % 60 == 0:
+        return f"{window_minutes // 60}h"
+    return f"{window_minutes}m"
 
 
 def _extract_usage_value(
