@@ -57,6 +57,7 @@ from .telegram_adapter import (
 from .state import now_iso
 from .telegram_state import (
     APPROVAL_MODE_YOLO,
+    OutboxRecord,
     PendingApprovalRecord,
     TelegramStateStore,
     TopicRouter,
@@ -85,6 +86,9 @@ DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
+OUTBOX_RETRY_INTERVAL_SECONDS = 10.0
+OUTBOX_IMMEDIATE_RETRY_DELAYS = (0.5, 2.0, 5.0)
+OUTBOX_MAX_ATTEMPTS = 8
 DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
 RESUME_PICKER_PROMPT = (
     "Select a thread to resume (buttons below or reply with number/id)."
@@ -529,6 +533,7 @@ class TelegramBotService:
         self._token_usage_by_turn: "collections.OrderedDict[str, dict[str, Any]]" = (
             collections.OrderedDict()
         )
+        self._outbox_task: Optional[asyncio.Task[None]] = None
         self._command_specs = self._build_command_specs()
 
     async def run_polling(self) -> None:
@@ -544,6 +549,8 @@ class TelegramBotService:
         await self._start_app_server_with_backoff()
         await self._prime_bot_identity()
         await self._restore_pending_approvals()
+        await self._restore_outbox()
+        self._outbox_task = asyncio.create_task(self._outbox_loop())
         log_event(
             self._logger,
             logging.INFO,
@@ -577,6 +584,12 @@ class TelegramBotService:
                 for update in updates:
                     self._spawn_task(self._dispatch_update(update))
         finally:
+            if self._outbox_task is not None:
+                self._outbox_task.cancel()
+                try:
+                    await self._outbox_task
+                except asyncio.CancelledError:
+                    pass
             await self._bot.close()
             await self._client.close()
 
@@ -624,6 +637,129 @@ class TelegramBotService:
                     chat_id=chat_id,
                     thread_id=thread_id,
                 )
+
+    async def _restore_outbox(self) -> None:
+        records = self._store.list_outbox()
+        if not records:
+            return
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.outbox.restore",
+            count=len(records),
+        )
+        await self._flush_outbox(records)
+
+    async def _outbox_loop(self) -> None:
+        while True:
+            await asyncio.sleep(OUTBOX_RETRY_INTERVAL_SECONDS)
+            try:
+                records = self._store.list_outbox()
+                if records:
+                    await self._flush_outbox(records)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.outbox.flush_failed",
+                    exc=exc,
+                )
+
+    async def _flush_outbox(self, records: list[OutboxRecord]) -> None:
+        for record in records:
+            if record.attempts >= OUTBOX_MAX_ATTEMPTS:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.outbox.gave_up",
+                    record_id=record.record_id,
+                    chat_id=record.chat_id,
+                    thread_id=record.thread_id,
+                    attempts=record.attempts,
+                )
+                self._store.delete_outbox(record.record_id)
+                if record.placeholder_message_id is not None:
+                    await self._edit_message_text(
+                        record.chat_id,
+                        record.placeholder_message_id,
+                        "Delivery failed after retries. Please resend.",
+                    )
+                continue
+            await self._attempt_outbox_send(record)
+
+    async def _attempt_outbox_send(self, record: OutboxRecord) -> bool:
+        try:
+            await self._send_message(
+                record.chat_id,
+                record.text,
+                thread_id=record.thread_id,
+                reply_to=record.reply_to_message_id,
+            )
+        except Exception as exc:
+            record.attempts += 1
+            record.last_error = str(exc)[:500]
+            record.last_attempt_at = now_iso()
+            self._store.update_outbox(record)
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.outbox.send_failed",
+                record_id=record.record_id,
+                chat_id=record.chat_id,
+                thread_id=record.thread_id,
+                attempts=record.attempts,
+                exc=exc,
+            )
+            return False
+        self._store.delete_outbox(record.record_id)
+        if record.placeholder_message_id is not None:
+            await self._delete_message(
+                record.chat_id, record.placeholder_message_id
+            )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.outbox.delivered",
+            record_id=record.record_id,
+            chat_id=record.chat_id,
+            thread_id=record.thread_id,
+        )
+        return True
+
+    async def _send_message_with_outbox(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+        placeholder_id: Optional[int] = None,
+    ) -> bool:
+        record = OutboxRecord(
+            record_id=secrets.token_hex(8),
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to_message_id=reply_to,
+            placeholder_message_id=placeholder_id,
+            text=text,
+            created_at=now_iso(),
+        )
+        self._store.enqueue_outbox(record)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.outbox.enqueued",
+            record_id=record.record_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+        )
+        for delay in OUTBOX_IMMEDIATE_RETRY_DELAYS:
+            if await self._attempt_outbox_send(record):
+                return True
+            if record.attempts >= OUTBOX_MAX_ATTEMPTS:
+                return False
+            await asyncio.sleep(delay)
+        return False
 
     async def _start_app_server_with_backoff(self) -> None:
         delay = APP_SERVER_START_BACKOFF_INITIAL_SECONDS
@@ -1611,14 +1747,19 @@ class TelegramBotService:
                 thread_id=message.thread_id,
                 exc=exc,
             )
-            await self._deliver_turn_response(
+            response_sent = await self._deliver_turn_response(
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
                 placeholder_id=placeholder_id,
-                response="Codex turn failed; check logs for details.",
+                response=_with_conversation_id(
+                    "Codex turn failed; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
             )
-            await self._delete_message(message.chat_id, placeholder_id)
+            if response_sent:
+                await self._delete_message(message.chat_id, placeholder_id)
             return
         finally:
             if turn_handle is not None:
@@ -1663,7 +1804,7 @@ class TelegramBotService:
             status=result.status,
             agent_message_count=len(result.agent_messages),
         )
-        await self._deliver_turn_response(
+        response_sent = await self._deliver_turn_response(
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             reply_to=message.message_id,
@@ -1687,7 +1828,8 @@ class TelegramBotService:
         )
         if turn_id:
             self._token_usage_by_turn.pop(turn_id, None)
-        await self._delete_message(message.chat_id, placeholder_id)
+        if response_sent:
+            await self._delete_message(message.chat_id, placeholder_id)
 
     async def _handle_image_message(
         self,
@@ -2227,7 +2369,11 @@ class TelegramBotService:
             )
             await self._send_message(
                 message.chat_id,
-                "Failed to list threads; check logs for details.",
+                _with_conversation_id(
+                    "Failed to list threads; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2295,10 +2441,15 @@ class TelegramBotService:
                 exc=exc,
             )
             await self._answer_callback(callback, "Resume failed")
+            chat_id, thread_id_val = _split_topic_key(key)
             await self._finalize_selection(
                 key,
                 callback,
-                "Failed to resume thread; check logs for details.",
+                _with_conversation_id(
+                    "Failed to resume thread; check logs for details.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
             )
             return
         chat_id, thread_id_val = _split_topic_key(key)
@@ -2519,7 +2670,11 @@ class TelegramBotService:
                 )
                 await self._send_message(
                     message.chat_id,
-                    "Failed to list models; check logs for details.",
+                    _with_conversation_id(
+                        "Failed to list models; check logs for details.",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                    ),
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -2575,7 +2730,11 @@ class TelegramBotService:
                 )
                 await self._send_message(
                     message.chat_id,
-                    "Failed to list models; check logs for details.",
+                    _with_conversation_id(
+                        "Failed to list models; check logs for details.",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                    ),
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -2746,14 +2905,19 @@ class TelegramBotService:
                 thread_id=message.thread_id,
                 exc=exc,
             )
-            await self._deliver_turn_response(
+            response_sent = await self._deliver_turn_response(
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
                 placeholder_id=placeholder_id,
-                response="Codex review failed; check logs for details.",
+                response=_with_conversation_id(
+                    "Codex review failed; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
             )
-            await self._delete_message(message.chat_id, placeholder_id)
+            if response_sent:
+                await self._delete_message(message.chat_id, placeholder_id)
             return
         finally:
             if turn_handle is not None:
@@ -2773,7 +2937,7 @@ class TelegramBotService:
             turn_id=turn_handle.turn_id if turn_handle else None,
             agent_message_count=len(result.agent_messages),
         )
-        await self._deliver_turn_response(
+        response_sent = await self._deliver_turn_response(
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             reply_to=message.message_id,
@@ -2797,7 +2961,8 @@ class TelegramBotService:
         )
         if turn_id:
             self._token_usage_by_turn.pop(turn_id, None)
-        await self._delete_message(message.chat_id, placeholder_id)
+        if response_sent:
+            await self._delete_message(message.chat_id, placeholder_id)
 
     async def _handle_diff(
         self, message: TelegramMessage, _args: str, _runtime: Any
@@ -2832,7 +2997,11 @@ class TelegramBotService:
             )
             await self._send_message(
                 message.chat_id,
-                "Failed to compute diff; check logs for details.",
+                _with_conversation_id(
+                    "Failed to compute diff; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2966,7 +3135,11 @@ class TelegramBotService:
             )
             await self._send_message(
                 message.chat_id,
-                "Failed to list skills; check logs for details.",
+                _with_conversation_id(
+                    "Failed to list skills; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2997,7 +3170,11 @@ class TelegramBotService:
             )
             await self._send_message(
                 message.chat_id,
-                "Failed to list MCP servers; check logs for details.",
+                _with_conversation_id(
+                    "Failed to list MCP servers; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3030,7 +3207,11 @@ class TelegramBotService:
                 )
                 await self._send_message(
                     message.chat_id,
-                    "Failed to read config; check logs for details.",
+                    _with_conversation_id(
+                        "Failed to read config; check logs for details.",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                    ),
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -3093,7 +3274,11 @@ class TelegramBotService:
             )
             await self._send_message(
                 message.chat_id,
-                "Failed to update feature flag; check logs for details.",
+                _with_conversation_id(
+                    "Failed to update feature flag; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3176,7 +3361,11 @@ class TelegramBotService:
             )
             await self._send_message(
                 message.chat_id,
-                "Failed to look up rollout path; check logs for details.",
+                _with_conversation_id(
+                    "Failed to look up rollout path; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3242,7 +3431,11 @@ class TelegramBotService:
                 update_target=update_target,
                 exc=exc,
             )
-            failure = "Update failed to start; check logs for details."
+            failure = _with_conversation_id(
+                "Update failed to start; check logs for details.",
+                chat_id=chat_id,
+                thread_id=thread_id,
+            )
             if callback and selection_key:
                 await self._answer_callback(callback, "Update failed")
                 await self._finalize_selection(selection_key, callback, failure)
@@ -3327,7 +3520,11 @@ class TelegramBotService:
             )
             await self._send_message(
                 message.chat_id,
-                "Logout failed; check logs for details.",
+                _with_conversation_id(
+                    "Logout failed; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3372,7 +3569,11 @@ class TelegramBotService:
             )
             await self._send_message(
                 message.chat_id,
-                "Feedback upload failed; check logs for details.",
+                _with_conversation_id(
+                    "Feedback upload failed; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3746,12 +3947,13 @@ class TelegramBotService:
         reply_to: Optional[int],
         placeholder_id: Optional[int],
         response: str,
-    ) -> None:
-        await self._send_message(
+    ) -> bool:
+        return await self._send_message_with_outbox(
             chat_id,
             response,
             thread_id=thread_id,
             reply_to=reply_to,
+            placeholder_id=placeholder_id,
         )
 
     async def _send_turn_metrics(
@@ -3762,11 +3964,11 @@ class TelegramBotService:
         reply_to: Optional[int],
         elapsed_seconds: Optional[float],
         token_usage: Optional[dict[str, Any]],
-    ) -> None:
+    ) -> bool:
         metrics = _format_turn_metrics(token_usage, elapsed_seconds)
         if not metrics:
-            return
-        await self._send_message(
+            return False
+        return await self._send_message_with_outbox(
             chat_id,
             metrics,
             thread_id=thread_id,
@@ -4038,6 +4240,17 @@ def _set_model_overrides(
 
 def _set_rollout_path(record: "TelegramTopicRecord", rollout_path: str) -> None:
     record.rollout_path = rollout_path
+
+
+def _format_conversation_id(chat_id: int, thread_id: Optional[int]) -> str:
+    return topic_key(chat_id, thread_id)
+
+
+def _with_conversation_id(
+    message: str, *, chat_id: int, thread_id: Optional[int]
+) -> str:
+    conversation_id = _format_conversation_id(chat_id, thread_id)
+    return f"{message} (conversation {conversation_id})"
 
 
 def _format_persist_note(message: str, *, persist: bool) -> str:

@@ -11,7 +11,7 @@ from .state import now_iso, state_lock
 from .utils import atomic_write, read_json
 
 
-STATE_VERSION = 1
+STATE_VERSION = 2
 TOPIC_ROOT = "root"
 APPROVAL_MODE_YOLO = "yolo"
 APPROVAL_MODE_SAFE = "safe"
@@ -144,6 +144,7 @@ class TelegramState:
     pending_approvals: dict[str, "PendingApprovalRecord"] = dataclasses.field(
         default_factory=dict
     )
+    outbox: dict[str, "OutboxRecord"] = dataclasses.field(default_factory=dict)
 
     def to_json(self) -> str:
         payload = {
@@ -153,6 +154,9 @@ class TelegramState:
             },
             "pending_approvals": {
                 key: record.to_dict() for key, record in self.pending_approvals.items()
+            },
+            "outbox": {
+                key: record.to_dict() for key, record in self.outbox.items()
             },
         }
         return json.dumps(payload, indent=2) + "\n"
@@ -212,6 +216,81 @@ class PendingApprovalRecord:
             "message_id": self.message_id,
             "prompt": self.prompt,
             "created_at": self.created_at,
+        }
+
+
+@dataclass
+class OutboxRecord:
+    record_id: str
+    chat_id: int
+    thread_id: Optional[int]
+    reply_to_message_id: Optional[int]
+    placeholder_message_id: Optional[int]
+    text: str
+    created_at: str
+    attempts: int = 0
+    last_error: Optional[str] = None
+    last_attempt_at: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> Optional["OutboxRecord"]:
+        if not isinstance(payload, dict):
+            return None
+        record_id = payload.get("record_id")
+        chat_id = payload.get("chat_id")
+        thread_id = payload.get("thread_id")
+        reply_to_message_id = payload.get("reply_to_message_id")
+        placeholder_message_id = payload.get("placeholder_message_id")
+        text = payload.get("text") or ""
+        created_at = payload.get("created_at")
+        attempts = payload.get("attempts", 0)
+        last_error = payload.get("last_error")
+        last_attempt_at = payload.get("last_attempt_at")
+        if not isinstance(record_id, str) or not record_id:
+            return None
+        if not isinstance(chat_id, int):
+            return None
+        if thread_id is not None and not isinstance(thread_id, int):
+            thread_id = None
+        if reply_to_message_id is not None and not isinstance(reply_to_message_id, int):
+            reply_to_message_id = None
+        if placeholder_message_id is not None and not isinstance(placeholder_message_id, int):
+            placeholder_message_id = None
+        if not isinstance(text, str):
+            text = ""
+        if not isinstance(created_at, str) or not created_at:
+            return None
+        if not isinstance(attempts, int) or attempts < 0:
+            attempts = 0
+        if not isinstance(last_error, str):
+            last_error = None
+        if not isinstance(last_attempt_at, str):
+            last_attempt_at = None
+        return cls(
+            record_id=record_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to_message_id=reply_to_message_id,
+            placeholder_message_id=placeholder_message_id,
+            text=text,
+            created_at=created_at,
+            attempts=attempts,
+            last_error=last_error,
+            last_attempt_at=last_attempt_at,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "record_id": self.record_id,
+            "chat_id": self.chat_id,
+            "thread_id": self.thread_id,
+            "reply_to_message_id": self.reply_to_message_id,
+            "placeholder_message_id": self.placeholder_message_id,
+            "text": self.text,
+            "created_at": self.created_at,
+            "attempts": self.attempts,
+            "last_error": self.last_error,
+            "last_attempt_at": self.last_attempt_at,
         }
 
 
@@ -306,8 +385,21 @@ class TelegramStateStore:
                 if parsed is None:
                     continue
                 pending_approvals[key] = parsed
+        outbox_raw = data.get("outbox")
+        outbox: dict[str, OutboxRecord] = {}
+        if isinstance(outbox_raw, dict):
+            for key, record in outbox_raw.items():
+                if not isinstance(key, str) or not isinstance(record, dict):
+                    continue
+                parsed = OutboxRecord.from_dict(record)
+                if parsed is None:
+                    continue
+                outbox[key] = parsed
         return TelegramState(
-            version=version, topics=topics, pending_approvals=pending_approvals
+            version=version,
+            topics=topics,
+            pending_approvals=pending_approvals,
+            outbox=outbox,
         )
 
     def _save_unlocked(self, state: TelegramState) -> None:
@@ -376,6 +468,35 @@ class TelegramStateStore:
                 state.pending_approvals.pop(key, None)
             if keys:
                 self._save_unlocked(state)
+
+    def enqueue_outbox(self, record: OutboxRecord) -> OutboxRecord:
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            state.outbox[record.record_id] = record
+            self._save_unlocked(state)
+            return record
+
+    def update_outbox(self, record: OutboxRecord) -> OutboxRecord:
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            state.outbox[record.record_id] = record
+            self._save_unlocked(state)
+            return record
+
+    def delete_outbox(self, record_id: str) -> None:
+        if not isinstance(record_id, str) or not record_id:
+            return
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            if record_id in state.outbox:
+                state.outbox.pop(record_id, None)
+                self._save_unlocked(state)
+
+    def list_outbox(self) -> list[OutboxRecord]:
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            records = list(state.outbox.values())
+        return sorted(records, key=lambda record: record.created_at or "")
 
 
 T = TypeVar("T")
