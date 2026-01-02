@@ -845,6 +845,38 @@ class TelegramBotClient:
         parse_mode: Optional[str] = None,
         disable_web_page_preview: bool = True,
     ) -> dict[str, Any]:
+        if len(text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            responses = await self.send_message_chunks(
+                chat_id,
+                text,
+                message_thread_id=message_thread_id,
+                reply_to_message_id=reply_to_message_id,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                disable_web_page_preview=disable_web_page_preview,
+            )
+            return responses[0] if responses else {}
+        return await self._send_message_raw(
+            chat_id,
+            text,
+            message_thread_id=message_thread_id,
+            reply_to_message_id=reply_to_message_id,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            disable_web_page_preview=disable_web_page_preview,
+        )
+
+    async def _send_message_raw(
+        self,
+        chat_id: Union[int, str],
+        text: str,
+        *,
+        message_thread_id: Optional[int] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Optional[dict[str, Any]] = None,
+        parse_mode: Optional[str] = None,
+        disable_web_page_preview: bool = True,
+    ) -> dict[str, Any]:
         log_event(
             self._logger,
             logging.INFO,
@@ -929,7 +961,7 @@ class TelegramBotClient:
             total_len=len(text),
         )
         for idx, chunk in enumerate(chunks):
-            response = await self.send_message(
+            response = await self._send_message_raw(
                 chat_id,
                 chunk,
                 message_thread_id=message_thread_id,
