@@ -8,6 +8,7 @@ from codex_autorunner.telegram_adapter import (
     TelegramUpdate,
     TelegramMessage,
     TelegramCommand,
+    TelegramMessageEntity,
     allowlist_allows,
     build_approval_keyboard,
     build_bind_keyboard,
@@ -27,22 +28,49 @@ from codex_autorunner.telegram_adapter import (
 
 
 def test_parse_command_basic() -> None:
-    command = parse_command("/new")
+    entities = [TelegramMessageEntity(type="bot_command", offset=0, length=len("/new"))]
+    command = parse_command("/new", entities=entities)
     assert command == TelegramCommand(name="new", args="", raw="/new")
 
 
 def test_parse_command_with_args() -> None:
-    command = parse_command("/bind repo-1")
+    entities = [
+        TelegramMessageEntity(type="bot_command", offset=0, length=len("/bind"))
+    ]
+    command = parse_command("/bind repo-1", entities=entities)
     assert command == TelegramCommand(name="bind", args="repo-1", raw="/bind repo-1")
 
 
 def test_parse_command_username_match() -> None:
-    command = parse_command("/resume@CodexBot 3", bot_username="CodexBot")
+    token = "/resume@CodexBot"
+    entities = [TelegramMessageEntity(type="bot_command", offset=0, length=len(token))]
+    command = parse_command(
+        f"{token} 3",
+        entities=entities,
+        bot_username="CodexBot",
+    )
     assert command == TelegramCommand(name="resume", args="3", raw="/resume@CodexBot 3")
 
 
 def test_parse_command_username_mismatch() -> None:
-    command = parse_command("/resume@OtherBot 3", bot_username="CodexBot")
+    token = "/resume@OtherBot"
+    entities = [TelegramMessageEntity(type="bot_command", offset=0, length=len(token))]
+    command = parse_command(
+        f"{token} 3",
+        entities=entities,
+        bot_username="CodexBot",
+    )
+    assert command is None
+
+
+def test_parse_command_requires_entity() -> None:
+    command = parse_command("/mnt/data/file.txt")
+    assert command is None
+
+
+def test_parse_command_requires_offset_zero() -> None:
+    entities = [TelegramMessageEntity(type="bot_command", offset=1, length=len("/new"))]
+    command = parse_command(" /new", entities=entities)
     assert command is None
 
 
@@ -127,6 +155,7 @@ def test_parse_update_message() -> None:
     assert parsed.message.chat_id == -123
     assert parsed.message.thread_id == 77
     assert parsed.message.text == "hi"
+    assert parsed.message.is_edited is False
     assert parsed.callback is None
 
 
@@ -182,6 +211,25 @@ def test_parse_update_photo_caption() -> None:
     assert parsed.message.caption == "Check this"
     assert len(parsed.message.photos) == 2
     assert parsed.message.photos[0].file_id == "photo-small"
+
+
+def test_parse_update_edited_message() -> None:
+    update = {
+        "update_id": 15,
+        "edited_message": {
+            "message_id": 6,
+            "chat": {"id": 321},
+            "from": {"id": 999},
+            "text": "edited",
+            "date": 1,
+            "edit_date": 2,
+            "is_topic_message": False,
+        },
+    }
+    parsed = parse_update(update)
+    assert parsed is not None
+    assert parsed.message is not None
+    assert parsed.message.is_edited is True
 
 
 def test_parse_update_voice() -> None:

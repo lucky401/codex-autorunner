@@ -63,6 +63,13 @@ class TelegramVoice:
 
 
 @dataclass(frozen=True)
+class TelegramMessageEntity:
+    type: str
+    offset: int
+    length: int
+
+
+@dataclass(frozen=True)
 class TelegramMessage:
     update_id: int
     message_id: int
@@ -72,7 +79,10 @@ class TelegramMessage:
     text: Optional[str]
     date: Optional[int]
     is_topic_message: bool
+    is_edited: bool = False
     caption: Optional[str] = None
+    entities: tuple[TelegramMessageEntity, ...] = field(default_factory=tuple)
+    caption_entities: tuple[TelegramMessageEntity, ...] = field(default_factory=tuple)
     photos: tuple[TelegramPhotoSize, ...] = field(default_factory=tuple)
     document: Optional[TelegramDocument] = None
     audio: Optional[TelegramAudio] = None
@@ -155,15 +165,34 @@ class PageCallback:
 
 
 def parse_command(
-    text: Optional[str], *, bot_username: Optional[str] = None
+    text: Optional[str],
+    *,
+    entities: Optional[Sequence[TelegramMessageEntity]] = None,
+    bot_username: Optional[str] = None,
 ) -> Optional[TelegramCommand]:
     if not text:
         return None
-    stripped = text.strip()
-    if not stripped.startswith("/"):
+    if not entities:
         return None
-    head, _, tail = stripped.partition(" ")
-    command = head.lstrip("/")
+    command_entity = next(
+        (
+            entity
+            for entity in entities
+            if entity.type == "bot_command" and entity.offset == 0
+        ),
+        None,
+    )
+    if command_entity is None:
+        return None
+    if command_entity.length <= 1:
+        return None
+    if command_entity.length > len(text):
+        return None
+    command_text = text[: command_entity.length]
+    if not command_text.startswith("/"):
+        return None
+    command = command_text.lstrip("/")
+    tail = text[command_entity.length :].strip()
     if not command:
         return None
     if "@" in command:
@@ -171,7 +200,7 @@ def parse_command(
         if bot_username and target.lower() != bot_username.lower():
             return None
         command = name
-    return TelegramCommand(name=command.lower(), args=tail.strip(), raw=stripped)
+    return TelegramCommand(name=command.lower(), args=tail.strip(), raw=text.strip())
 
 
 def is_interrupt_alias(text: Optional[str]) -> bool:
@@ -187,16 +216,18 @@ def parse_update(update: dict[str, Any]) -> Optional[TelegramUpdate]:
     update_id = update.get("update_id")
     if not isinstance(update_id, int):
         return None
-    message = _parse_message(update_id, update.get("message"))
+    message = _parse_message(update_id, update.get("message"), edited=False)
     if message is None:
-        message = _parse_message(update_id, update.get("edited_message"))
+        message = _parse_message(update_id, update.get("edited_message"), edited=True)
     callback = _parse_callback(update_id, update.get("callback_query"))
     if message is None and callback is None:
         return None
     return TelegramUpdate(update_id=update_id, message=message, callback=callback)
 
 
-def _parse_message(update_id: int, payload: Any) -> Optional[TelegramMessage]:
+def _parse_message(
+    update_id: int, payload: Any, *, edited: bool = False
+) -> Optional[TelegramMessage]:
     if not isinstance(payload, dict):
         return None
     message_id = payload.get("message_id")
@@ -219,6 +250,8 @@ def _parse_message(update_id: int, payload: Any) -> Optional[TelegramMessage]:
     caption = payload.get("caption")
     if caption is not None and not isinstance(caption, str):
         caption = None
+    entities = _parse_entities(payload.get("entities"))
+    caption_entities = _parse_entities(payload.get("caption_entities"))
     photos = _parse_photo_sizes(payload.get("photo"))
     document = _parse_document(payload.get("document"))
     audio = _parse_audio(payload.get("audio"))
@@ -236,7 +269,10 @@ def _parse_message(update_id: int, payload: Any) -> Optional[TelegramMessage]:
         text=text,
         date=date,
         is_topic_message=is_topic_message,
+        is_edited=edited,
         caption=caption,
+        entities=entities,
+        caption_entities=caption_entities,
         photos=photos,
         document=document,
         audio=audio,
@@ -400,6 +436,23 @@ def _parse_voice(payload: Any) -> Optional[TelegramVoice]:
         file_size=file_size,
     )
 
+
+def _parse_entities(payload: Any) -> tuple[TelegramMessageEntity, ...]:
+    if not isinstance(payload, list):
+        return ()
+    entities: list[TelegramMessageEntity] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("type")
+        offset = item.get("offset")
+        length = item.get("length")
+        if not isinstance(kind, str):
+            continue
+        if not isinstance(offset, int) or not isinstance(length, int):
+            continue
+        entities.append(TelegramMessageEntity(type=kind, offset=offset, length=length))
+    return tuple(entities)
 
 def allowlist_allows(update: TelegramUpdate, allowlist: TelegramAllowlist) -> bool:
     if not allowlist.allowed_chat_ids or not allowlist.allowed_user_ids:

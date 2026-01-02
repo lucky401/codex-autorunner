@@ -165,6 +165,8 @@ PARSE_MODE_ALIASES = {
 _CODE_BLOCK_RE = re.compile(r"```(?:[^\n`]*)\n(.*?)```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MARKDOWN_ESCAPE_RE = re.compile(r"([_*\[\]\(\)`])")
+_MARKDOWN_V2_ESCAPE_RE = re.compile(r"([_*\[\]\(\)~`>#+\-=|{}.!\\])")
 
 
 class TelegramBotConfigError(Exception):
@@ -603,12 +605,14 @@ class TelegramBotService:
         thread_id = None
         message_id = None
         is_topic = None
+        is_edited = None
         if update.message:
             chat_id = update.message.chat_id
             user_id = update.message.from_user_id
             thread_id = update.message.thread_id
             message_id = update.message.message_id
             is_topic = update.message.is_topic_message
+            is_edited = update.message.is_edited
         elif update.callback:
             chat_id = update.callback.chat_id
             user_id = update.callback.from_user_id
@@ -624,6 +628,7 @@ class TelegramBotService:
             thread_id=thread_id,
             message_id=message_id,
             is_topic=is_topic,
+            is_edited=is_edited,
             has_message=bool(update.message),
             has_callback=bool(update.callback),
         )
@@ -658,9 +663,13 @@ class TelegramBotService:
         )
 
     async def _handle_message(self, message: TelegramMessage) -> None:
+        if message.is_edited:
+            await self._handle_edited_message(message)
+            return
         raw_text = message.text or ""
         raw_caption = message.caption or ""
         text_candidate = raw_text if raw_text.strip() else raw_caption
+        entities = message.entities if raw_text.strip() else message.caption_entities
         trimmed_text = text_candidate.strip()
         has_media = self._message_has_media(message)
         if not trimmed_text and not has_media:
@@ -669,7 +678,9 @@ class TelegramBotService:
         if trimmed_text:
             if is_interrupt_alias(trimmed_text):
                 bypass = True
-            elif parse_command(trimmed_text, bot_username=self._bot_username):
+            elif parse_command(
+                text_candidate, entities=entities, bot_username=self._bot_username
+            ):
                 bypass = True
         if bypass:
             await self._flush_coalesced_message(message)
@@ -677,10 +688,39 @@ class TelegramBotService:
             return
         await self._buffer_coalesced_message(message, text_candidate)
 
-    async def _handle_message_inner(self, message: TelegramMessage) -> None:
+    async def _handle_edited_message(self, message: TelegramMessage) -> None:
         text = (message.text or "").strip()
         if not text:
             text = (message.caption or "").strip()
+        if not text:
+            return
+        key = topic_key(message.chat_id, message.thread_id)
+        runtime = self._router.runtime_for(key)
+        turn_id = runtime.current_turn_id
+        if not turn_id:
+            return
+        ctx = self._turn_contexts.get(turn_id)
+        if ctx is None or ctx.reply_to_message_id != message.message_id:
+            return
+        await self._handle_interrupt(message, runtime)
+        edited_text = f"Edited: {text}"
+        self._enqueue_topic_work(
+            key,
+            lambda: self._handle_normal_message(
+                message,
+                runtime,
+                text_override=edited_text,
+            ),
+        )
+
+    async def _handle_message_inner(self, message: TelegramMessage) -> None:
+        raw_text = message.text or ""
+        raw_caption = message.caption or ""
+        text = raw_text.strip()
+        entities = message.entities
+        if not text:
+            text = raw_caption.strip()
+            entities = message.caption_entities
         has_media = self._message_has_media(message)
         if not text and not has_media:
             return
@@ -696,7 +736,14 @@ class TelegramBotService:
             await self._handle_interrupt(message, runtime)
             return
 
-        command = parse_command(text, bot_username=self._bot_username) if text else None
+        command_text = raw_text if raw_text.strip() else raw_caption
+        command = (
+            parse_command(
+                command_text, entities=entities, bot_username=self._bot_username
+            )
+            if command_text
+            else None
+        )
         if command:
             if command.name != "resume":
                 self._resume_options.pop(key, None)
@@ -3251,6 +3298,8 @@ class TelegramBotService:
             return text, None
         if parse_mode == "HTML":
             return _format_telegram_html(text), parse_mode
+        if parse_mode in ("Markdown", "MarkdownV2"):
+            return _format_telegram_markdown(text, parse_mode), parse_mode
         return text, parse_mode
 
     def _prepare_message(self, text: str) -> tuple[str, Optional[str]]:
@@ -4362,6 +4411,64 @@ def _format_telegram_inline(text: str) -> str:
     for idx, code in enumerate(placeholders):
         token = f"\x00CODE{idx}\x00"
         escaped = escaped.replace(token, f"<code>{code}</code>")
+    return escaped
+
+
+def _escape_markdown_text(text: str, *, version: str) -> str:
+    if not text:
+        return ""
+    if version == "MarkdownV2":
+        return _MARKDOWN_V2_ESCAPE_RE.sub(r"\\\1", text)
+    return _MARKDOWN_ESCAPE_RE.sub(r"\\\1", text)
+
+
+def _escape_markdown_code(text: str, *, version: str) -> str:
+    if not text:
+        return ""
+    if version == "MarkdownV2":
+        return text.replace("\\", "\\\\").replace("`", "\\`")
+    return text.replace("`", "\\`")
+
+
+def _format_telegram_markdown(text: str, version: str) -> str:
+    if not text:
+        return ""
+    parts: list[str] = []
+    last = 0
+    for match in _CODE_BLOCK_RE.finditer(text):
+        parts.append(_format_telegram_markdown_inline(text[last : match.start()], version))
+        code = _escape_markdown_code(match.group(1), version=version)
+        parts.append(f"```\n{code}\n```")
+        last = match.end()
+    parts.append(_format_telegram_markdown_inline(text[last:], version))
+    return "".join(parts)
+
+
+def _format_telegram_markdown_inline(text: str, version: str) -> str:
+    if not text:
+        return ""
+    code_placeholders: list[str] = []
+    bold_placeholders: list[str] = []
+
+    def _replace_code(match: re.Match[str]) -> str:
+        code_placeholders.append(_escape_markdown_code(match.group(1), version=version))
+        return f"\x00CODE{len(code_placeholders) - 1}\x00"
+
+    def _replace_bold(match: re.Match[str]) -> str:
+        bold_placeholders.append(
+            _escape_markdown_text(match.group(1), version=version)
+        )
+        return f"\x00BOLD{len(bold_placeholders) - 1}\x00"
+
+    text = _INLINE_CODE_RE.sub(_replace_code, text)
+    text = _BOLD_RE.sub(_replace_bold, text)
+    escaped = _escape_markdown_text(text, version=version)
+    for idx, bold in enumerate(bold_placeholders):
+        token = f"\x00BOLD{idx}\x00"
+        escaped = escaped.replace(token, f"*{bold}*")
+    for idx, code in enumerate(code_placeholders):
+        token = f"\x00CODE{idx}\x00"
+        escaped = escaped.replace(token, f"`{code}`")
     return escaped
 
 
