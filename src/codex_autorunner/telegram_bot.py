@@ -1464,6 +1464,9 @@ class TelegramBotService:
             return
         if update.message:
             if key:
+                if self._should_bypass_topic_queue(update.message):
+                    await self._handle_message(update.message)
+                    return
                 self._enqueue_topic_work(
                     key,
                     lambda: self._handle_message(update.message),
@@ -1518,6 +1521,26 @@ class TelegramBotService:
             await self._handle_message_inner(message)
             return
         await self._buffer_coalesced_message(message, text_candidate)
+
+    def _should_bypass_topic_queue(self, message: TelegramMessage) -> bool:
+        raw_text = message.text or ""
+        raw_caption = message.caption or ""
+        text_candidate = raw_text if raw_text.strip() else raw_caption
+        if not text_candidate:
+            return False
+        trimmed_text = text_candidate.strip()
+        if not trimmed_text:
+            return False
+        if is_interrupt_alias(trimmed_text):
+            return True
+        entities = message.entities if raw_text.strip() else message.caption_entities
+        command = parse_command(
+            text_candidate, entities=entities, bot_username=self._bot_username
+        )
+        if not command:
+            return False
+        spec = self._command_specs.get(command.name)
+        return bool(spec and spec.allow_during_turn)
 
     async def _handle_edited_message(self, message: TelegramMessage) -> None:
         text = (message.text or "").strip()
@@ -2247,19 +2270,13 @@ class TelegramBotService:
         if not _paths_compatible(workspace_root, resumed_root):
             log_event(
                 self._logger,
-                logging.WARNING,
+                logging.INFO,
                 "telegram.thread.workspace_mismatch",
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 codex_thread_id=thread_id,
                 workspace_path=str(workspace_root),
                 resumed_path=str(resumed_root),
-            )
-            await self._send_message(
-                message.chat_id,
-                "Active thread belongs to a different workspace; starting a new thread.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
             )
             return self._router.set_active_thread(
                 message.chat_id, message.thread_id, None
