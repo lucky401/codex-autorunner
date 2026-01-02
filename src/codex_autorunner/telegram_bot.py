@@ -132,6 +132,8 @@ TRACE_MESSAGE_TOKENS = (
     "cancelled",
 )
 WORKING_PLACEHOLDER = "Working..."
+THINKING_PREVIEW_MAX_LEN = 80
+THINKING_PREVIEW_MIN_EDIT_INTERVAL_SECONDS = 1.0
 COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
 MAX_MENTION_BYTES = 200_000
 VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
@@ -549,6 +551,9 @@ class TelegramBotService:
                 )
         self._turn_semaphore = asyncio.Semaphore(config.concurrency.max_parallel_turns)
         self._turn_contexts: dict[str, TurnContext] = {}
+        self._reasoning_buffers: dict[str, str] = {}
+        self._turn_preview_text: dict[str, str] = {}
+        self._turn_preview_updated_at: dict[str, float] = {}
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
@@ -2512,6 +2517,7 @@ class TelegramBotService:
         finally:
             if turn_handle is not None:
                 self._turn_contexts.pop(turn_handle.turn_id, None)
+                self._clear_thinking_preview(turn_handle.turn_id)
             runtime.current_turn_id = None
             runtime.interrupt_requested = False
 
@@ -3689,6 +3695,7 @@ class TelegramBotService:
         finally:
             if turn_handle is not None:
                 self._turn_contexts.pop(turn_handle.turn_id, None)
+                self._clear_thinking_preview(turn_handle.turn_id)
             runtime.current_turn_id = None
             runtime.interrupt_requested = False
         response = _compose_agent_response(result.agent_messages)
@@ -4374,26 +4381,78 @@ class TelegramBotService:
 
     async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
         method = message.get("method")
-        if method != "thread/tokenUsage/updated":
-            return
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
-        thread_id = params.get("threadId")
-        turn_id_raw = params.get("turnId")
-        turn_id = None
-        if isinstance(turn_id_raw, (str, int)) and not isinstance(turn_id_raw, bool):
-            turn_id = str(turn_id_raw).strip()
-        token_usage = params.get("tokenUsage")
-        if not isinstance(thread_id, str) or not isinstance(token_usage, dict):
+        if method == "thread/tokenUsage/updated":
+            thread_id = params.get("threadId")
+            turn_id = _coerce_id(params.get("turnId"))
+            token_usage = params.get("tokenUsage")
+            if not isinstance(thread_id, str) or not isinstance(token_usage, dict):
+                return
+            self._token_usage_by_thread[thread_id] = token_usage
+            self._token_usage_by_thread.move_to_end(thread_id)
+            while len(self._token_usage_by_thread) > TOKEN_USAGE_CACHE_LIMIT:
+                self._token_usage_by_thread.popitem(last=False)
+            if turn_id:
+                self._token_usage_by_turn[turn_id] = token_usage
+                self._token_usage_by_turn.move_to_end(turn_id)
+                while len(self._token_usage_by_turn) > TOKEN_USAGE_TURN_CACHE_LIMIT:
+                    self._token_usage_by_turn.popitem(last=False)
             return
-        self._token_usage_by_thread[thread_id] = token_usage
-        self._token_usage_by_thread.move_to_end(thread_id)
-        while len(self._token_usage_by_thread) > TOKEN_USAGE_CACHE_LIMIT:
-            self._token_usage_by_thread.popitem(last=False)
-        if turn_id:
-            self._token_usage_by_turn[turn_id] = token_usage
-            self._token_usage_by_turn.move_to_end(turn_id)
-            while len(self._token_usage_by_turn) > TOKEN_USAGE_TURN_CACHE_LIMIT:
-                self._token_usage_by_turn.popitem(last=False)
+        if method == "item/reasoning/summaryTextDelta":
+            item_id = _coerce_id(params.get("itemId"))
+            turn_id = _coerce_id(params.get("turnId"))
+            delta = params.get("delta")
+            if not item_id or not turn_id or not isinstance(delta, str):
+                return
+            buffer = self._reasoning_buffers.get(item_id, "")
+            buffer = f"{buffer}{delta}"
+            self._reasoning_buffers[item_id] = buffer
+            preview = _extract_first_bold_span(buffer)
+            if preview:
+                await self._update_placeholder_preview(turn_id, preview)
+            return
+        if method == "item/reasoning/summaryPartAdded":
+            item_id = _coerce_id(params.get("itemId"))
+            if not item_id:
+                return
+            buffer = self._reasoning_buffers.get(item_id, "")
+            buffer = f"{buffer}\n\n"
+            self._reasoning_buffers[item_id] = buffer
+            return
+        if method == "item/completed":
+            item = params.get("item") if isinstance(params, dict) else None
+            if not isinstance(item, dict) or item.get("type") != "reasoning":
+                return
+            item_id = _coerce_id(item.get("id") or params.get("itemId"))
+            if item_id:
+                self._reasoning_buffers.pop(item_id, None)
+            return
+
+    async def _update_placeholder_preview(self, turn_id: str, preview: str) -> None:
+        ctx = self._turn_contexts.get(turn_id)
+        if ctx is None or ctx.placeholder_message_id is None:
+            return
+        normalized = " ".join(preview.split()).strip()
+        if not normalized:
+            return
+        normalized = _truncate_text(normalized, THINKING_PREVIEW_MAX_LEN)
+        if normalized == self._turn_preview_text.get(turn_id):
+            return
+        now = time.monotonic()
+        last_updated = self._turn_preview_updated_at.get(turn_id, 0.0)
+        if (now - last_updated) < THINKING_PREVIEW_MIN_EDIT_INTERVAL_SECONDS:
+            return
+        self._turn_preview_text[turn_id] = normalized
+        self._turn_preview_updated_at[turn_id] = now
+        await self._edit_message_text(
+            ctx.chat_id,
+            ctx.placeholder_message_id,
+            f"{WORKING_PLACEHOLDER} {normalized}",
+        )
+
+    def _clear_thinking_preview(self, turn_id: str) -> None:
+        self._turn_preview_text.pop(turn_id, None)
+        self._turn_preview_updated_at.pop(turn_id, None)
 
     async def _handle_approval_request(self, message: dict[str, Any]) -> ApprovalDecision:
         req_id = message.get("id")
@@ -5833,6 +5892,36 @@ def _compact_preview(text: Any, limit: int = 40) -> str:
     if len(preview) > limit:
         return preview[: limit - 3] + "..."
     return preview or "(no preview)"
+
+
+def _coerce_id(value: Any) -> Optional[str]:
+    if isinstance(value, (str, int)) and not isinstance(value, bool):
+        text = str(value).strip()
+        return text or None
+    return None
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return f"{text[: limit - 3]}..."
+
+
+def _extract_first_bold_span(text: str) -> Optional[str]:
+    if not text:
+        return None
+    start = text.find("**")
+    if start < 0:
+        return None
+    end = text.find("**", start + 2)
+    if end < 0:
+        return None
+    content = text[start + 2 : end].strip()
+    return content or None
 
 
 def _compose_agent_response(messages: list[str]) -> str:
