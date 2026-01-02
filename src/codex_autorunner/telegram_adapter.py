@@ -154,6 +154,11 @@ class EffortCallback:
 
 
 @dataclass(frozen=True)
+class UpdateCallback:
+    target: str
+
+
+@dataclass(frozen=True)
 class CancelCallback:
     kind: str
 
@@ -577,6 +582,12 @@ def encode_effort_callback(effort: str) -> str:
     return data
 
 
+def encode_update_callback(target: str) -> str:
+    data = f"update:{target}"
+    _validate_callback_data(data)
+    return data
+
+
 def encode_cancel_callback(kind: str) -> str:
     data = f"cancel:{kind}"
     _validate_callback_data(data)
@@ -598,6 +609,7 @@ def parse_callback_data(
         BindCallback,
         ModelCallback,
         EffortCallback,
+        UpdateCallback,
         CancelCallback,
         PageCallback,
     ]
@@ -630,6 +642,11 @@ def parse_callback_data(
         if not effort:
             return None
         return EffortCallback(effort=effort)
+    if data.startswith("update:"):
+        _, _, target = data.partition(":")
+        if not target:
+            return None
+        return UpdateCallback(target=target)
     if data.startswith("cancel:"):
         _, _, kind = data.partition(":")
         if not kind:
@@ -710,6 +727,20 @@ def build_effort_keyboard(
     ]
     if include_cancel:
         rows.append([InlineButton("Cancel", encode_cancel_callback("model"))])
+    return build_inline_keyboard(rows)
+
+
+def build_update_keyboard(
+    options: Sequence[tuple[str, str]],
+    *,
+    include_cancel: bool = False,
+) -> dict[str, Any]:
+    rows = [
+        [InlineButton(label, encode_update_callback(target))]
+        for target, label in options
+    ]
+    if include_cancel:
+        rows.append([InlineButton("Cancel", encode_cancel_callback("update"))])
     return build_inline_keyboard(rows)
 
 

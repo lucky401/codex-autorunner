@@ -141,6 +141,9 @@ class TelegramTopicRecord:
 class TelegramState:
     version: int = STATE_VERSION
     topics: dict[str, TelegramTopicRecord] = dataclasses.field(default_factory=dict)
+    pending_approvals: dict[str, "PendingApprovalRecord"] = dataclasses.field(
+        default_factory=dict
+    )
 
     def to_json(self) -> str:
         payload = {
@@ -148,8 +151,68 @@ class TelegramState:
             "topics": {
                 key: record.to_dict() for key, record in self.topics.items()
             },
+            "pending_approvals": {
+                key: record.to_dict() for key, record in self.pending_approvals.items()
+            },
         }
         return json.dumps(payload, indent=2) + "\n"
+
+
+@dataclass
+class PendingApprovalRecord:
+    request_id: str
+    turn_id: str
+    chat_id: int
+    thread_id: Optional[int]
+    message_id: Optional[int]
+    prompt: str
+    created_at: str
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> Optional["PendingApprovalRecord"]:
+        if not isinstance(payload, dict):
+            return None
+        request_id = payload.get("request_id")
+        turn_id = payload.get("turn_id")
+        chat_id = payload.get("chat_id")
+        thread_id = payload.get("thread_id")
+        message_id = payload.get("message_id")
+        prompt = payload.get("prompt") or ""
+        created_at = payload.get("created_at")
+        if not isinstance(request_id, str) or not request_id:
+            return None
+        if not isinstance(turn_id, str) or not turn_id:
+            return None
+        if not isinstance(chat_id, int):
+            return None
+        if thread_id is not None and not isinstance(thread_id, int):
+            thread_id = None
+        if message_id is not None and not isinstance(message_id, int):
+            message_id = None
+        if not isinstance(prompt, str):
+            prompt = ""
+        if not isinstance(created_at, str) or not created_at:
+            return None
+        return cls(
+            request_id=request_id,
+            turn_id=turn_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            message_id=message_id,
+            prompt=prompt,
+            created_at=created_at,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "turn_id": self.turn_id,
+            "chat_id": self.chat_id,
+            "thread_id": self.thread_id,
+            "message_id": self.message_id,
+            "prompt": self.prompt,
+            "created_at": self.created_at,
+        }
 
 
 class TelegramStateStore:
@@ -233,7 +296,19 @@ class TelegramStateStore:
                 topics[key] = TelegramTopicRecord.from_dict(
                     record, default_approval_mode=self._default_approval_mode
                 )
-        return TelegramState(version=version, topics=topics)
+        approvals_raw = data.get("pending_approvals")
+        pending_approvals: dict[str, PendingApprovalRecord] = {}
+        if isinstance(approvals_raw, dict):
+            for key, record in approvals_raw.items():
+                if not isinstance(key, str) or not isinstance(record, dict):
+                    continue
+                parsed = PendingApprovalRecord.from_dict(record)
+                if parsed is None:
+                    continue
+                pending_approvals[key] = parsed
+        return TelegramState(
+            version=version, topics=topics, pending_approvals=pending_approvals
+        )
 
     def _save_unlocked(self, state: TelegramState) -> None:
         atomic_write(self._path, state.to_json())
@@ -256,6 +331,51 @@ class TelegramStateStore:
             state.topics[key] = record
             self._save_unlocked(state)
             return record
+
+    def upsert_pending_approval(
+        self, record: PendingApprovalRecord
+    ) -> PendingApprovalRecord:
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            state.pending_approvals[record.request_id] = record
+            self._save_unlocked(state)
+            return record
+
+    def clear_pending_approval(self, request_id: str) -> None:
+        if not isinstance(request_id, str) or not request_id:
+            return
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            if request_id in state.pending_approvals:
+                state.pending_approvals.pop(request_id, None)
+                self._save_unlocked(state)
+
+    def pending_approvals_for_topic(
+        self, chat_id: int, thread_id: Optional[int]
+    ) -> list[PendingApprovalRecord]:
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            pending = [
+                record
+                for record in state.pending_approvals.values()
+                if record.chat_id == chat_id and record.thread_id == thread_id
+            ]
+        return pending
+
+    def clear_pending_approvals_for_topic(
+        self, chat_id: int, thread_id: Optional[int]
+    ) -> None:
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            keys = [
+                key
+                for key, record in state.pending_approvals.items()
+                if record.chat_id == chat_id and record.thread_id == thread_id
+            ]
+            for key in keys:
+                state.pending_approvals.pop(key, None)
+            if keys:
+                self._save_unlocked(state)
 
 
 T = TypeVar("T")
@@ -318,6 +438,8 @@ class TopicRuntime:
     current_turn_id: Optional[str] = None
     pending_request_id: Optional[str] = None
     interrupt_requested: bool = False
+    interrupt_message_id: Optional[int] = None
+    interrupt_turn_id: Optional[str] = None
 
 
 class TopicRouter:

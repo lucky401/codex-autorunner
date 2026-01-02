@@ -10,6 +10,7 @@ import re
 import secrets
 import shlex
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
@@ -27,6 +28,7 @@ from .telegram_adapter import (
     BindCallback,
     CancelCallback,
     EffortCallback,
+    UpdateCallback,
     ModelCallback,
     PageCallback,
     ResumeCallback,
@@ -46,13 +48,16 @@ from .telegram_adapter import (
     build_effort_keyboard,
     build_model_keyboard,
     build_resume_keyboard,
+    build_update_keyboard,
     encode_page_callback,
     is_interrupt_alias,
     parse_callback_data,
     parse_command,
 )
+from .state import now_iso
 from .telegram_state import (
     APPROVAL_MODE_YOLO,
+    PendingApprovalRecord,
     TelegramStateStore,
     TopicRouter,
     normalize_approval_mode,
@@ -70,6 +75,7 @@ DEFAULT_MCP_LIST_LIMIT = 50
 DEFAULT_SKILLS_LIST_LIMIT = 50
 TOKEN_USAGE_CACHE_LIMIT = 256
 TOKEN_USAGE_TURN_CACHE_LIMIT = 512
+DEFAULT_INTERRUPT_TIMEOUT_SECONDS = 30.0
 DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
@@ -86,6 +92,12 @@ RESUME_PICKER_PROMPT = (
 BIND_PICKER_PROMPT = "Select a repo to bind (buttons below or reply with number/id)."
 MODEL_PICKER_PROMPT = "Select a model (buttons below)."
 EFFORT_PICKER_PROMPT = "Select a reasoning effort for {model}."
+UPDATE_PICKER_PROMPT = "Select update target (buttons below)."
+UPDATE_TARGET_OPTIONS = (
+    ("both", "Both (web + Telegram)"),
+    ("web", "Web only"),
+    ("telegram", "Telegram only"),
+)
 WORKING_PLACEHOLDER = "Working..."
 COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
 MAX_MENTION_BYTES = 200_000
@@ -399,9 +411,11 @@ class TelegramBotConfig:
 @dataclass
 class PendingApproval:
     request_id: str
+    turn_id: str
     chat_id: int
     thread_id: Optional[int]
     message_id: Optional[int]
+    created_at: str
     future: asyncio.Future[ApprovalDecision]
 
 
@@ -505,6 +519,7 @@ class TelegramBotService:
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
+        self._update_options: dict[str, SelectionState] = {}
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
         self._bot_username: Optional[str] = None
@@ -528,6 +543,7 @@ class TelegramBotService:
         )
         await self._start_app_server_with_backoff()
         await self._prime_bot_identity()
+        await self._restore_pending_approvals()
         log_event(
             self._logger,
             logging.INFO,
@@ -574,6 +590,41 @@ class TelegramBotService:
             if isinstance(username, str) and username:
                 self._bot_username = username
 
+    async def _restore_pending_approvals(self) -> None:
+        state = self._store.load()
+        if not state.pending_approvals:
+            return
+        grouped: dict[tuple[int, Optional[int]], list[PendingApprovalRecord]] = {}
+        for record in state.pending_approvals.values():
+            key = (record.chat_id, record.thread_id)
+            grouped.setdefault(key, []).append(record)
+        for (chat_id, thread_id), records in grouped.items():
+            items = []
+            for record in records:
+                age = _approval_age_seconds(record.created_at)
+                age_label = f"{age}s" if isinstance(age, int) else "unknown age"
+                items.append(f"{record.request_id} ({age_label})")
+                self._store.clear_pending_approval(record.request_id)
+            message = (
+                "Cleared stale approval requests from a previous session. "
+                "Re-run the request or use /interrupt if the turn is still active.\n"
+                f"Requests: {', '.join(items)}"
+            )
+            try:
+                await self._send_message(
+                    chat_id,
+                    message,
+                    thread_id=thread_id,
+                )
+            except Exception:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.approval.restore_failed",
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                )
+
     async def _start_app_server_with_backoff(self) -> None:
         delay = APP_SERVER_START_BACKOFF_INITIAL_SECONDS
         while True:
@@ -602,6 +653,23 @@ class TelegramBotService:
             return
         except Exception as exc:
             log_event(self._logger, logging.WARNING, "telegram.task.failed", exc=exc)
+
+    async def _interrupt_timeout_check(
+        self, key: str, turn_id: str, message_id: int
+    ) -> None:
+        await asyncio.sleep(DEFAULT_INTERRUPT_TIMEOUT_SECONDS)
+        runtime = self._router.runtime_for(key)
+        if runtime.current_turn_id != turn_id:
+            return
+        if runtime.interrupt_message_id != message_id:
+            return
+        if runtime.interrupt_turn_id != turn_id:
+            return
+        chat_id, _thread_id = _split_topic_key(key)
+        await self._edit_message_text(chat_id, message_id, "Interrupt timed out.")
+        runtime.interrupt_requested = False
+        runtime.interrupt_message_id = None
+        runtime.interrupt_turn_id = None
 
     async def _dispatch_update(self, update: TelegramUpdate) -> None:
         chat_id = None
@@ -1050,6 +1118,9 @@ class TelegramBotService:
         elif isinstance(parsed, EffortCallback):
             if key:
                 await self._handle_effort_callback(key, callback, parsed)
+        elif isinstance(parsed, UpdateCallback):
+            if key:
+                await self._handle_update_callback(key, callback, parsed)
         elif isinstance(parsed, CancelCallback):
             if key:
                 await self._handle_selection_cancel(key, parsed, callback)
@@ -1113,6 +1184,32 @@ class TelegramBotService:
             key,
             callback,
             f"Model set to {option.model_id} (effort={parsed.effort}). Will apply on the next turn.",
+        )
+
+    async def _handle_update_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: UpdateCallback,
+    ) -> None:
+        state = self._update_options.get(key)
+        if not state or not _selection_contains(state.items, parsed.target):
+            await self._answer_callback(callback, "Selection expired")
+            return
+        self._update_options.pop(key, None)
+        try:
+            update_target = _normalize_update_target(parsed.target)
+        except ValueError:
+            await self._answer_callback(callback, "Selection expired")
+            await self._finalize_selection(key, callback, "Update target invalid.")
+            return
+        chat_id, thread_id = _split_topic_key(key)
+        await self._start_update(
+            chat_id=chat_id,
+            thread_id=thread_id,
+            update_target=update_target,
+            callback=callback,
+            selection_key=key,
         )
 
     def _enqueue_topic_work(self, key: str, work: Any) -> None:
@@ -1257,7 +1354,7 @@ class TelegramBotService:
             ),
             "update": CommandSpec(
                 "update",
-                "update CAR (both|web|telegram)",
+                "update CAR (prompt or both|web|telegram)",
                 self._handle_update,
             ),
             "logout": CommandSpec(
@@ -1533,6 +1630,28 @@ class TelegramBotService:
         if result.status == "interrupted" or runtime.interrupt_requested:
             response = _compose_interrupt_response(response)
             runtime.interrupt_requested = False
+            if (
+                runtime.interrupt_message_id is not None
+                and runtime.interrupt_turn_id == (turn_handle.turn_id if turn_handle else None)
+            ):
+                await self._edit_message_text(
+                    message.chat_id,
+                    runtime.interrupt_message_id,
+                    "Interrupted.",
+                )
+                runtime.interrupt_message_id = None
+                runtime.interrupt_turn_id = None
+        elif (
+            runtime.interrupt_message_id is not None
+            and runtime.interrupt_turn_id == (turn_handle.turn_id if turn_handle else None)
+        ):
+            await self._edit_message_text(
+                message.chat_id,
+                runtime.interrupt_message_id,
+                "Interrupt failed.",
+            )
+            runtime.interrupt_message_id = None
+            runtime.interrupt_turn_id = None
         log_event(
             self._logger,
             logging.INFO,
@@ -1878,7 +1997,35 @@ class TelegramBotService:
 
     async def _handle_interrupt(self, message: TelegramMessage, runtime: Any) -> None:
         turn_id = runtime.current_turn_id
+        pending_request_ids = [
+            request_id
+            for request_id, pending in self._pending_approvals.items()
+            if pending.chat_id == message.chat_id
+            and pending.thread_id == message.thread_id
+        ]
+        for request_id in pending_request_ids:
+            pending = self._pending_approvals.pop(request_id, None)
+            if pending and not pending.future.done():
+                pending.future.set_result("cancel")
+            self._store.clear_pending_approval(request_id)
+        if pending_request_ids:
+            runtime.pending_request_id = None
         if not turn_id:
+            pending = self._store.pending_approvals_for_topic(
+                message.chat_id, message.thread_id
+            )
+            if pending:
+                self._store.clear_pending_approvals_for_topic(
+                    message.chat_id, message.thread_id
+                )
+                runtime.pending_request_id = None
+                await self._send_message(
+                    message.chat_id,
+                    f"Cleared {len(pending)} pending approval(s).",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             log_event(
                 self._logger,
                 logging.INFO,
@@ -1905,6 +2052,25 @@ class TelegramBotService:
             turn_id=turn_id,
         )
         await self._client.turn_interrupt(turn_id)
+        payload_text, parse_mode = self._prepare_message("Interrupt requested.")
+        response = await self._bot.send_message(
+            message.chat_id,
+            payload_text,
+            message_thread_id=message.thread_id,
+            reply_to_message_id=message.message_id,
+            parse_mode=parse_mode,
+        )
+        message_id = response.get("message_id") if isinstance(response, dict) else None
+        if isinstance(message_id, int):
+            runtime.interrupt_message_id = message_id
+            runtime.interrupt_turn_id = turn_id
+            self._spawn_task(
+                self._interrupt_timeout_check(
+                    topic_key(message.chat_id, message.thread_id),
+                    turn_id,
+                    message_id,
+                )
+            )
 
     async def _handle_bind(self, message: TelegramMessage, args: str) -> None:
         key = topic_key(message.chat_id, message.thread_id)
@@ -2168,6 +2334,21 @@ class TelegramBotService:
             f"Approval policy: {approval_policy or 'default'}",
             f"Sandbox policy: {_format_sandbox_policy(sandbox_policy)}",
         ]
+        pending = self._store.pending_approvals_for_topic(
+            message.chat_id, message.thread_id
+        )
+        if pending:
+            lines.append(f"Pending approvals: {len(pending)}")
+            if len(pending) == 1:
+                age = _approval_age_seconds(pending[0].created_at)
+                age_label = f"{age}s" if isinstance(age, int) else "unknown age"
+                lines.append(
+                    f"Pending request: {pending[0].request_id} ({age_label})"
+                )
+            else:
+                preview = ", ".join(item.request_id for item in pending[:3])
+                suffix = "" if len(pending) <= 3 else "..."
+                lines.append(f"Pending requests: {preview}{suffix}")
         if record.summary:
             lines.append(f"Summary: {record.summary}")
         if record.active_thread_id:
@@ -3022,21 +3203,16 @@ class TelegramBotService:
             reply_to=message.message_id,
         )
 
-    async def _handle_update(
-        self, message: TelegramMessage, args: str, _runtime: Any
+    async def _start_update(
+        self,
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        update_target: str,
+        reply_to: Optional[int] = None,
+        callback: Optional[TelegramCallbackQuery] = None,
+        selection_key: Optional[str] = None,
     ) -> None:
-        argv = self._parse_command_args(args)
-        target_raw = argv[0] if argv else None
-        try:
-            update_target = _normalize_update_target(target_raw)
-        except ValueError:
-            await self._send_message(
-                message.chat_id,
-                "Usage: /update [both|web|telegram]",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
         repo_url = (self._update_repo_url or DEFAULT_UPDATE_REPO_URL).strip()
         if not repo_url:
             repo_url = DEFAULT_UPDATE_REPO_URL
@@ -3052,8 +3228,8 @@ class TelegramBotService:
                 self._logger,
                 logging.INFO,
                 "telegram.update.started",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
+                chat_id=chat_id,
+                thread_id=thread_id,
                 update_target=update_target,
             )
         except Exception as exc:
@@ -3061,22 +3237,77 @@ class TelegramBotService:
                 self._logger,
                 logging.WARNING,
                 "telegram.update.failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
+                chat_id=chat_id,
+                thread_id=thread_id,
                 update_target=update_target,
                 exc=exc,
             )
-            await self._send_message(
-                message.chat_id,
-                "Update failed to start; check logs for details.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
+            failure = "Update failed to start; check logs for details."
+            if callback and selection_key:
+                await self._answer_callback(callback, "Update failed")
+                await self._finalize_selection(selection_key, callback, failure)
+            else:
+                await self._send_message(
+                    chat_id,
+                    failure,
+                    thread_id=thread_id,
+                    reply_to=reply_to,
+                )
+            return
+        message = (
+            f"Update started ({update_target}). The selected service(s) will restart."
+        )
+        if callback and selection_key:
+            await self._answer_callback(callback, "Update started")
+            await self._finalize_selection(selection_key, callback, message)
             return
         await self._send_message(
+            chat_id,
+            message,
+            thread_id=thread_id,
+            reply_to=reply_to,
+        )
+
+    async def _prompt_update_selection(
+        self,
+        message: TelegramMessage,
+        *,
+        prompt: str = UPDATE_PICKER_PROMPT,
+    ) -> None:
+        key = topic_key(message.chat_id, message.thread_id)
+        state = SelectionState(items=list(UPDATE_TARGET_OPTIONS))
+        keyboard = self._build_update_keyboard(state)
+        self._update_options[key] = state
+        await self._send_message(
             message.chat_id,
-            f"Update started ({update_target}). The selected service(s) will restart.",
+            prompt,
             thread_id=message.thread_id,
+            reply_to=message.message_id,
+            reply_markup=keyboard,
+        )
+
+    async def _handle_update(
+        self, message: TelegramMessage, args: str, _runtime: Any
+    ) -> None:
+        argv = self._parse_command_args(args)
+        target_raw = argv[0] if argv else None
+        if not target_raw:
+            await self._prompt_update_selection(message)
+            return
+        try:
+            update_target = _normalize_update_target(target_raw)
+        except ValueError:
+            await self._prompt_update_selection(
+                message,
+                prompt="Unknown update target. Select update target (buttons below).",
+            )
+            return
+        key = topic_key(message.chat_id, message.thread_id)
+        self._update_options.pop(key, None)
+        await self._start_update(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            update_target=update_target,
             reply_to=message.message_id,
         )
 
@@ -3203,6 +3434,17 @@ class TelegramBotService:
             return "cancel"
         request_id = str(req_id)
         prompt = _format_approval_prompt(message)
+        created_at = now_iso()
+        approval_record = PendingApprovalRecord(
+            request_id=request_id,
+            turn_id=str(turn_id),
+            chat_id=ctx.chat_id,
+            thread_id=ctx.thread_id,
+            message_id=None,
+            prompt=prompt,
+            created_at=created_at,
+        )
+        self._store.upsert_pending_approval(approval_record)
         log_event(
             self._logger,
             logging.INFO,
@@ -3221,33 +3463,67 @@ class TelegramBotService:
                 "telegram.approval.callback_too_long",
                 request_id=request_id,
             )
+            self._store.clear_pending_approval(request_id)
             return "cancel"
         payload_text, parse_mode = self._prepare_message(prompt)
-        response = await self._bot.send_message(
-            ctx.chat_id,
-            payload_text,
-            message_thread_id=ctx.thread_id,
-            reply_to_message_id=ctx.reply_to_message_id,
-            reply_markup=keyboard,
-            parse_mode=parse_mode,
-        )
+        try:
+            response = await self._bot.send_message(
+                ctx.chat_id,
+                payload_text,
+                message_thread_id=ctx.thread_id,
+                reply_to_message_id=ctx.reply_to_message_id,
+                reply_markup=keyboard,
+                parse_mode=parse_mode,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.approval.send_failed",
+                request_id=request_id,
+                turn_id=turn_id,
+                chat_id=ctx.chat_id,
+                thread_id=ctx.thread_id,
+                exc=exc,
+            )
+            self._store.clear_pending_approval(request_id)
+            try:
+                await self._send_message(
+                    ctx.chat_id,
+                    "Approval prompt failed to send; canceling approval. "
+                    "Please retry or use /interrupt.",
+                    thread_id=ctx.thread_id,
+                    reply_to=ctx.reply_to_message_id,
+                )
+            except Exception:
+                pass
+            return "cancel"
         message_id = response.get("message_id") if isinstance(response, dict) else None
+        if isinstance(message_id, int):
+            approval_record.message_id = message_id
+            self._store.upsert_pending_approval(approval_record)
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ApprovalDecision] = loop.create_future()
         pending = PendingApproval(
             request_id=request_id,
+            turn_id=str(turn_id),
             chat_id=ctx.chat_id,
             thread_id=ctx.thread_id,
             message_id=message_id if isinstance(message_id, int) else None,
+            created_at=created_at,
             future=future,
         )
         self._pending_approvals[request_id] = pending
+        runtime = self._router.runtime_for(ctx.topic_key)
+        runtime.pending_request_id = request_id
         try:
             return await asyncio.wait_for(
                 future, timeout=DEFAULT_APPROVAL_TIMEOUT_SECONDS
             )
         except asyncio.TimeoutError:
             self._pending_approvals.pop(request_id, None)
+            self._store.clear_pending_approval(request_id)
+            runtime.pending_request_id = None
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3268,17 +3544,24 @@ class TelegramBotService:
             return "cancel"
         except asyncio.CancelledError:
             self._pending_approvals.pop(request_id, None)
+            self._store.clear_pending_approval(request_id)
+            runtime.pending_request_id = None
             raise
 
     async def _handle_approval_callback(
         self, callback: TelegramCallbackQuery, parsed: ApprovalCallback
     ) -> None:
+        self._store.clear_pending_approval(parsed.request_id)
         pending = self._pending_approvals.pop(parsed.request_id, None)
         if pending is None:
             await self._answer_callback(callback, "Approval already handled")
             return
         if not pending.future.done():
             pending.future.set_result(parsed.decision)
+        runtime = self._router.runtime_for(
+            topic_key(pending.chat_id, pending.thread_id)
+        )
+        runtime.pending_request_id = None
         log_event(
             self._logger,
             logging.INFO,
@@ -3337,6 +3620,10 @@ class TelegramBotService:
             page_button=self._page_button("bind", state),
             include_cancel=True,
         )
+
+    def _build_update_keyboard(self, state: SelectionState) -> dict[str, Any]:
+        options = list(state.items)
+        return build_update_keyboard(options, include_cancel=True)
 
     def _build_model_keyboard(self, state: ModelPickerState) -> dict[str, Any]:
         page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
@@ -3534,6 +3821,9 @@ class TelegramBotService:
             self._model_options.pop(key, None)
             self._model_pending.pop(key, None)
             text = "Model selection cancelled."
+        elif parsed.kind == "update":
+            self._update_options.pop(key, None)
+            text = "Update cancelled."
         else:
             await self._answer_callback(callback, "Selection expired")
             return
@@ -3946,6 +4236,25 @@ def _format_turn_metrics(
     if not lines:
         return None
     return "\n".join(lines)
+
+
+def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _approval_age_seconds(created_at: Optional[str]) -> Optional[int]:
+    dt = _parse_iso_timestamp(created_at)
+    if dt is None:
+        return None
+    return max(int((datetime.now(timezone.utc) - dt).total_seconds()), 0)
 
 
 def _format_token_row(label: str, usage: dict[str, Any]) -> Optional[str]:

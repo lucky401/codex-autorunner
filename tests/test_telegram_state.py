@@ -4,6 +4,7 @@ from pathlib import Path
 from codex_autorunner.telegram_state import (
     APPROVAL_MODE_SAFE,
     APPROVAL_MODE_YOLO,
+    PendingApprovalRecord,
     TelegramStateStore,
     TopicQueue,
     parse_topic_key,
@@ -84,3 +85,23 @@ def test_topic_queue_serializes() -> None:
     max_active, results = asyncio.run(runner())
     assert max_active == 1
     assert sorted(results) == ["a", "b", "c"]
+
+
+def test_state_store_pending_approvals(tmp_path: Path) -> None:
+    state_path = tmp_path / "telegram_state.json"
+    store = TelegramStateStore(state_path)
+    record = PendingApprovalRecord(
+        request_id="req-1",
+        turn_id="turn-1",
+        chat_id=123,
+        thread_id=45,
+        message_id=67,
+        prompt="Approve command?",
+        created_at="2026-01-01T00:00:00Z",
+    )
+    store.upsert_pending_approval(record)
+    pending = store.pending_approvals_for_topic(123, 45)
+    assert len(pending) == 1
+    assert pending[0].request_id == "req-1"
+    store.clear_pending_approval("req-1")
+    assert store.pending_approvals_for_topic(123, 45) == []

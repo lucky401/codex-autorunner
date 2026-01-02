@@ -2,6 +2,7 @@ from codex_autorunner.telegram_adapter import (
     ApprovalCallback,
     BindCallback,
     CancelCallback,
+    UpdateCallback,
     PageCallback,
     ResumeCallback,
     TelegramAllowlist,
@@ -13,12 +14,14 @@ from codex_autorunner.telegram_adapter import (
     build_approval_keyboard,
     build_bind_keyboard,
     build_resume_keyboard,
+    build_update_keyboard,
     chunk_message,
     encode_approval_callback,
     encode_bind_callback,
     encode_cancel_callback,
     encode_page_callback,
     encode_resume_callback,
+    encode_update_callback,
     is_interrupt_alias,
     next_update_offset,
     parse_callback_data,
@@ -287,6 +290,9 @@ def test_callback_encoding_and_parsing() -> None:
     bind = encode_bind_callback("repo_1")
     parsed_bind = parse_callback_data(bind)
     assert parsed_bind == BindCallback(repo_id="repo_1")
+    update = encode_update_callback("web")
+    parsed_update = parse_callback_data(update)
+    assert parsed_update == UpdateCallback(target="web")
     cancel = encode_cancel_callback("resume")
     parsed_cancel = parse_callback_data(cancel)
     assert parsed_cancel == CancelCallback(kind="resume")
@@ -311,6 +317,16 @@ def test_build_keyboards() -> None:
     assert resume_paged["inline_keyboard"][2][0]["callback_data"].startswith("cancel:")
     bind_keyboard = build_bind_keyboard([("repo_a", "1) repo-a")])
     assert bind_keyboard["inline_keyboard"][0][0]["callback_data"].startswith("bind:")
+    update_keyboard = build_update_keyboard(
+        [("both", "Both"), ("web", "Web only")],
+        include_cancel=True,
+    )
+    assert update_keyboard["inline_keyboard"][0][0]["callback_data"].startswith(
+        "update:"
+    )
+    assert update_keyboard["inline_keyboard"][-1][0]["callback_data"].startswith(
+        "cancel:"
+    )
 
 
 def test_next_update_offset() -> None:
