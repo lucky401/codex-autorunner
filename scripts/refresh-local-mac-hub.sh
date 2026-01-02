@@ -13,6 +13,7 @@ set -euo pipefail
 #   TELEGRAM_LABEL launchd label for telegram bot (default: ${LABEL}.telegram)
 #   TELEGRAM_PLIST_PATH telegram plist path (default: ~/Library/LaunchAgents/${TELEGRAM_LABEL}.plist)
 #   TELEGRAM_LOG  telegram stdout/stderr log path (default: <hub_root>/.codex-autorunner/codex-autorunner-telegram.log)
+#   UPDATE_TARGET Which services to restart (both|web|telegram; default: both)
 #   PIPX_VENV     pipx venv path (default: ~/.local/pipx/venvs/codex-autorunner)
 #   PIPX_PYTHON   python inside venv (default: ${PIPX_VENV}/bin/python)
 
@@ -21,6 +22,7 @@ PLIST_PATH="${PLIST_PATH:-$HOME/Library/LaunchAgents/${LABEL}.plist}"
 ENABLE_TELEGRAM_BOT="${ENABLE_TELEGRAM_BOT:-auto}"
 TELEGRAM_LABEL="${TELEGRAM_LABEL:-${LABEL}.telegram}"
 TELEGRAM_PLIST_PATH="${TELEGRAM_PLIST_PATH:-$HOME/Library/LaunchAgents/${TELEGRAM_LABEL}.plist}"
+UPDATE_TARGET="${UPDATE_TARGET:-both}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
@@ -97,6 +99,42 @@ telegram_state() {
   fi
 }
 
+normalize_update_target() {
+  local raw
+  raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    ""|both|all)
+      echo "both"
+      ;;
+    web|hub|server|ui)
+      echo "web"
+      ;;
+    telegram|tg|bot)
+      echo "telegram"
+      ;;
+    *)
+      echo "Unsupported UPDATE_TARGET '${raw}'. Use both, web, or telegram." >&2
+      exit 1
+      ;;
+  esac
+}
+
+UPDATE_TARGET="$(normalize_update_target "${UPDATE_TARGET}")"
+should_reload_hub=false
+should_reload_telegram=false
+case "${UPDATE_TARGET}" in
+  both)
+    should_reload_hub=true
+    should_reload_telegram=true
+    ;;
+  web)
+    should_reload_hub=true
+    ;;
+  telegram)
+    should_reload_telegram=true
+    ;;
+esac
+
 if [[ ! -f "${PLIST_PATH}" ]]; then
   echo "LaunchAgent plist not found at ${PLIST_PATH}" >&2
   echo "Run scripts/install-local-mac-hub.sh first (or set PLIST_PATH)." >&2
@@ -114,14 +152,16 @@ else
   pipx install --force "${PACKAGE_SRC}"
 fi
 
-echo "Reloading launchd service ${LABEL}..."
-launchctl unload "${PLIST_PATH}" >/dev/null 2>&1 || true
-launchctl load -w "${PLIST_PATH}"
-launchctl kickstart -k "gui/$(id -u)/${LABEL}"
+if [[ "${should_reload_hub}" == "true" ]]; then
+  echo "Reloading launchd service ${LABEL}..."
+  launchctl unload "${PLIST_PATH}" >/dev/null 2>&1 || true
+  launchctl load -w "${PLIST_PATH}"
+  launchctl kickstart -k "gui/$(id -u)/${LABEL}"
+fi
 
 hub_root="$(_plist_arg_value path)"
 telegram_status="$(telegram_state "${hub_root}")"
-if [[ "${telegram_status}" == "enabled" ]]; then
+if [[ "${should_reload_telegram}" == "true" && "${telegram_status}" == "enabled" ]]; then
   if [[ -z "${hub_root}" ]]; then
     echo "Telegram enabled but unable to derive hub root; skipping telegram LaunchAgent." >&2
   else
@@ -162,12 +202,12 @@ EOF
     launchctl load -w "${TELEGRAM_PLIST_PATH}"
     launchctl kickstart -k "gui/$(id -u)/${TELEGRAM_LABEL}"
   fi
-elif [[ "${telegram_status}" == "disabled" ]]; then
+elif [[ "${should_reload_telegram}" == "true" && "${telegram_status}" == "disabled" ]]; then
   if [[ -f "${TELEGRAM_PLIST_PATH}" ]]; then
     echo "Telegram disabled; unloading launchd service ${TELEGRAM_LABEL}..."
     launchctl unload -w "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
   fi
-elif [[ -f "${TELEGRAM_PLIST_PATH}" ]]; then
+elif [[ "${should_reload_telegram}" == "true" && -f "${TELEGRAM_PLIST_PATH}" ]]; then
   echo "Reloading launchd service ${TELEGRAM_LABEL}..."
   launchctl unload "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
   launchctl load -w "${TELEGRAM_PLIST_PATH}"

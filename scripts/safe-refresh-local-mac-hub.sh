@@ -14,6 +14,7 @@ set -euo pipefail
 #   TELEGRAM_LABEL         launchd label for telegram bot (default: ${LABEL}.telegram)
 #   TELEGRAM_PLIST_PATH    telegram plist path (default: ~/Library/LaunchAgents/${TELEGRAM_LABEL}.plist)
 #   TELEGRAM_LOG           telegram stdout/stderr log path (default: <hub_root>/.codex-autorunner/codex-autorunner-telegram.log)
+#   UPDATE_TARGET          Which services to restart (both|web|telegram; default: both)
 #   PIPX_ROOT              pipx root (default: ~/.local/pipx)
 #   PIPX_VENV              existing pipx venv path (default: ${PIPX_ROOT}/venvs/codex-autorunner)
 #   CURRENT_VENV_LINK      symlink path used by launchd (default: ${PIPX_ROOT}/venvs/codex-autorunner.current)
@@ -31,6 +32,7 @@ UPDATE_STATUS_PATH="${UPDATE_STATUS_PATH:-}"
 TELEGRAM_LABEL="${TELEGRAM_LABEL:-${LABEL}.telegram}"
 TELEGRAM_PLIST_PATH="${TELEGRAM_PLIST_PATH:-$HOME/Library/LaunchAgents/${TELEGRAM_LABEL}.plist}"
 ENABLE_TELEGRAM_BOT="${ENABLE_TELEGRAM_BOT:-auto}"
+UPDATE_TARGET="${UPDATE_TARGET:-both}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
@@ -70,6 +72,41 @@ fail() {
   write_status "error" "${message}"
   exit 1
 }
+
+normalize_update_target() {
+  local raw
+  raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    ""|both|all)
+      echo "both"
+      ;;
+    web|hub|server|ui)
+      echo "web"
+      ;;
+    telegram|tg|bot)
+      echo "telegram"
+      ;;
+    *)
+      fail "Unsupported UPDATE_TARGET '${raw}'. Use both, web, or telegram."
+      ;;
+  esac
+}
+
+UPDATE_TARGET="$(normalize_update_target "${UPDATE_TARGET}")"
+should_reload_hub=false
+should_reload_telegram=false
+case "${UPDATE_TARGET}" in
+  both)
+    should_reload_hub=true
+    should_reload_telegram=true
+    ;;
+  web)
+    should_reload_hub=true
+    ;;
+  telegram)
+    should_reload_telegram=true
+    ;;
+esac
 
 if [[ ! -f "${PLIST_PATH}" ]]; then
   fail "LaunchAgent plist not found at ${PLIST_PATH}. Run scripts/install-local-mac-hub.sh or scripts/launchd-hub.sh (or set PLIST_PATH)."
@@ -482,30 +519,43 @@ ln -sfn "${current_target}" "${PREV_VENV_LINK}"
 echo "Switching ${CURRENT_VENV_LINK} -> ${next_venv}"
 ln -sfn "${next_venv}" "${CURRENT_VENV_LINK}"
 
-echo "Restarting launchd service ${LABEL}..."
-_ensure_plist_uses_current_venv
-_reload
-_reload_telegram
+if [[ "${should_reload_hub}" == "true" ]]; then
+  echo "Restarting launchd service ${LABEL}..."
+  _ensure_plist_uses_current_venv
+  _reload
+fi
+if [[ "${should_reload_telegram}" == "true" ]]; then
+  _reload_telegram
+fi
 
-if _wait_healthy; then
-  echo "Health check OK; update successful."
+if [[ "${should_reload_hub}" != "true" ]]; then
+  echo "Skipping hub health check (update target: ${UPDATE_TARGET})."
   write_status "ok" "Update completed successfully."
 else
-  echo "Health check failed; rolling back to ${current_target}..." >&2
-  ln -sfn "${current_target}" "${CURRENT_VENV_LINK}"
-  _reload || true
-  _reload_telegram || true
   if _wait_healthy; then
-    echo "Rollback OK; service restored." >&2
-    write_status "rollback" "Update failed; rollback succeeded."
+    echo "Health check OK; update successful."
+    write_status "ok" "Update completed successfully."
   else
-    echo "Rollback failed; service still unhealthy. Check logs and launchctl state:" >&2
-    echo "  tail -n 200 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log" >&2
-    echo "  launchctl print ${domain}" >&2
-    write_status "error" "Update failed and rollback did not recover the service."
-    exit 2
+    echo "Health check failed; rolling back to ${current_target}..." >&2
+    ln -sfn "${current_target}" "${CURRENT_VENV_LINK}"
+    if [[ "${should_reload_hub}" == "true" ]]; then
+      _reload || true
+    fi
+    if [[ "${should_reload_telegram}" == "true" ]]; then
+      _reload_telegram || true
+    fi
+    if _wait_healthy; then
+      echo "Rollback OK; service restored." >&2
+      write_status "rollback" "Update failed; rollback succeeded."
+    else
+      echo "Rollback failed; service still unhealthy. Check logs and launchctl state:" >&2
+      echo "  tail -n 200 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log" >&2
+      echo "  launchctl print ${domain}" >&2
+      write_status "error" "Update failed and rollback did not recover the service."
+      exit 2
+    fi
+    exit 1
   fi
-  exit 1
 fi
 
 echo "Pruning old staged venvs (keeping ${KEEP_OLD_VENVS})..."

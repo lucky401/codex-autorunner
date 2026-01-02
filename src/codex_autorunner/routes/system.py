@@ -33,6 +33,19 @@ def _run_cmd(cmd: list[str], cwd: Path) -> None:
         raise RuntimeError(detail) from e
 
 
+def _normalize_update_target(raw: Optional[str]) -> str:
+    if raw is None:
+        return "both"
+    value = str(raw).strip().lower()
+    if value in ("", "both", "all"):
+        return "both"
+    if value in ("web", "hub", "server", "ui"):
+        return "web"
+    if value in ("telegram", "tg", "bot"):
+        return "telegram"
+    raise ValueError("Unsupported update target (use both, web, or telegram).")
+
+
 def _update_status_path() -> Path:
     return Path.home() / ".codex-autorunner" / "update_status.json"
 
@@ -194,14 +207,25 @@ def _system_update_check(
     }
 
 
-def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Logger) -> None:
+def _system_update_worker(
+    *, repo_url: str, update_dir: Path, logger: logging.Logger, update_target: str = "both"
+) -> None:
     status_path = _update_status_path()
     try:
+        try:
+            update_target = _normalize_update_target(update_target)
+        except ValueError as exc:
+            msg = str(exc)
+            logger.error(msg)
+            _write_update_status("error", msg)
+            return
+
         _write_update_status(
             "running",
             "Update started.",
             repo_url=repo_url,
             update_dir=str(update_dir),
+            update_target=update_target,
         )
 
         missing = []
@@ -243,6 +267,7 @@ def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Lo
         env = os.environ.copy()
         env["PACKAGE_SRC"] = str(update_dir)
         env["UPDATE_STATUS_PATH"] = str(status_path)
+        env["UPDATE_TARGET"] = update_target
 
         proc = subprocess.Popen(
             [str(refresh_script)],
@@ -268,7 +293,9 @@ def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Lo
 
         existing = _read_update_status()
         if not existing or existing.get("status") not in ("rollback", "error"):
-            _write_update_status("ok", "Update completed successfully.")
+            _write_update_status(
+                "ok", "Update completed successfully.", update_target=update_target
+            )
     except Exception:
         logger.exception("System update failed")
         _write_update_status(
@@ -277,7 +304,9 @@ def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Lo
         )
 
 
-def _spawn_update_process(*, repo_url: str, update_dir: Path, logger: logging.Logger) -> None:
+def _spawn_update_process(
+    *, repo_url: str, update_dir: Path, logger: logging.Logger, update_target: str = "both"
+) -> None:
     status_path = _update_status_path()
     log_path = status_path.parent / "update-standalone.log"
     _write_update_status(
@@ -285,6 +314,7 @@ def _spawn_update_process(*, repo_url: str, update_dir: Path, logger: logging.Lo
         "Update spawned.",
         repo_url=repo_url,
         update_dir=str(update_dir),
+        update_target=update_target,
         log_path=str(log_path),
     )
     cmd = [
@@ -295,6 +325,8 @@ def _spawn_update_process(*, repo_url: str, update_dir: Path, logger: logging.Lo
         repo_url,
         "--update-dir",
         str(update_dir),
+        "--target",
+        update_target,
         "--log-path",
         str(log_path),
     ]
@@ -364,14 +396,32 @@ def build_system_routes() -> APIRouter:
         update_dir = home_dot_car / "update_cache"
 
         try:
+            try:
+                payload = await request.json()
+            except Exception:
+                payload = None
+            target_raw = None
+            if isinstance(payload, dict):
+                target_raw = payload.get("target")
+            if target_raw is None:
+                target_raw = request.query_params.get("target")
+            update_target = _normalize_update_target(target_raw)
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger is None:
                 logger = logging.getLogger("codex_autorunner.system_update")
-            _spawn_update_process(repo_url=repo_url, update_dir=update_dir, logger=logger)
+            _spawn_update_process(
+                repo_url=repo_url,
+                update_dir=update_dir,
+                logger=logger,
+                update_target=update_target,
+            )
             return {
                 "status": "ok",
-                "message": "Update started. Service will restart shortly.",
+                "message": f"Update started ({update_target}). Service will restart shortly.",
+                "target": update_target,
             }
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         except Exception as e:
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger:

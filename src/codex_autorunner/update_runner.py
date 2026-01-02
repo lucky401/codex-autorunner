@@ -23,6 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-url", required=True)
     parser.add_argument("--update-dir", required=True)
     parser.add_argument("--log-path", required=True)
+    parser.add_argument("--target", default="both")
     args = parser.parse_args(argv)
 
     update_dir = Path(args.update_dir).expanduser()
@@ -30,7 +31,12 @@ def main(argv: list[str] | None = None) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logger = _build_logger(log_path)
 
-    _system_update_worker(repo_url=args.repo_url, update_dir=update_dir, logger=logger)
+    _system_update_worker(
+        repo_url=args.repo_url,
+        update_dir=update_dir,
+        logger=logger,
+        update_target=args.target,
+    )
     return 0
 
 

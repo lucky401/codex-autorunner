@@ -21,6 +21,7 @@ from .app_server_client import (
 )
 from .logging_utils import log_event
 from .manifest import load_manifest
+from .routes.system import _normalize_update_target, _spawn_update_process
 from .telegram_adapter import (
     ApprovalCallback,
     BindCallback,
@@ -78,6 +79,7 @@ DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
+DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
 RESUME_PICKER_PROMPT = (
     "Select a thread to resume (buttons below or reply with number/id)."
 )
@@ -458,11 +460,13 @@ class TelegramBotService:
         manifest_path: Optional[Path] = None,
         voice_config: Optional[VoiceConfig] = None,
         voice_service: Optional[VoiceService] = None,
+        update_repo_url: Optional[str] = None,
     ) -> None:
         self._config = config
         self._logger = logger or logging.getLogger(__name__)
         self._hub_root = hub_root
         self._manifest_path = manifest_path
+        self._update_repo_url = update_repo_url
         self._allowlist = config.allowlist()
         self._store = TelegramStateStore(
             config.state_file, default_approval_mode=config.defaults.approval_mode
@@ -1250,6 +1254,11 @@ class TelegramBotService:
                 "show current thread rollout path",
                 self._handle_rollout,
                 allow_during_turn=True,
+            ),
+            "update": CommandSpec(
+                "update",
+                "update CAR (both|web|telegram)",
+                self._handle_update,
             ),
             "logout": CommandSpec(
                 "logout",
@@ -3009,6 +3018,64 @@ class TelegramBotService:
         await self._send_message(
             message.chat_id,
             "Rollout path not found for this thread.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_update(
+        self, message: TelegramMessage, args: str, _runtime: Any
+    ) -> None:
+        argv = self._parse_command_args(args)
+        target_raw = argv[0] if argv else None
+        try:
+            update_target = _normalize_update_target(target_raw)
+        except ValueError:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /update [both|web|telegram]",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        repo_url = (self._update_repo_url or DEFAULT_UPDATE_REPO_URL).strip()
+        if not repo_url:
+            repo_url = DEFAULT_UPDATE_REPO_URL
+        update_dir = Path.home() / ".codex-autorunner" / "update_cache"
+        try:
+            _spawn_update_process(
+                repo_url=repo_url,
+                update_dir=update_dir,
+                logger=self._logger,
+                update_target=update_target,
+            )
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.update.started",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                update_target=update_target,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.update.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                update_target=update_target,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Update failed to start; check logs for details.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            f"Update started ({update_target}). The selected service(s) will restart.",
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )

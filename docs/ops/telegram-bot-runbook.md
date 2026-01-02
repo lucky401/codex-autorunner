@@ -35,6 +35,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - `/resume`: list recent threads and resume one.
 - `/interrupt`: stop the active turn.
 - `/approvals yolo|safe`: toggle approval mode.
+- `/update [both|web|telegram]`: update CAR and restart selected services.
 
 ## Media Support
 

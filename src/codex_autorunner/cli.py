@@ -732,6 +732,7 @@ def telegram_start(
     logger = setup_rotating_logger("codex-autorunner-telegram", config.log)
     voice_raw = config.raw.get("voice") if isinstance(config.raw, dict) else None
     voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
+    update_repo_url = config.update_repo_url if isinstance(config, HubConfig) else None
     async def _run() -> None:
         service = TelegramBotService(
             telegram_cfg,
@@ -741,6 +742,7 @@ def telegram_start(
                 config.manifest_path if isinstance(config, HubConfig) else None
             ),
             voice_config=voice_config,
+            update_repo_url=update_repo_url,
         )
         await service.run_polling()
 

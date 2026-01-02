@@ -595,8 +595,13 @@
           <p class="muted small">System-wide settings for Codex Autorunner.</p>
           <div class="form-group">
             <label>System Update</label>
+            <select id="hub-update-target">
+              <option value="both">Web + Telegram</option>
+              <option value="web">Web only</option>
+              <option value="telegram">Telegram only</option>
+            </select>
             <button id="hub-update-btn" class="primary sm">Update CAR</button>
-            <span class="form-hint">Pull latest code and restart service</span>
+            <span class="form-hint">Pull latest code and restart selected services</span>
           </div>
         </div>
         <div class="modal-actions">
@@ -615,8 +620,13 @@
           <p class="muted small">Settings for the current repository session.</p>
           <div class="form-group">
             <label>System Update</label>
+            <select id="repo-update-target">
+              <option value="both">Web + Telegram</option>
+              <option value="web">Web only</option>
+              <option value="telegram">Telegram only</option>
+            </select>
             <button id="repo-update-btn" class="primary sm">Update CAR</button>
-            <span class="form-hint">Pull latest code and restart service</span>
+            <span class="form-hint">Pull latest code and restart selected services</span>
           </div>
         </div>
         <div class="modal-actions">

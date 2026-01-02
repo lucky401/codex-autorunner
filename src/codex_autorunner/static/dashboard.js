@@ -494,13 +494,36 @@ async function loadUsage() {
   }
 }
 
-async function handleSystemUpdate(btnId) {
+const UPDATE_TARGET_LABELS = {
+  both: "web + Telegram",
+  web: "web only",
+  telegram: "Telegram only",
+};
+
+function normalizeUpdateTarget(value) {
+  if (!value) return "both";
+  if (value === "both" || value === "web" || value === "telegram") return value;
+  return "both";
+}
+
+function getUpdateTarget(selectId) {
+  const select = selectId ? document.getElementById(selectId) : null;
+  return normalizeUpdateTarget(select ? select.value : "both");
+}
+
+function describeUpdateTarget(target) {
+  return UPDATE_TARGET_LABELS[target] || UPDATE_TARGET_LABELS.both;
+}
+
+async function handleSystemUpdate(btnId, targetSelectId) {
   const btn = document.getElementById(btnId);
   if (!btn) return;
 
   const originalText = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Checking...";
+  const updateTarget = getUpdateTarget(targetSelectId);
+  const targetLabel = describeUpdateTarget(updateTarget);
 
   let check;
   try {
@@ -516,8 +539,12 @@ async function handleSystemUpdate(btnId) {
     return;
   }
 
+  const restartNotice =
+    updateTarget === "telegram"
+      ? "The Telegram bot will restart."
+      : "The service will restart.";
   const confirmed = await confirmModal(
-    `${check?.message || "Update available."} Update Codex Autorunner? The service will restart.`
+    `${check?.message || "Update available."} Update Codex Autorunner (${targetLabel})? ${restartNotice}`
   );
   if (!confirmed) {
     btn.disabled = false;
@@ -528,8 +555,16 @@ async function handleSystemUpdate(btnId) {
   btn.textContent = "Updating...";
 
   try {
-    const res = await api("/system/update", { method: "POST" });
-    flash(res.message || "Update started. Reloading...", "success");
+    const res = await api("/system/update", {
+      method: "POST",
+      body: { target: updateTarget },
+    });
+    flash(res.message || `Update started (${targetLabel}).`, "success");
+    if (updateTarget === "telegram") {
+      btn.disabled = false;
+      btn.textContent = originalText;
+      return;
+    }
     // Disable interaction
     document.body.style.pointerEvents = "none";
     // Wait for restart (approx 5-10s) then reload
@@ -550,6 +585,7 @@ function initSettings() {
   const modal = document.getElementById("repo-settings-modal");
   const closeBtn = document.getElementById("repo-settings-close");
   const updateBtn = document.getElementById("repo-update-btn");
+  const updateTarget = document.getElementById("repo-update-target");
 
   if (settingsBtn && modal) {
     settingsBtn.addEventListener("click", () => {
@@ -571,7 +607,7 @@ function initSettings() {
 
   if (updateBtn) {
     updateBtn.addEventListener("click", () =>
-      handleSystemUpdate("repo-update-btn")
+      handleSystemUpdate("repo-update-btn", updateTarget ? updateTarget.id : null)
     );
   }
 }
