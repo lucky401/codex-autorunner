@@ -23,6 +23,8 @@ set -euo pipefail
 #   HEALTH_INTERVAL_SECONDS poll interval (default: 0.5)
 #   HEALTH_PATH            request path (default: derived from base_path)
 #   HEALTH_STATIC_PATH     static asset path (default: derived from base_path)
+#   HEALTH_CHECK_STATIC    static asset check (auto|true|false; default: auto)
+#   HEALTH_CHECK_TELEGRAM  telegram launchd check (auto|true|false; default: auto)
 #   HEALTH_CONNECT_TIMEOUT_SECONDS connection timeout for each health request (default: 2)
 #   HEALTH_REQUEST_TIMEOUT_SECONDS total timeout for each health request (default: 5)
 #   KEEP_OLD_VENVS         how many old next-* venvs to keep (default: 3)
@@ -50,7 +52,13 @@ HEALTH_CONNECT_TIMEOUT_SECONDS="${HEALTH_CONNECT_TIMEOUT_SECONDS:-2}"
 HEALTH_REQUEST_TIMEOUT_SECONDS="${HEALTH_REQUEST_TIMEOUT_SECONDS:-5}"
 HEALTH_PATH="${HEALTH_PATH:-}"
 HEALTH_STATIC_PATH="${HEALTH_STATIC_PATH:-}"
+HEALTH_CHECK_STATIC="${HEALTH_CHECK_STATIC:-auto}"
+HEALTH_CHECK_TELEGRAM="${HEALTH_CHECK_TELEGRAM:-auto}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
+
+current_target=""
+swap_completed=false
+rollback_completed=false
 
 write_status() {
   local status message
@@ -94,7 +102,28 @@ normalize_update_target() {
   esac
 }
 
+normalize_bool() {
+  local raw
+  raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    1|true|yes|y|on)
+      echo "true"
+      ;;
+    0|false|no|n|off)
+      echo "false"
+      ;;
+    ""|auto)
+      echo "auto"
+      ;;
+    *)
+      echo "auto"
+      ;;
+  esac
+}
+
 UPDATE_TARGET="$(normalize_update_target "${UPDATE_TARGET}")"
+HEALTH_CHECK_STATIC="$(normalize_bool "${HEALTH_CHECK_STATIC}")"
+HEALTH_CHECK_TELEGRAM="$(normalize_bool "${HEALTH_CHECK_TELEGRAM}")"
 should_reload_hub=false
 should_reload_telegram=false
 case "${UPDATE_TARGET}" in
@@ -203,6 +232,12 @@ PY
 
 _service_pid() {
   launchctl print "${domain}" 2>/dev/null | awk '/pid =/ {print $3; exit}'
+}
+
+_telegram_service_pid() {
+  local telegram_domain
+  telegram_domain="gui/$(id -u)/${TELEGRAM_LABEL}"
+  launchctl print "${telegram_domain}" 2>/dev/null | awk '/pid =/ {print $3; exit}'
 }
 
 _wait_pid_exit() {
@@ -488,12 +523,12 @@ _detect_base_path() {
 if [[ -z "${HEALTH_PATH}" ]]; then
   base_path="$(_detect_base_path)"
   if [[ -n "${base_path}" ]]; then
-    HEALTH_PATH="${base_path}/openapi.json"
+    HEALTH_PATH="${base_path}/health"
     if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
       HEALTH_STATIC_PATH="${base_path}/static/app.js"
     fi
   else
-    HEALTH_PATH="/openapi.json"
+    HEALTH_PATH="/health"
     if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
       HEALTH_STATIC_PATH="/static/app.js"
     fi
@@ -507,6 +542,32 @@ if [[ -n "${HEALTH_STATIC_PATH}" && "${HEALTH_STATIC_PATH:0:1}" != "/" ]]; then
   HEALTH_STATIC_PATH="/${HEALTH_STATIC_PATH}"
 fi
 
+_should_check_static() {
+  if [[ "${HEALTH_CHECK_STATIC}" == "false" ]]; then
+    return 1
+  fi
+  if [[ "${HEALTH_CHECK_STATIC}" == "true" ]]; then
+    return 0
+  fi
+  [[ -n "${HEALTH_STATIC_PATH}" ]]
+}
+
+_should_check_telegram() {
+  local hub_root telegram_state
+  if [[ "${HEALTH_CHECK_TELEGRAM}" == "false" ]]; then
+    return 1
+  fi
+  if [[ "${HEALTH_CHECK_TELEGRAM}" == "true" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${TELEGRAM_PLIST_PATH}" ]]; then
+    return 1
+  fi
+  hub_root="$(_plist_arg_value path)"
+  telegram_state="$(_telegram_state "${hub_root}")"
+  [[ "${telegram_state}" != "disabled" ]]
+}
+
 _health_check_once() {
   local port url static_url
   port="$(_plist_arg_value port)"
@@ -518,7 +579,7 @@ _health_check_once() {
   curl -fsS --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
     --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
     "${url}" >/dev/null 2>&1
-  if [[ -n "${HEALTH_STATIC_PATH}" ]]; then
+  if _should_check_static; then
     static_url="http://127.0.0.1:${port}${HEALTH_STATIC_PATH}"
     curl -fsS --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
       --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
@@ -541,11 +602,97 @@ _wait_healthy() {
   done
 }
 
+_telegram_check_once() {
+  local pid
+  pid="$(_telegram_service_pid)"
+  if [[ -n "${pid}" && "${pid}" != "0" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+_wait_telegram_healthy() {
+  local start now
+  start="$(date +%s)"
+  while true; do
+    if _telegram_check_once; then
+      return 0
+    fi
+    now="$(date +%s)"
+    if (( now - start >= HEALTH_TIMEOUT_SECONDS )); then
+      return 1
+    fi
+    sleep "${HEALTH_INTERVAL_SECONDS}"
+  done
+}
+
+_check_hub_health() {
+  if [[ "${should_reload_hub}" != "true" ]]; then
+    echo "Skipping hub health check (update target: ${UPDATE_TARGET})."
+    return 0
+  fi
+  if _wait_healthy; then
+    echo "Hub health check OK."
+    return 0
+  fi
+  echo "Hub health check failed." >&2
+  return 1
+}
+
+_check_telegram_health() {
+  if [[ "${should_reload_telegram}" != "true" ]]; then
+    return 0
+  fi
+  if ! _should_check_telegram; then
+    echo "Skipping telegram health check."
+    return 0
+  fi
+  if _wait_telegram_healthy; then
+    echo "Telegram health check OK."
+    return 0
+  fi
+  echo "Telegram health check failed." >&2
+  return 1
+}
+
+_rollback() {
+  local message
+  message="$1"
+  if [[ "${rollback_completed}" == "true" ]]; then
+    return 0
+  fi
+  rollback_completed=true
+  echo "${message}" >&2
+  ln -sfn "${current_target}" "${CURRENT_VENV_LINK}"
+  if [[ "${should_reload_hub}" == "true" ]]; then
+    _reload || true
+  fi
+  if [[ "${should_reload_telegram}" == "true" ]]; then
+    _reload_telegram || true
+  fi
+}
+
+_on_exit() {
+  local status
+  status="$1"
+  if [[ "${status}" -eq 0 ]]; then
+    return 0
+  fi
+  if [[ "${swap_completed}" != "true" || "${rollback_completed}" == "true" ]]; then
+    return 0
+  fi
+  _rollback "Update failed; rolling back to ${current_target}..."
+  write_status "rollback" "Update failed; rollback attempted."
+}
+
+trap '_on_exit $?' EXIT
+
 echo "Switching ${PREV_VENV_LINK} -> ${current_target}"
 ln -sfn "${current_target}" "${PREV_VENV_LINK}"
 
 echo "Switching ${CURRENT_VENV_LINK} -> ${next_venv}"
 ln -sfn "${next_venv}" "${CURRENT_VENV_LINK}"
+swap_completed=true
 
 if [[ "${should_reload_hub}" == "true" ]]; then
   echo "Restarting launchd service ${LABEL}..."
@@ -556,34 +703,30 @@ if [[ "${should_reload_telegram}" == "true" ]]; then
   _reload_telegram
 fi
 
-if [[ "${should_reload_hub}" != "true" ]]; then
-  echo "Skipping hub health check (update target: ${UPDATE_TARGET})."
+health_ok=true
+if ! _check_hub_health; then
+  health_ok=false
+fi
+if ! _check_telegram_health; then
+  health_ok=false
+fi
+
+if [[ "${health_ok}" == "true" ]]; then
+  echo "Health check OK; update successful."
   write_status "ok" "Update completed successfully."
 else
-  if _wait_healthy; then
-    echo "Health check OK; update successful."
-    write_status "ok" "Update completed successfully."
+  _rollback "Health check failed; rolling back to ${current_target}..."
+  if _check_hub_health && _check_telegram_health; then
+    echo "Rollback OK; service restored." >&2
+    write_status "rollback" "Update failed; rollback succeeded."
   else
-    echo "Health check failed; rolling back to ${current_target}..." >&2
-    ln -sfn "${current_target}" "${CURRENT_VENV_LINK}"
-    if [[ "${should_reload_hub}" == "true" ]]; then
-      _reload || true
-    fi
-    if [[ "${should_reload_telegram}" == "true" ]]; then
-      _reload_telegram || true
-    fi
-    if _wait_healthy; then
-      echo "Rollback OK; service restored." >&2
-      write_status "rollback" "Update failed; rollback succeeded."
-    else
-      echo "Rollback failed; service still unhealthy. Check logs and launchctl state:" >&2
-      echo "  tail -n 200 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log" >&2
-      echo "  launchctl print ${domain}" >&2
-      write_status "error" "Update failed and rollback did not recover the service."
-      exit 2
-    fi
-    exit 1
+    echo "Rollback failed; service still unhealthy. Check logs and launchctl state:" >&2
+    echo "  tail -n 200 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log" >&2
+    echo "  launchctl print ${domain}" >&2
+    write_status "error" "Update failed and rollback did not recover the service."
+    exit 2
   fi
+  exit 1
 fi
 
 echo "Pruning old staged venvs (keeping ${KEEP_OLD_VENVS})..."

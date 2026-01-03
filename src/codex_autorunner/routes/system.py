@@ -349,6 +349,22 @@ def _spawn_update_process(
 def build_system_routes() -> APIRouter:
     router = APIRouter()
 
+    @router.get("/health")
+    async def system_health(request: Request):
+        try:
+            config = request.app.state.config
+        except AttributeError:
+            config = None
+        mode = "hub" if isinstance(config, HubConfig) else "repo"
+        base_path = getattr(request.app.state, "base_path", "")
+        asset_version = getattr(request.app.state, "asset_version", None)
+        return {
+            "status": "ok",
+            "mode": mode,
+            "base_path": base_path,
+            "asset_version": asset_version,
+        }
+
     @router.get("/system/update/check")
     async def system_update_check(request: Request):
         """
