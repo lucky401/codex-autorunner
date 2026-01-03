@@ -1350,13 +1350,26 @@ class TelegramBotService:
     ) -> Optional[TurnKey]:
         if not isinstance(turn_id, str) or not turn_id:
             return None
+        key: Optional[TurnKey] = None
         if thread_id is not None:
             if not isinstance(thread_id, str) or not thread_id:
                 return None
-            return (thread_id, turn_id)
+            key = (thread_id, turn_id)
+            if self._turn_contexts.get(key) is not None:
+                return key
         matches = [key for key in self._turn_contexts if key[1] == turn_id]
         if len(matches) == 1:
-            return matches[0]
+            candidate = matches[0]
+            if key is not None and candidate != key:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.turn.thread_mismatch",
+                    turn_id=turn_id,
+                    requested_thread_id=thread_id,
+                    actual_thread_id=candidate[0],
+                )
+            return candidate
         if len(matches) > 1:
             log_event(
                 self._logger,
