@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -27,7 +28,7 @@ from .manifest import load_manifest
 from .server import create_app, create_hub_app
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import RepoNotFoundError, default_editor, find_repo_root
-from .logging_utils import setup_rotating_logger
+from .logging_utils import log_event, setup_rotating_logger
 from .spec_ingest import (
     SpecIngestError,
     generate_docs_from_spec,
@@ -730,6 +731,13 @@ def telegram_start(
     except TelegramBotConfigError as exc:
         raise typer.Exit(str(exc))
     logger = setup_rotating_logger("codex-autorunner-telegram", config.log)
+    log_event(
+        logger,
+        logging.INFO,
+        "telegram.bot.starting",
+        root=str(config.root),
+        mode=("hub" if isinstance(config, HubConfig) else "repo"),
+    )
     voice_raw = config.raw.get("voice") if isinstance(config.raw, dict) else None
     voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
     update_repo_url = config.update_repo_url if isinstance(config, HubConfig) else None

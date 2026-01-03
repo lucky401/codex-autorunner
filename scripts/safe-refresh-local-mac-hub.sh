@@ -145,6 +145,17 @@ echo "Installing codex-autorunner from ${PACKAGE_SRC} into staged venv..."
 
 echo "Smoke-checking staged venv imports..."
 "${next_venv}/bin/python" -c "import codex_autorunner; from codex_autorunner.server import create_hub_app; print('ok')"
+echo "Smoke-checking telegram module..."
+"${next_venv}/bin/python" - <<'PY'
+import importlib.util
+import py_compile
+
+spec = importlib.util.find_spec("codex_autorunner.telegram_bot")
+if spec is None or spec.origin is None:
+    raise SystemExit("telegram_bot module not found in staged venv")
+py_compile.compile(spec.origin, doraise=True)
+print("telegram_bot ok")
+PY
 
 domain="gui/$(id -u)/${LABEL}"
 
