@@ -40,14 +40,14 @@ class NotificationManager:
     def notify_run_finished(self, *, run_id: int, exit_code: Optional[int]) -> None:
         event = "run_finished" if exit_code == 0 else "run_error"
         message = self._format_run_message(run_id=run_id, exit_code=exit_code)
-        self._notify_sync(event, message)
+        self._notify_sync(event, message, repo_path=str(self.config.root))
 
     async def notify_run_finished_async(
         self, *, run_id: int, exit_code: Optional[int]
     ) -> None:
         event = "run_finished" if exit_code == 0 else "run_error"
         message = self._format_run_message(run_id=run_id, exit_code=exit_code)
-        await self._notify_async(event, message)
+        await self._notify_async(event, message, repo_path=str(self.config.root))
 
     def notify_tui_session_finished(
         self,
