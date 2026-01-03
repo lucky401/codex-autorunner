@@ -81,6 +81,7 @@ DEFAULT_THREAD_LIST_LIMIT = 10
 DEFAULT_MODEL_LIST_LIMIT = 25
 DEFAULT_MCP_LIST_LIMIT = 50
 DEFAULT_SKILLS_LIST_LIMIT = 50
+RESUME_BUTTON_PREVIEW_LIMIT = 60
 TOKEN_USAGE_CACHE_LIMIT = 256
 TOKEN_USAGE_TURN_CACHE_LIMIT = 512
 DEFAULT_INTERRUPT_TIMEOUT_SECONDS = 30.0
@@ -3160,7 +3161,7 @@ class TelegramBotService:
             thread_id = entry.get("id")
             if not thread_id:
                 continue
-            items.append((thread_id, _compact_preview(entry.get("preview"))))
+            items.append((thread_id, _format_preview(entry.get("preview"))))
         if not items:
             await self._send_message(
                 message.chat_id,
@@ -4718,7 +4719,7 @@ class TelegramBotService:
     def _build_resume_keyboard(self, state: SelectionState) -> dict[str, Any]:
         page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
         options = [
-            (item_id, f"{idx}) {label}")
+            (item_id, f"{idx}) {_compact_preview(label, RESUME_BUTTON_PREVIEW_LIMIT)}")
             for idx, (item_id, label) in enumerate(page_items, 1)
         ]
         return build_resume_keyboard(
@@ -5978,6 +5979,11 @@ def _compact_preview(text: Any, limit: int = 40) -> str:
     if len(preview) > limit:
         return preview[: limit - 3] + "..."
     return preview or "(no preview)"
+
+
+def _format_preview(text: Any) -> str:
+    preview = "" if text is None else str(text)
+    return preview if preview.strip() else "(no preview)"
 
 
 def _coerce_id(value: Any) -> Optional[str]:
