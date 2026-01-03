@@ -985,10 +985,10 @@ class TelegramBotService:
         transcript_text: str,
     ) -> None:
         if record.transcript_message_id is None:
-                transcript_message = self._format_voice_transcript_message(
-                    transcript_text,
-                    PLACEHOLDER_TEXT,
-                )
+            transcript_message = self._format_voice_transcript_message(
+                transcript_text,
+                PLACEHOLDER_TEXT,
+            )
             record.transcript_message_id = await self._send_voice_transcript_message(
                 record.chat_id,
                 transcript_message,
