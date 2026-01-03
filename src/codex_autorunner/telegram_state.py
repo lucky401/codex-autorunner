@@ -530,6 +530,20 @@ class TelegramStateStore:
 
         return self._update_topic(key, apply)
 
+    def find_active_thread(
+        self, thread_id: str, *, exclude_key: Optional[str] = None
+    ) -> Optional[str]:
+        if not isinstance(thread_id, str) or not thread_id:
+            return None
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            for key, record in state.topics.items():
+                if exclude_key and key == exclude_key:
+                    continue
+                if record.active_thread_id == thread_id:
+                    return key
+        return None
+
     def set_approval_mode(self, key: str, mode: str) -> TelegramTopicRecord:
         normalized = normalize_approval_mode(mode, default=self._default_approval_mode)
 

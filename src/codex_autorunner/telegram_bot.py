@@ -2313,6 +2313,32 @@ class TelegramBotService:
             message.chat_id, message.thread_id, result, active_thread_id=thread_id
         )
 
+    def _find_thread_conflict(self, thread_id: str, *, key: str) -> Optional[str]:
+        return self._store.find_active_thread(thread_id, exclude_key=key)
+
+    async def _handle_thread_conflict(
+        self,
+        message: TelegramMessage,
+        thread_id: str,
+        conflict_key: str,
+    ) -> None:
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "telegram.thread.conflict",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            codex_thread_id=thread_id,
+            conflict_topic=conflict_key,
+        )
+        await self._send_message(
+            message.chat_id,
+            "That Codex thread is already active in another topic. "
+            "Use /new here or continue in the other topic.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
     def _apply_thread_result(
         self,
         chat_id: int,
@@ -2372,6 +2398,12 @@ class TelegramBotService:
     ) -> Optional[str]:
         thread_id = record.active_thread_id
         if thread_id:
+            key = self._resolve_topic_key(message.chat_id, message.thread_id)
+            conflict_key = self._find_thread_conflict(thread_id, key=key)
+            if conflict_key:
+                self._router.set_active_thread(message.chat_id, message.thread_id, None)
+                await self._handle_thread_conflict(message, thread_id, conflict_key)
+                return None
             verified = await self._verify_active_thread(message, record)
             if not verified:
                 return None
@@ -2430,6 +2462,18 @@ class TelegramBotService:
             )
             return
         if record.active_thread_id:
+            conflict_key = self._find_thread_conflict(
+                record.active_thread_id,
+                key=key,
+            )
+            if conflict_key:
+                self._router.set_active_thread(message.chat_id, message.thread_id, None)
+                await self._handle_thread_conflict(
+                    message,
+                    record.active_thread_id,
+                    conflict_key,
+                )
+                return
             verified = await self._verify_active_thread(message, record)
             if not verified:
                 return
@@ -2507,7 +2551,18 @@ class TelegramBotService:
                     reply_to_message_id=message.message_id,
                     placeholder_message_id=placeholder_id,
                 )
-                self._turn_contexts[turn_handle.turn_id] = ctx
+                if not self._register_turn_context(turn_handle.turn_id, ctx):
+                    runtime.current_turn_id = None
+                    runtime.interrupt_requested = False
+                    await self._send_message(
+                        message.chat_id,
+                        "Turn collision detected; please retry.",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    if placeholder_id is not None:
+                        await self._delete_message(message.chat_id, placeholder_id)
+                    return
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
@@ -3254,6 +3309,28 @@ class TelegramBotService:
                 "Thread belongs to a different workspace; resume aborted.",
             )
             return
+        conflict_key = self._find_thread_conflict(thread_id, key=key)
+        if conflict_key:
+            chat_id, thread_id_val = _split_topic_key(key)
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                _with_conversation_id(
+                    "Thread is already active in another topic; resume aborted.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
+            )
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.resume.conflict",
+                topic_key=key,
+                thread_id=thread_id,
+                conflict_topic=conflict_key,
+            )
+            return
         chat_id, thread_id_val = _split_topic_key(key)
         self._apply_thread_result(
             chat_id,
@@ -3694,7 +3771,18 @@ class TelegramBotService:
                     reply_to_message_id=message.message_id,
                     placeholder_message_id=placeholder_id,
                 )
-                self._turn_contexts[turn_handle.turn_id] = ctx
+                if not self._register_turn_context(turn_handle.turn_id, ctx):
+                    runtime.current_turn_id = None
+                    runtime.interrupt_requested = False
+                    await self._send_message(
+                        message.chat_id,
+                        "Turn collision detected; please retry.",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    if placeholder_id is not None:
+                        await self._delete_message(message.chat_id, placeholder_id)
+                    return
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
@@ -4535,6 +4623,21 @@ class TelegramBotService:
             ctx.placeholder_message_id,
             message_text,
         )
+
+    def _register_turn_context(self, turn_id: str, ctx: TurnContext) -> bool:
+        existing = self._turn_contexts.get(turn_id)
+        if existing and existing.topic_key != ctx.topic_key:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "telegram.turn.context.collision",
+                turn_id=turn_id,
+                existing_topic=existing.topic_key,
+                new_topic=ctx.topic_key,
+            )
+            return False
+        self._turn_contexts[turn_id] = ctx
+        return True
 
     def _clear_thinking_preview(self, turn_id: str) -> None:
         self._turn_preview_text.pop(turn_id, None)
