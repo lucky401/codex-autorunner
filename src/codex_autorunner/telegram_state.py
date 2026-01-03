@@ -210,6 +210,7 @@ class PendingApprovalRecord:
     message_id: Optional[int]
     prompt: str
     created_at: str
+    topic_key: Optional[str] = None
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> Optional["PendingApprovalRecord"]:
@@ -222,6 +223,7 @@ class PendingApprovalRecord:
         message_id = payload.get("message_id")
         prompt = payload.get("prompt") or ""
         created_at = payload.get("created_at")
+        topic_key = payload.get("topic_key") or payload.get("topicKey")
         if not isinstance(request_id, str) or not request_id:
             return None
         if not isinstance(turn_id, str) or not turn_id:
@@ -236,6 +238,8 @@ class PendingApprovalRecord:
             prompt = ""
         if not isinstance(created_at, str) or not created_at:
             return None
+        if not isinstance(topic_key, str) or not topic_key:
+            topic_key = None
         return cls(
             request_id=request_id,
             turn_id=turn_id,
@@ -244,6 +248,7 @@ class PendingApprovalRecord:
             message_id=message_id,
             prompt=prompt,
             created_at=created_at,
+            topic_key=topic_key,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -255,6 +260,7 @@ class PendingApprovalRecord:
             "message_id": self.message_id,
             "prompt": self.prompt,
             "created_at": self.created_at,
+            "topic_key": self.topic_key,
         }
 
 
@@ -691,6 +697,55 @@ class TelegramStateStore:
             ]
             for key in keys:
                 state.pending_approvals.pop(key, None)
+            if keys:
+                self._save_unlocked(state)
+
+    def pending_approvals_for_key(self, key: str) -> list[PendingApprovalRecord]:
+        if not isinstance(key, str) or not key:
+            return []
+        try:
+            chat_id, thread_id, _scope = parse_topic_key(key)
+        except Exception:
+            chat_id = None
+            thread_id = None
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            pending = [
+                record
+                for record in state.pending_approvals.values()
+                if (record.topic_key == key)
+                or (
+                    record.topic_key is None
+                    and chat_id is not None
+                    and record.chat_id == chat_id
+                    and record.thread_id == thread_id
+                )
+            ]
+        return pending
+
+    def clear_pending_approvals_for_key(self, key: str) -> None:
+        if not isinstance(key, str) or not key:
+            return
+        try:
+            chat_id, thread_id, _scope = parse_topic_key(key)
+        except Exception:
+            chat_id = None
+            thread_id = None
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            keys = [
+                request_id
+                for request_id, record in state.pending_approvals.items()
+                if (record.topic_key == key)
+                or (
+                    record.topic_key is None
+                    and chat_id is not None
+                    and record.chat_id == chat_id
+                    and record.thread_id == thread_id
+                )
+            ]
+            for request_id in keys:
+                state.pending_approvals.pop(request_id, None)
             if keys:
                 self._save_unlocked(state)
 

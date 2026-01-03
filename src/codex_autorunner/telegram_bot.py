@@ -458,6 +458,7 @@ class PendingApproval:
     codex_thread_id: Optional[str]
     chat_id: int
     thread_id: Optional[int]
+    topic_key: Optional[str]
     message_id: Optional[int]
     created_at: str
     future: asyncio.Future[ApprovalDecision]
@@ -483,6 +484,7 @@ class SelectionState:
 class _CoalescedBuffer:
     message: TelegramMessage
     parts: list[str]
+    topic_key: str
     task: Optional[asyncio.Task[None]] = None
 
 
@@ -1636,7 +1638,9 @@ class TelegramBotService:
             ),
         )
 
-    async def _handle_message_inner(self, message: TelegramMessage) -> None:
+    async def _handle_message_inner(
+        self, message: TelegramMessage, *, topic_key: Optional[str] = None
+    ) -> None:
         raw_text = message.text or ""
         raw_caption = message.caption or ""
         text = raw_text.strip()
@@ -1647,7 +1651,11 @@ class TelegramBotService:
         has_media = self._message_has_media(message)
         if not text and not has_media:
             return
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = (
+            topic_key
+            if isinstance(topic_key, str) and topic_key
+            else self._resolve_topic_key(message.chat_id, message.thread_id)
+        )
         runtime = self._router.runtime_for(key)
 
         if text and self._handle_pending_resume(key, text):
@@ -1703,20 +1711,25 @@ class TelegramBotService:
             lambda: self._handle_normal_message(message, runtime, text_override=text),
         )
 
-    def _coalesce_key(self, message: TelegramMessage) -> str:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
-        user_id = message.from_user_id
+    def _coalesce_key_for_topic(self, key: str, user_id: Optional[int]) -> str:
         if user_id is None:
             return f"{key}:user:unknown"
         return f"{key}:user:{user_id}"
 
+    def _coalesce_key(self, message: TelegramMessage) -> str:
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        return self._coalesce_key_for_topic(key, message.from_user_id)
+
     async def _buffer_coalesced_message(self, message: TelegramMessage, text: str) -> None:
-        key = self._coalesce_key(message)
+        topic_key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = self._coalesce_key_for_topic(topic_key, message.from_user_id)
         lock = self._coalesce_locks.setdefault(key, asyncio.Lock())
         async with lock:
             buffer = self._coalesced_buffers.get(key)
             if buffer is None:
-                buffer = _CoalescedBuffer(message=message, parts=[text])
+                buffer = _CoalescedBuffer(
+                    message=message, parts=[text], topic_key=topic_key
+                )
                 self._coalesced_buffers[key] = buffer
             else:
                 buffer.parts.append(text)
@@ -1757,7 +1770,7 @@ class TelegramBotService:
             if task is not None and task is not asyncio.current_task():
                 task.cancel()
         combined_message = self._build_coalesced_message(buffer)
-        await self._handle_message_inner(combined_message)
+        await self._handle_message_inner(combined_message, topic_key=buffer.topic_key)
 
     def _build_coalesced_message(self, buffer: _CoalescedBuffer) -> TelegramMessage:
         combined_text = "\n".join(buffer.parts)
@@ -2999,11 +3012,16 @@ class TelegramBotService:
 
     async def _handle_interrupt(self, message: TelegramMessage, runtime: Any) -> None:
         turn_id = runtime.current_turn_id
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
         pending_request_ids = [
             request_id
             for request_id, pending in self._pending_approvals.items()
-            if pending.chat_id == message.chat_id
-            and pending.thread_id == message.thread_id
+            if (pending.topic_key == key)
+            or (
+                pending.topic_key is None
+                and pending.chat_id == message.chat_id
+                and pending.thread_id == message.thread_id
+            )
         ]
         for request_id in pending_request_ids:
             pending = self._pending_approvals.pop(request_id, None)
@@ -3013,13 +3031,9 @@ class TelegramBotService:
         if pending_request_ids:
             runtime.pending_request_id = None
         if not turn_id:
-            pending = self._store.pending_approvals_for_topic(
-                message.chat_id, message.thread_id
-            )
+            pending = self._store.pending_approvals_for_key(key)
             if pending:
-                self._store.clear_pending_approvals_for_topic(
-                    message.chat_id, message.thread_id
-                )
+                self._store.clear_pending_approvals_for_key(key)
                 runtime.pending_request_id = None
                 await self._send_message(
                     message.chat_id,
@@ -3420,11 +3434,10 @@ class TelegramBotService:
     async def _handle_status(
         self, message: TelegramMessage, _args: str = "", runtime: Optional[Any] = None
     ) -> None:
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
         record = self._router.ensure_topic(message.chat_id, message.thread_id)
         if runtime is None:
-            runtime = self._router.runtime_for(
-                self._resolve_topic_key(message.chat_id, message.thread_id)
-            )
+            runtime = self._router.runtime_for(key)
         approval_policy, sandbox_policy = self._effective_policies(record)
         lines = [
             f"Workspace: {record.workspace_path or 'unbound'}",
@@ -3436,9 +3449,7 @@ class TelegramBotService:
             f"Approval policy: {approval_policy or 'default'}",
             f"Sandbox policy: {_format_sandbox_policy(sandbox_policy)}",
         ]
-        pending = self._store.pending_approvals_for_topic(
-            message.chat_id, message.thread_id
-        )
+        pending = self._store.pending_approvals_for_key(key)
         if pending:
             lines.append(f"Pending approvals: {len(pending)}")
             if len(pending) == 1:
@@ -4757,6 +4768,7 @@ class TelegramBotService:
             message_id=None,
             prompt=prompt,
             created_at=created_at,
+            topic_key=ctx.topic_key,
         )
         self._store.upsert_pending_approval(approval_record)
         log_event(
@@ -4824,6 +4836,7 @@ class TelegramBotService:
             codex_thread_id=codex_thread_id,
             chat_id=ctx.chat_id,
             thread_id=ctx.thread_id,
+            topic_key=ctx.topic_key,
             message_id=message_id if isinstance(message_id, int) else None,
             created_at=created_at,
             future=future,
@@ -4877,11 +4890,12 @@ class TelegramBotService:
             pending.turn_id, thread_id=pending.codex_thread_id
         )
         if ctx:
-            runtime = self._router.runtime_for(ctx.topic_key)
+            runtime_key = ctx.topic_key
+        elif pending.topic_key:
+            runtime_key = pending.topic_key
         else:
-            runtime = self._router.runtime_for(
-                self._resolve_topic_key(pending.chat_id, pending.thread_id)
-            )
+            runtime_key = self._resolve_topic_key(pending.chat_id, pending.thread_id)
+        runtime = self._router.runtime_for(runtime_key)
         runtime.pending_request_id = None
         log_event(
             self._logger,
@@ -6158,11 +6172,11 @@ def _repo_root(path: Path) -> Optional[Path]:
 def _paths_compatible(workspace_root: Path, resumed_root: Path) -> bool:
     if _path_within(workspace_root, resumed_root):
         return True
-    if _path_within(resumed_root, workspace_root):
-        return True
     workspace_repo = _repo_root(workspace_root)
     resumed_repo = _repo_root(resumed_root)
     if workspace_repo is None or resumed_repo is None:
+        return False
+    if workspace_root != workspace_repo:
         return False
     return workspace_repo == resumed_repo
 
