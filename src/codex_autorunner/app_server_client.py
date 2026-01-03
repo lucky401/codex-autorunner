@@ -772,17 +772,9 @@ class CodexAppServerClient:
         state = self._turns.get(key)
         if state is None:
             return self._ensure_turn_state(turn_id, thread_id)
-        if not state.future.done():
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "app_server.turn_id.collision",
-                turn_id=turn_id,
-                thread_id=thread_id,
-            )
-            raise CodexAppServerProtocolError(
-                f"turn/start returned duplicate turn id {turn_id}"
-            )
+        if state.future.done():
+            self._turns.pop(key, None)
+            return self._ensure_turn_state(turn_id, thread_id)
         return state
 
     async def _handle_disconnect(self) -> None:
