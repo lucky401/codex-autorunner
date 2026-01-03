@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -58,7 +59,7 @@ class NotificationManager:
         message = self._format_tui_message(
             session_id=session_id, exit_code=exit_code, repo_path=repo_path
         )
-        self._notify_sync("tui_session_finished", message)
+        self._notify_sync("tui_session_finished", message, repo_path=repo_path)
 
     async def notify_tui_session_finished_async(
         self,
@@ -70,7 +71,7 @@ class NotificationManager:
         message = self._format_tui_message(
             session_id=session_id, exit_code=exit_code, repo_path=repo_path
         )
-        await self._notify_async("tui_session_finished", message)
+        await self._notify_async("tui_session_finished", message, repo_path=repo_path)
 
     def notify_tui_idle(
         self,
@@ -84,7 +85,7 @@ class NotificationManager:
             idle_seconds=idle_seconds,
             repo_path=repo_path,
         )
-        self._notify_sync("tui_idle", message)
+        self._notify_sync("tui_idle", message, repo_path=repo_path)
 
     async def notify_tui_idle_async(
         self,
@@ -98,7 +99,7 @@ class NotificationManager:
             idle_seconds=idle_seconds,
             repo_path=repo_path,
         )
-        await self._notify_async("tui_idle", message)
+        await self._notify_async("tui_idle", message, repo_path=repo_path)
 
     def _normalize_events(self, raw_events) -> set[str]:
         if raw_events is None:
@@ -195,10 +196,12 @@ class NotificationManager:
         name = self.config.root.name
         return name or str(self.config.root)
 
-    def _notify_sync(self, event: str, message: str) -> None:
+    def _notify_sync(
+        self, event: str, message: str, *, repo_path: Optional[str] = None
+    ) -> None:
         if not self._should_notify(event):
             return
-        targets = self._resolve_targets()
+        targets = self._resolve_targets(repo_path=repo_path)
         if not targets:
             return
         try:
@@ -207,10 +210,12 @@ class NotificationManager:
         except Exception as exc:
             self._log_warning("Notification delivery failed", exc)
 
-    async def _notify_async(self, event: str, message: str) -> None:
+    async def _notify_async(
+        self, event: str, message: str, *, repo_path: Optional[str] = None
+    ) -> None:
         if not self._should_notify(event):
             return
-        targets = self._resolve_targets()
+        targets = self._resolve_targets(repo_path=repo_path)
         if not targets:
             return
         try:
@@ -219,12 +224,14 @@ class NotificationManager:
         except Exception as exc:
             self._log_warning("Notification delivery failed", exc)
 
-    def _resolve_targets(self) -> dict[str, dict[str, object]]:
+    def _resolve_targets(
+        self, *, repo_path: Optional[str] = None
+    ) -> dict[str, dict[str, object]]:
         targets: dict[str, dict[str, object]] = {}
         discord_url = self._resolve_discord_webhook()
         if discord_url:
             targets["discord"] = {"webhook_url": discord_url}
-        telegram = self._resolve_telegram()
+        telegram = self._resolve_telegram(repo_path=repo_path)
         if telegram:
             targets["telegram"] = telegram
         if not targets:
@@ -271,7 +278,7 @@ class NotificationManager:
                 )
         return None
 
-    def _resolve_telegram(self) -> Optional[dict[str, object]]:
+    def _resolve_telegram(self, *, repo_path: Optional[str] = None) -> Optional[dict[str, object]]:
         if not self._telegram_enabled:
             return None
         token_key = self._telegram.get("bot_token_env")
@@ -279,9 +286,11 @@ class NotificationManager:
         thread_id_key = self._telegram.get("thread_id_env")
         token = os.environ.get(token_key) if isinstance(token_key, str) else None
         chat_id = os.environ.get(chat_id_key) if isinstance(chat_id_key, str) else None
-        thread_id = self._telegram.get("thread_id")
-        if not isinstance(thread_id, int):
-            thread_id = None
+        thread_id = self._resolve_thread_id(repo_path)
+        if thread_id is None:
+            thread_id = self._telegram.get("thread_id")
+            if not isinstance(thread_id, int):
+                thread_id = None
         if thread_id is None:
             thread_id_raw = (
                 os.environ.get(thread_id_key) if isinstance(thread_id_key, str) else None
@@ -308,6 +317,34 @@ class NotificationManager:
                     f"Telegram chat id env var missing: {chat_id_key}",
                 )
         return None
+
+    def _resolve_thread_id(self, repo_path: Optional[str]) -> Optional[int]:
+        if not repo_path or not isinstance(self._telegram, dict):
+            return None
+        thread_map = self._telegram.get("thread_id_map")
+        if not isinstance(thread_map, dict):
+            return None
+        repo_key = self._normalize_repo_path(repo_path)
+        if not repo_key:
+            return None
+        for key, value in thread_map.items():
+            if not isinstance(key, str) or not isinstance(value, int):
+                continue
+            map_key = self._normalize_repo_path(key)
+            if map_key and map_key == repo_key:
+                return value
+        return None
+
+    def _normalize_repo_path(self, path: str) -> Optional[str]:
+        if not isinstance(path, str) or not path.strip():
+            return None
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            candidate = (self.config.root / candidate).expanduser()
+        try:
+            return str(candidate.resolve())
+        except Exception:
+            return str(candidate.absolute())
 
     def _send_sync(
         self, client: httpx.Client, targets: dict[str, dict[str, object]], message: str
