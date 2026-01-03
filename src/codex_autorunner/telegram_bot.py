@@ -122,6 +122,7 @@ TRACE_MESSAGE_TOKENS = (
     "failed",
     "error",
     "denied",
+    "unknown",
     "not bound",
     "not found",
     "invalid",
@@ -130,6 +131,11 @@ TRACE_MESSAGE_TOKENS = (
     "missing",
     "mismatch",
     "different workspace",
+    "no previous",
+    "no resumable",
+    "no workspace-tagged",
+    "not applicable",
+    "selection expired",
     "timed out",
     "timeout",
     "aborted",
@@ -1862,7 +1868,11 @@ class TelegramBotService:
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                _with_conversation_id(
+                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3283,16 +3293,24 @@ class TelegramBotService:
             if unscoped and not show_unscoped and not saw_path:
                 await self._send_message(
                     message.chat_id,
-                    "No workspace-tagged threads available. Use /resume --all to list "
-                    "unscoped threads.",
+                    _with_conversation_id(
+                        "No workspace-tagged threads available. Use /resume --all to list "
+                        "unscoped threads.",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                    ),
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
                 return
             await self._send_message(
                 message.chat_id,
-                "No previous threads found for this workspace. "
-                "If threads exist, update the app-server to include cwd metadata or use /new.",
+                _with_conversation_id(
+                    "No previous threads found for this workspace. "
+                    "If threads exist, update the app-server to include cwd metadata or use /new.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3306,7 +3324,11 @@ class TelegramBotService:
         if not items:
             await self._send_message(
                 message.chat_id,
-                "No resumable threads found.",
+                _with_conversation_id(
+                    "No resumable threads found.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3328,6 +3350,7 @@ class TelegramBotService:
         thread_id: str,
         callback: Optional[TelegramCallbackQuery] = None,
     ) -> None:
+        chat_id, thread_id_val = _split_topic_key(key)
         preview = None
         state = self._resume_options.get(key)
         if state:
@@ -3365,7 +3388,13 @@ class TelegramBotService:
         if record is None or not record.workspace_path:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
-                key, callback, "Topic not bound; use /bind before resuming."
+                key,
+                callback,
+                _with_conversation_id(
+                    "Topic not bound; use /bind before resuming.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
             )
             return
         if not isinstance(resumed_path, str):
@@ -3373,7 +3402,11 @@ class TelegramBotService:
             await self._finalize_selection(
                 key,
                 callback,
-                "Thread metadata missing workspace path; resume aborted to avoid cross-worktree mixups.",
+                _with_conversation_id(
+                    "Thread metadata missing workspace path; resume aborted to avoid cross-worktree mixups.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
             )
             return
         try:
@@ -3384,7 +3417,11 @@ class TelegramBotService:
             await self._finalize_selection(
                 key,
                 callback,
-                "Thread workspace path is invalid; resume aborted.",
+                _with_conversation_id(
+                    "Thread workspace path is invalid; resume aborted.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
             )
             return
         if not _path_within(workspace_root, resumed_root):
@@ -3392,12 +3429,15 @@ class TelegramBotService:
             await self._finalize_selection(
                 key,
                 callback,
-                "Thread belongs to a different workspace; resume aborted.",
+                _with_conversation_id(
+                    "Thread belongs to a different workspace; resume aborted.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
             )
             return
         conflict_key = self._find_thread_conflict(thread_id, key=key)
         if conflict_key:
-            chat_id, thread_id_val = _split_topic_key(key)
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
                 key,
@@ -3417,7 +3457,6 @@ class TelegramBotService:
                 conflict_topic=conflict_key,
             )
             return
-        chat_id, thread_id_val = _split_topic_key(key)
         self._apply_thread_result(
             chat_id,
             thread_id_val,
@@ -6040,17 +6079,14 @@ def _parse_int_list(raw: Any) -> list[int]:
     return values
 
 
-_THREAD_PATH_KEYS = (
+_THREAD_PATH_KEYS_PRIMARY = (
+    "cwd",
     "workspace_path",
     "workspacePath",
-    "projectRoot",
-    "project_root",
     "repoPath",
     "repo_path",
-    "root",
-    "rootPath",
-    "workspace",
-    "cwd",
+    "projectRoot",
+    "project_root",
 )
 _THREAD_PATH_CONTAINERS = ("workspace", "project", "repo", "metadata", "context", "config")
 
@@ -6099,14 +6135,14 @@ def _normalize_thread_mapping(mapping: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _extract_thread_path(entry: dict[str, Any]) -> Optional[str]:
-    for key in _THREAD_PATH_KEYS:
+    for key in _THREAD_PATH_KEYS_PRIMARY:
         value = entry.get(key)
         if isinstance(value, str):
             return value
     for container_key in _THREAD_PATH_CONTAINERS:
         nested = entry.get(container_key)
         if isinstance(nested, dict):
-            for key in _THREAD_PATH_KEYS:
+            for key in _THREAD_PATH_KEYS_PRIMARY:
                 value = nested.get(key)
                 if isinstance(value, str):
                     return value
