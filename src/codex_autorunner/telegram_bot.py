@@ -3664,6 +3664,8 @@ class TelegramBotService:
             review_kwargs["effort"] = record.effort
         if record.summary:
             review_kwargs["summary"] = record.summary
+        if record.workspace_path:
+            review_kwargs["cwd"] = record.workspace_path
         turn_handle = None
         placeholder_id: Optional[int] = None
         turn_started_at: Optional[float] = None
