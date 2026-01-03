@@ -706,6 +706,16 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(
                     "notifications.telegram.chat_id_env must be a string"
                 )
+            if "thread_id_env" in telegram_cfg and not isinstance(
+                telegram_cfg.get("thread_id_env"), str
+            ):
+                raise ConfigError(
+                    "notifications.telegram.thread_id_env must be a string"
+                )
+            if "thread_id" in telegram_cfg and not isinstance(
+                telegram_cfg.get("thread_id"), int
+            ):
+                raise ConfigError("notifications.telegram.thread_id must be an integer")
     terminal_cfg = cfg.get("terminal")
     if terminal_cfg is not None:
         if not isinstance(terminal_cfg, dict):

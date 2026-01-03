@@ -219,8 +219,8 @@ class NotificationManager:
         except Exception as exc:
             self._log_warning("Notification delivery failed", exc)
 
-    def _resolve_targets(self) -> dict[str, dict[str, str]]:
-        targets: dict[str, dict[str, str]] = {}
+    def _resolve_targets(self) -> dict[str, dict[str, object]]:
+        targets: dict[str, dict[str, object]] = {}
         discord_url = self._resolve_discord_webhook()
         if discord_url:
             targets["discord"] = {"webhook_url": discord_url}
@@ -271,15 +271,31 @@ class NotificationManager:
                 )
         return None
 
-    def _resolve_telegram(self) -> Optional[dict[str, str]]:
+    def _resolve_telegram(self) -> Optional[dict[str, object]]:
         if not self._telegram_enabled:
             return None
         token_key = self._telegram.get("bot_token_env")
         chat_id_key = self._telegram.get("chat_id_env")
+        thread_id_key = self._telegram.get("thread_id_env")
         token = os.environ.get(token_key) if isinstance(token_key, str) else None
         chat_id = os.environ.get(chat_id_key) if isinstance(chat_id_key, str) else None
+        thread_id = self._telegram.get("thread_id")
+        if not isinstance(thread_id, int):
+            thread_id = None
+        if thread_id is None:
+            thread_id_raw = (
+                os.environ.get(thread_id_key) if isinstance(thread_id_key, str) else None
+            )
+            if isinstance(thread_id_raw, str) and thread_id_raw.strip():
+                try:
+                    thread_id = int(thread_id_raw.strip())
+                except ValueError:
+                    thread_id = None
         if token and chat_id:
-            return {"bot_token": token, "chat_id": chat_id}
+            payload: dict[str, object] = {"bot_token": token, "chat_id": chat_id}
+            if thread_id is not None:
+                payload["thread_id"] = thread_id
+            return payload
         if self._telegram.get("enabled") is True:
             if not token and token_key:
                 self._warn_once(
@@ -294,7 +310,7 @@ class NotificationManager:
         return None
 
     def _send_sync(
-        self, client: httpx.Client, targets: dict[str, dict[str, str]], message: str
+        self, client: httpx.Client, targets: dict[str, dict[str, object]], message: str
     ) -> None:
         if "discord" in targets:
             try:
@@ -310,6 +326,7 @@ class NotificationManager:
                     client,
                     telegram["bot_token"],
                     telegram["chat_id"],
+                    telegram.get("thread_id"),
                     message,
                 )
             except Exception as exc:
@@ -318,7 +335,7 @@ class NotificationManager:
     async def _send_async(
         self,
         client: httpx.AsyncClient,
-        targets: dict[str, dict[str, str]],
+        targets: dict[str, dict[str, object]],
         message: str,
     ) -> None:
         if "discord" in targets:
@@ -335,6 +352,7 @@ class NotificationManager:
                     client,
                     telegram["bot_token"],
                     telegram["chat_id"],
+                    telegram.get("thread_id"),
                     message,
                 )
             except Exception as exc:
@@ -353,18 +371,32 @@ class NotificationManager:
         response.raise_for_status()
 
     def _send_telegram_sync(
-        self, client: httpx.Client, bot_token: str, chat_id: str, message: str
+        self,
+        client: httpx.Client,
+        bot_token: str,
+        chat_id: str,
+        thread_id: Optional[int],
+        message: str,
     ) -> None:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        payload = {"chat_id": chat_id, "text": message}
+        payload: dict[str, object] = {"chat_id": chat_id, "text": message}
+        if thread_id is not None:
+            payload["message_thread_id"] = thread_id
         response = client.post(url, json=payload)
         response.raise_for_status()
 
     async def _send_telegram_async(
-        self, client: httpx.AsyncClient, bot_token: str, chat_id: str, message: str
+        self,
+        client: httpx.AsyncClient,
+        bot_token: str,
+        chat_id: str,
+        thread_id: Optional[int],
+        message: str,
     ) -> None:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        payload = {"chat_id": chat_id, "text": message}
+        payload: dict[str, object] = {"chat_id": chat_id, "text": message}
+        if thread_id is not None:
+            payload["message_thread_id"] = thread_id
         response = await client.post(url, json=payload)
         response.raise_for_status()
 

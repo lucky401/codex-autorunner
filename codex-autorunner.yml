@@ -90,6 +90,8 @@ repo:
     telegram:
       bot_token_env: CAR_TELEGRAM_BOT_TOKEN
       chat_id_env: CAR_TELEGRAM_CHAT_ID
+      thread_id_env: CAR_TELEGRAM_THREAD_ID
+      thread_id: null
 
   telegram_bot:
     # Telegram bot integration (polling).
