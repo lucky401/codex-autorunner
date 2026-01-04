@@ -81,6 +81,7 @@ class TelegramTopicRecord:
     repo_id: Optional[str] = None
     workspace_path: Optional[str] = None
     active_thread_id: Optional[str] = None
+    thread_ids: list[str] = dataclasses.field(default_factory=list)
     last_update_id: Optional[int] = None
     model: Optional[str] = None
     effort: Optional[str] = None
@@ -104,6 +105,14 @@ class TelegramTopicRecord:
         active_thread_id = payload.get("active_thread_id") or payload.get("activeThreadId")
         if not isinstance(active_thread_id, str):
             active_thread_id = None
+        thread_ids_raw = payload.get("thread_ids") or payload.get("threadIds")
+        thread_ids: list[str] = []
+        if isinstance(thread_ids_raw, list):
+            for item in thread_ids_raw:
+                if isinstance(item, str) and item:
+                    thread_ids.append(item)
+        if not thread_ids and isinstance(active_thread_id, str):
+            thread_ids = [active_thread_id]
         last_update_id = payload.get("last_update_id") or payload.get("lastUpdateId")
         if not isinstance(last_update_id, int) or isinstance(last_update_id, bool):
             last_update_id = None
@@ -140,6 +149,7 @@ class TelegramTopicRecord:
             repo_id=repo_id,
             workspace_path=workspace_path,
             active_thread_id=active_thread_id,
+            thread_ids=thread_ids,
             last_update_id=last_update_id,
             model=model,
             effort=effort,
@@ -156,6 +166,7 @@ class TelegramTopicRecord:
             "repo_id": self.repo_id,
             "workspace_path": self.workspace_path,
             "active_thread_id": self.active_thread_id,
+            "thread_ids": list(self.thread_ids),
             "last_update_id": self.last_update_id,
             "model": self.model,
             "effort": self.effort,
@@ -528,6 +539,7 @@ class TelegramStateStore:
             if repo_id is not None:
                 record.repo_id = repo_id
             record.active_thread_id = None
+            record.thread_ids = []
             record.rollout_path = None
 
         return self._update_topic(key, apply)
