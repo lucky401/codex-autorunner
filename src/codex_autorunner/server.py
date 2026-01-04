@@ -213,10 +213,22 @@ class RunnerManager:
 def _static_dir() -> tuple[Path, Optional[ExitStack]]:
     static_root = resources.files("codex_autorunner").joinpath("static")
     if isinstance(static_root, Path):
-        return static_root, None
+        if static_root.exists():
+            return static_root, None
+        fallback = Path(__file__).resolve().parent / "static"
+        return fallback, None
     stack = ExitStack()
-    static_path = stack.enter_context(resources.as_file(static_root))
-    return static_path, stack
+    try:
+        static_path = stack.enter_context(resources.as_file(static_root))
+    except Exception:
+        stack.close()
+        fallback = Path(__file__).resolve().parent / "static"
+        return fallback, None
+    if static_path.exists():
+        return static_path, stack
+    stack.close()
+    fallback = Path(__file__).resolve().parent / "static"
+    return fallback, None
 
 
 def _parse_last_seen_at(value: Optional[str]) -> Optional[float]:
@@ -838,6 +850,12 @@ def create_hub_app(
             )
         html = render_index_html(static_dir, app.state.asset_version)
         return HTMLResponse(html, headers=index_response_headers())
+
+    @app.on_event("shutdown")
+    async def shutdown_static_stack():
+        static_context = getattr(app.state, "static_assets_context", None)
+        if static_context is not None:
+            static_context.close()
 
     app.include_router(build_system_routes())
 

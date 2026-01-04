@@ -591,7 +591,7 @@ class TelegramBotService:
                     "telegram.voice.init_failed",
                     exc=exc,
                 )
-        self._turn_semaphore = asyncio.Semaphore(config.concurrency.max_parallel_turns)
+        self._turn_semaphore: Optional[asyncio.Semaphore] = None
         self._turn_contexts: dict[TurnKey, TurnContext] = {}
         self._reasoning_buffers: dict[str, str] = {}
         self._turn_preview_text: dict[TurnKey, str] = {}
@@ -691,6 +691,13 @@ class TelegramBotService:
         except OSError:
             pass
         self._instance_lock_path = None
+
+    def _ensure_turn_semaphore(self) -> asyncio.Semaphore:
+        if self._turn_semaphore is None:
+            self._turn_semaphore = asyncio.Semaphore(
+                self._config.concurrency.max_parallel_turns
+            )
+        return self._turn_semaphore
 
     async def run_polling(self) -> None:
         if self._config.mode != "polling":
@@ -2814,7 +2821,8 @@ class TelegramBotService:
                 sandbox_policy=sandbox_policy,
             )
 
-            async with self._turn_semaphore:
+            turn_semaphore = self._ensure_turn_semaphore()
+            async with turn_semaphore:
                 if send_placeholder:
                     placeholder_id = await self._send_placeholder(
                         message.chat_id,
@@ -3514,37 +3522,36 @@ class TelegramBotService:
                 cached_preview = _thread_summary_preview(record, thread_id)
                 if cached_preview:
                     local_previews.setdefault(thread_id, cached_preview)
-        if show_unscoped or record.thread_ids:
-            limit = _resume_thread_list_limit(record.thread_ids)
-            needed_ids = None if show_unscoped else set(record.thread_ids)
-            try:
-                threads, _ = await self._list_threads_paginated(
-                    limit=limit,
-                    max_pages=THREAD_LIST_MAX_PAGES,
-                    needed_ids=needed_ids,
-                )
-            except Exception as exc:
-                list_failed = True
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.resume.failed",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    exc=exc,
-                )
-                if show_unscoped and not local_thread_ids:
-                    await self._send_message(
-                        message.chat_id,
-                        _with_conversation_id(
-                            "Failed to list threads; check logs for details.",
-                            chat_id=message.chat_id,
-                            thread_id=message.thread_id,
-                        ),
+        limit = _resume_thread_list_limit(record.thread_ids)
+        needed_ids = None if show_unscoped or not record.thread_ids else set(record.thread_ids)
+        try:
+            threads, _ = await self._list_threads_paginated(
+                limit=limit,
+                max_pages=THREAD_LIST_MAX_PAGES,
+                needed_ids=needed_ids,
+            )
+        except Exception as exc:
+            list_failed = True
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.resume.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            if show_unscoped and not local_thread_ids:
+                await self._send_message(
+                    message.chat_id,
+                    _with_conversation_id(
+                        "Failed to list threads; check logs for details.",
+                        chat_id=message.chat_id,
                         thread_id=message.thread_id,
-                        reply_to=message.message_id,
-                    )
-                    return
+                    ),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
         entries_by_id = {
             entry.get("id"): entry
             for entry in threads
@@ -3650,18 +3657,26 @@ class TelegramBotService:
                 )
                 items.append((thread_id, label))
         else:
-            for thread_id in record.thread_ids:
-                entry = entries_by_id.get(thread_id)
-                if entry is None:
-                    cached_preview = _thread_summary_preview(record, thread_id)
-                    label = _format_missing_thread_label(thread_id, cached_preview)
-                else:
-                    label = _format_thread_preview(entry)
-                    if label == "(no preview)":
+            if record.thread_ids:
+                for thread_id in record.thread_ids:
+                    entry = entries_by_id.get(thread_id)
+                    if entry is None:
                         cached_preview = _thread_summary_preview(record, thread_id)
-                        if cached_preview:
-                            label = cached_preview
-                items.append((thread_id, label))
+                        label = _format_missing_thread_label(thread_id, cached_preview)
+                    else:
+                        label = _format_thread_preview(entry)
+                        if label == "(no preview)":
+                            cached_preview = _thread_summary_preview(record, thread_id)
+                            if cached_preview:
+                                label = cached_preview
+                    items.append((thread_id, label))
+            else:
+                for entry in entries_by_id.values():
+                    thread_id = entry.get("id")
+                    if not isinstance(thread_id, str) or not thread_id:
+                        continue
+                    label = _format_thread_preview(entry)
+                    items.append((thread_id, label))
         if missing_ids:
             log_event(
                 self._logger,
@@ -4386,7 +4401,8 @@ class TelegramBotService:
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
         try:
-            async with self._turn_semaphore:
+            turn_semaphore = self._ensure_turn_semaphore()
+            async with turn_semaphore:
                 placeholder_id = await self._send_placeholder(
                     message.chat_id,
                     thread_id=message.thread_id,
