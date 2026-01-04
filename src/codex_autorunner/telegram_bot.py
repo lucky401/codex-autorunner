@@ -2753,7 +2753,7 @@ class TelegramBotService:
                 "Thread workspace path is invalid; resume aborted.",
             )
             return
-        if not _path_within(workspace_root, resumed_root):
+        if not _paths_compatible(workspace_root, resumed_root):
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
                 key,
@@ -5333,7 +5333,7 @@ def _filter_threads(
             candidate = Path(cwd).expanduser().resolve()
         except Exception:
             continue
-        if _path_within(workspace, candidate):
+        if _paths_compatible(workspace, candidate):
             filtered.append(entry)
     if filtered or saw_path or not assume_scoped:
         return filtered
