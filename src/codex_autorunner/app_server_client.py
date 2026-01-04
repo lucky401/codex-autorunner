@@ -120,6 +120,7 @@ class CodexAppServerClient:
         self._pending: Dict[int, asyncio.Future] = {}
         self._pending_methods: Dict[int, str] = {}
         self._turns: Dict[TurnKey, _TurnState] = {}
+        self._pending_turns: Dict[str, _TurnState] = {}
         self._next_id = 1
         self._initialized = False
         self._initializing = False
@@ -622,15 +623,7 @@ class CodexAppServerClient:
                 if thread_id:
                     state = self._ensure_turn_state(turn_id, thread_id)
                 else:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "app_server.turn.missing_thread_id",
-                        method=method,
-                        turn_id=turn_id,
-                    )
-                    handled = True
-                    return
+                    state = self._ensure_pending_turn_state(turn_id)
             item = params.get("item") if isinstance(params, dict) else None
             text = None
             def append_message(candidate: Optional[str]) -> None:
@@ -667,15 +660,7 @@ class CodexAppServerClient:
                 if thread_id:
                     state = self._ensure_turn_state(turn_id, thread_id)
                 else:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "app_server.turn.missing_thread_id",
-                        method=method,
-                        turn_id=turn_id,
-                    )
-                    handled = True
-                    return
+                    state = self._ensure_pending_turn_state(turn_id)
             state.raw_events.append(message)
             status = None
             if isinstance(params, dict):
@@ -765,15 +750,57 @@ class CodexAppServerClient:
         self._turns[key] = state
         return state
 
+    def _ensure_pending_turn_state(self, turn_id: str) -> _TurnState:
+        state = self._pending_turns.get(turn_id)
+        if state is not None:
+            return state
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        state = _TurnState(
+            turn_id=turn_id,
+            thread_id=None,
+            future=future,
+            agent_messages=[],
+            raw_events=[],
+        )
+        self._pending_turns[turn_id] = state
+        return state
+
+    def _merge_turn_state(self, target: _TurnState, source: _TurnState) -> None:
+        if not target.agent_messages:
+            target.agent_messages = list(source.agent_messages)
+        else:
+            target.agent_messages.extend(source.agent_messages)
+        if not target.raw_events:
+            target.raw_events = list(source.raw_events)
+        else:
+            target.raw_events.extend(source.raw_events)
+        if target.status is None and source.status is not None:
+            target.status = source.status
+        if source.future.done() and not target.future.done():
+            target.future.set_result(
+                TurnResult(
+                    turn_id=target.turn_id,
+                    status=target.status,
+                    agent_messages=list(target.agent_messages),
+                    raw_events=list(target.raw_events),
+                )
+            )
+
     def _register_turn_state(self, turn_id: str, thread_id: str) -> _TurnState:
         key = _turn_key(thread_id, turn_id)
         if key is None:
             raise CodexAppServerProtocolError("turn/start missing thread id")
+        pending = self._pending_turns.pop(turn_id, None)
         state = self._turns.get(key)
+        if pending is not None:
+            if state is None:
+                pending.thread_id = thread_id
+                self._turns[key] = pending
+                return pending
+            self._merge_turn_state(state, pending)
+            return state
         if state is None:
-            return self._ensure_turn_state(turn_id, thread_id)
-        if state.future.done():
-            self._turns.pop(key, None)
             return self._ensure_turn_state(turn_id, thread_id)
         return state
 
@@ -803,6 +830,10 @@ class CodexAppServerClient:
             if not state.future.done():
                 state.future.set_exception(error)
         self._turns.clear()
+        for state in list(self._pending_turns.values()):
+            if not state.future.done():
+                state.future.set_exception(error)
+        self._pending_turns.clear()
 
     def _schedule_restart(self) -> None:
         if self._restart_task is not None and not self._restart_task.done():

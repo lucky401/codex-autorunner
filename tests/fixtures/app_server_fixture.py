@@ -103,6 +103,32 @@ class FixtureServer:
             if self._scenario == "thread_list_requires_params" and "params" not in message:
                 self._send_error(req_id, "Invalid request: missing field `params`")
                 return
+            if self._scenario == "thread_list_empty":
+                self.send(
+                    {
+                        "id": req_id,
+                        "result": {"threads": [], "nextCursor": None},
+                    }
+                )
+                return
+            if self._scenario == "thread_list_paged":
+                cursor = params.get("cursor")
+                if cursor:
+                    entries = [
+                        {"id": "thread-2", "preview": "fixture preview 2"},
+                        {"id": "thread-3", "preview": "fixture preview 3"},
+                    ]
+                    next_cursor = None
+                else:
+                    entries = [{"id": "thread-1", "preview": "fixture preview 1"}]
+                    next_cursor = "cursor-2"
+                self.send(
+                    {
+                        "id": req_id,
+                        "result": {"threads": entries, "nextCursor": next_cursor},
+                    }
+                )
+                return
             cwd = params.get("cwd") if isinstance(params.get("cwd"), str) else None
             entry = {
                 "id": "thread-seed",
