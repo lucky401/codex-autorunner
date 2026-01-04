@@ -146,7 +146,7 @@ async def test_status_creates_record(tmp_path: Path) -> None:
     try:
         await service._handle_status(message)
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert fake_bot.messages
     text = fake_bot.messages[-1]["text"]
     assert "Workspace: unbound" in text
@@ -174,7 +174,7 @@ async def test_normal_message_runs_turn(tmp_path: Path) -> None:
         message = build_message("hello", message_id=11)
         await service._handle_normal_message(message, runtime)
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert any("Bound to" in msg["text"] for msg in fake_bot.messages)
     assert any("fixture reply" in msg["text"] for msg in fake_bot.messages)
 
@@ -193,7 +193,7 @@ async def test_thread_start_rejects_missing_workspace(tmp_path: Path) -> None:
         await service._handle_bind(bind_message, str(repo))
         await service._handle_new(new_message)
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert any("did not return a workspace" in msg["text"] for msg in fake_bot.messages)
 
 
@@ -214,7 +214,7 @@ async def test_thread_start_rejects_mismatched_workspace(tmp_path: Path) -> None
         message = build_message("hello", message_id=11)
         await service._handle_normal_message(message, runtime)
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert any(
         "returned a thread for a different workspace" in msg["text"]
         for msg in fake_bot.messages
@@ -235,7 +235,7 @@ async def test_resume_lists_threads_from_data_shape(tmp_path: Path) -> None:
         await service._handle_bind(bind_message, str(repo))
         await service._handle_resume(resume_message, "--all")
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert any("Select a thread to resume" in msg["text"] for msg in fake_bot.messages)
 
 
@@ -259,7 +259,7 @@ async def test_resume_all_uses_local_workspace_index(tmp_path: Path) -> None:
         await service._handle_new(new_message_other)
         await service._handle_resume(resume_message, "--all")
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     resume_msg = next(
         msg for msg in fake_bot.messages if "Select a thread to resume" in msg["text"]
     )
@@ -288,7 +288,7 @@ async def test_resume_requires_scoped_threads(tmp_path: Path) -> None:
         await service._handle_bind(bind_message, str(repo))
         await service._handle_resume(resume_message, "")
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert any("No previous threads found for this topic" in msg["text"] for msg in fake_bot.messages)
 
 
@@ -310,7 +310,7 @@ async def test_resume_shows_local_threads_when_thread_list_empty(
         await service._handle_new(new_message)
         await service._handle_resume(resume_message, "")
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert not any("No previous threads found" in msg["text"] for msg in fake_bot.messages)
     resume_msg = next(
         msg for msg in fake_bot.messages if "Select a thread to resume" in msg["text"]
@@ -340,7 +340,7 @@ async def test_resume_refresh_updates_cached_preview(tmp_path: Path) -> None:
         await service._handle_new(new_message)
         await service._handle_resume(resume_message, "--refresh")
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     resume_msg = next(
         msg for msg in fake_bot.messages if "Select a thread to resume" in msg["text"]
     )
@@ -374,7 +374,7 @@ async def test_resume_paginates_thread_list(tmp_path: Path) -> None:
         await service._handle_new(new_message_3)
         await service._handle_resume(resume_message, "")
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     resume_msg = next(
         msg for msg in fake_bot.messages if "Select a thread to resume" in msg["text"]
     )
@@ -400,4 +400,4 @@ async def test_outbox_lock_rebinds_across_event_loops(tmp_path: Path) -> None:
         await service._clear_outbox_inflight("record")
         assert "record" not in service._outbox_inflight
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()

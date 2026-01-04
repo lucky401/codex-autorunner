@@ -45,7 +45,7 @@ def test_telegram_bot_lock_acquire_and_release(
         assert payload.get("config_root") == str(tmp_path)
     finally:
         service._release_instance_lock()
-        asyncio.run(service._client.close())
+        asyncio.run(service._app_server_supervisor.close_all())
     assert not lock_path.exists()
 
 
@@ -75,5 +75,5 @@ def test_telegram_bot_lock_contended(
         with pytest.raises(TelegramBotLockError):
             service._acquire_instance_lock()
     finally:
-        asyncio.run(service._client.close())
+        asyncio.run(service._app_server_supervisor.close_all())
     assert lock_path.exists()

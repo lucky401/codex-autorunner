@@ -13,7 +13,7 @@ from .state import now_iso, state_lock
 from .utils import atomic_write, read_json
 
 
-STATE_VERSION = 4
+STATE_VERSION = 5
 TOPIC_ROOT = "root"
 APPROVAL_MODE_YOLO = "yolo"
 APPROVAL_MODE_SAFE = "safe"
@@ -153,6 +153,7 @@ class ThreadSummary:
 class TelegramTopicRecord:
     repo_id: Optional[str] = None
     workspace_path: Optional[str] = None
+    workspace_id: Optional[str] = None
     active_thread_id: Optional[str] = None
     thread_ids: list[str] = dataclasses.field(default_factory=list)
     thread_summaries: dict[str, ThreadSummary] = dataclasses.field(default_factory=dict)
@@ -176,6 +177,9 @@ class TelegramTopicRecord:
         workspace_path = payload.get("workspace_path") or payload.get("workspacePath")
         if not isinstance(workspace_path, str):
             workspace_path = None
+        workspace_id = payload.get("workspace_id") or payload.get("workspaceId")
+        if not isinstance(workspace_id, str):
+            workspace_id = None
         active_thread_id = payload.get("active_thread_id") or payload.get("activeThreadId")
         if not isinstance(active_thread_id, str):
             active_thread_id = None
@@ -236,6 +240,7 @@ class TelegramTopicRecord:
         return cls(
             repo_id=repo_id,
             workspace_path=workspace_path,
+            workspace_id=workspace_id,
             active_thread_id=active_thread_id,
             thread_ids=thread_ids,
             thread_summaries=thread_summaries,
@@ -254,6 +259,7 @@ class TelegramTopicRecord:
         return {
             "repo_id": self.repo_id,
             "workspace_path": self.workspace_path,
+            "workspace_id": self.workspace_id,
             "active_thread_id": self.active_thread_id,
             "thread_ids": list(self.thread_ids),
             "thread_summaries": {
@@ -630,6 +636,7 @@ class TelegramStateStore:
         def apply(record: TelegramTopicRecord) -> None:
             # Switching workspaces should restart the app-server thread in the new repo.
             record.workspace_path = workspace_path
+            record.workspace_id = None
             if repo_id is not None:
                 record.repo_id = repo_id
             record.active_thread_id = None
