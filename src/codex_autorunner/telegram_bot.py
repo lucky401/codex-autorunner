@@ -12,6 +12,7 @@ import random
 import re
 import secrets
 import shlex
+import shutil
 import socket
 import time
 from datetime import datetime, timedelta, timezone
@@ -1521,6 +1522,7 @@ class TelegramBotService:
         env = _app_server_env(self._config.app_server_command, workspace_root)
         codex_home = state_dir / "codex_home"
         codex_home.mkdir(parents=True, exist_ok=True)
+        _seed_codex_home(codex_home, logger=self._logger)
         env["CODEX_HOME"] = str(codex_home)
         return env
 
@@ -7171,6 +7173,54 @@ def _app_server_env(command: Sequence[str], cwd: Path) -> dict[str, str]:
         if candidate.exists():
             extra_paths.append(str(candidate.parent))
     return subprocess_env(extra_paths=extra_paths)
+
+
+def _seed_codex_home(codex_home: Path, *, logger: logging.Logger) -> None:
+    auth_path = codex_home / "auth.json"
+    if auth_path.exists():
+        return
+    source_root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
+    if source_root.resolve() == codex_home.resolve():
+        return
+    if not source_root.exists():
+        log_event(
+            logger,
+            logging.WARNING,
+            "telegram.codex_home.seed.skipped",
+            reason="source_missing",
+            source=str(source_root),
+            target=str(codex_home),
+        )
+        return
+    source_auth = source_root / "auth.json"
+    if not source_auth.exists():
+        log_event(
+            logger,
+            logging.WARNING,
+            "telegram.codex_home.seed.skipped",
+            reason="auth_missing",
+            source=str(source_root),
+            target=str(codex_home),
+        )
+        return
+    try:
+        shutil.copy2(source_auth, auth_path)
+        log_event(
+            logger,
+            logging.INFO,
+            "telegram.codex_home.seeded",
+            source=str(source_root),
+            target=str(codex_home),
+        )
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "telegram.codex_home.seed.failed",
+            source=str(source_root),
+            target=str(codex_home),
+            exc=exc,
+        )
 
 
 def _parse_int_list(raw: Any) -> list[int]:
