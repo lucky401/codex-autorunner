@@ -19,6 +19,7 @@ from .app_server_client import (
     ApprovalDecision,
     CodexAppServerClient,
     CodexAppServerError,
+    _normalize_sandbox_policy,
 )
 from .logging_utils import log_event
 from .manifest import load_manifest
@@ -117,6 +118,10 @@ APPROVAL_PRESETS = {
 DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_IMAGE_PROMPT = "Describe the image."
+DEFAULT_SHELL_TIMEOUT_MS = 120_000
+DEFAULT_SHELL_MAX_OUTPUT_CHARS = 3800
+SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...(truncated)"
+SHELL_MESSAGE_BUFFER_CHARS = 200
 COALESCE_WINDOW_SECONDS = 2.0
 COMPACT_SUMMARY_PROMPT = (
     "Summarize the conversation so far into a concise context block I can paste into "
@@ -224,6 +229,13 @@ class TelegramBotMediaConfig:
 
 
 @dataclass(frozen=True)
+class TelegramBotShellConfig:
+    enabled: bool
+    timeout_ms: int
+    max_output_chars: int
+
+
+@dataclass(frozen=True)
 class TelegramMediaCandidate:
     kind: str
     file_id: str
@@ -248,6 +260,7 @@ class TelegramBotConfig:
     defaults: TelegramBotDefaults
     concurrency: TelegramBotConcurrency
     media: TelegramBotMediaConfig
+    shell: TelegramBotShellConfig
     state_file: Path
     app_server_command_env: str
     app_server_command: list[str]
@@ -338,6 +351,22 @@ class TelegramBotConfig:
             image_prompt=image_prompt,
         )
 
+        shell_raw = cfg.get("shell") if isinstance(cfg.get("shell"), dict) else {}
+        shell_enabled = bool(shell_raw.get("enabled", False))
+        shell_timeout_ms = int(shell_raw.get("timeout_ms", DEFAULT_SHELL_TIMEOUT_MS))
+        if shell_timeout_ms <= 0:
+            shell_timeout_ms = DEFAULT_SHELL_TIMEOUT_MS
+        shell_max_output_chars = int(
+            shell_raw.get("max_output_chars", DEFAULT_SHELL_MAX_OUTPUT_CHARS)
+        )
+        if shell_max_output_chars <= 0:
+            shell_max_output_chars = DEFAULT_SHELL_MAX_OUTPUT_CHARS
+        shell = TelegramBotShellConfig(
+            enabled=shell_enabled,
+            timeout_ms=shell_timeout_ms,
+            max_output_chars=shell_max_output_chars,
+        )
+
         state_file = Path(cfg.get("state_file", DEFAULT_STATE_FILE))
         if not state_file.is_absolute():
             state_file = (root / state_file).resolve()
@@ -381,6 +410,7 @@ class TelegramBotConfig:
             defaults=defaults,
             concurrency=concurrency,
             media=media,
+            shell=shell,
             state_file=state_file,
             app_server_command_env=app_server_command_env,
             app_server_command=app_server_command,
@@ -1008,6 +1038,8 @@ class TelegramBotService:
         if trimmed_text:
             if is_interrupt_alias(trimmed_text):
                 bypass = True
+            elif trimmed_text.startswith("!") and not has_media:
+                bypass = True
             elif parse_command(
                 text_candidate, entities=entities, bot_username=self._bot_username
             ):
@@ -1064,6 +1096,17 @@ class TelegramBotService:
 
         if text and is_interrupt_alias(text):
             await self._handle_interrupt(message, runtime)
+            return
+
+        if text and text.startswith("!") and not has_media:
+            self._resume_options.pop(key, None)
+            self._bind_options.pop(key, None)
+            self._model_options.pop(key, None)
+            self._model_pending.pop(key, None)
+            self._enqueue_topic_work(
+                key,
+                lambda: self._handle_bang_shell(message, text, runtime),
+            )
             return
 
         command_text = raw_text if raw_text.strip() else raw_caption
@@ -3358,6 +3401,93 @@ class TelegramBotService:
         if response_sent:
             await self._delete_message(message.chat_id, placeholder_id)
 
+    async def _handle_bang_shell(
+        self, message: TelegramMessage, text: str, _runtime: Any
+    ) -> None:
+        if not self._config.shell.enabled:
+            await self._send_message(
+                message.chat_id,
+                "Shell commands are disabled. Enable telegram_bot.shell.enabled.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        command_text = text[1:].strip()
+        if not command_text:
+            await self._send_message(
+                message.chat_id,
+                "Prefix a command with ! to run it locally.\nExample: !ls",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        placeholder_id = await self._send_placeholder(
+            message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+        _approval_policy, sandbox_policy = self._effective_policies(record)
+        params: dict[str, Any] = {
+            "cwd": record.workspace_path,
+            "command": ["bash", "-lc", command_text],
+            "timeoutMs": self._config.shell.timeout_ms,
+        }
+        if sandbox_policy:
+            params["sandboxPolicy"] = _normalize_sandbox_policy(sandbox_policy)
+        try:
+            result = await self._client.request("command/exec", params)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.shell.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=placeholder_id,
+                response=_with_conversation_id(
+                    "Shell command failed; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
+            )
+            return
+        stdout, stderr, exit_code = _extract_command_result(result)
+        full_body = _format_shell_body(command_text, stdout, stderr, exit_code)
+        max_output_chars = min(
+            self._config.shell.max_output_chars,
+            TELEGRAM_MAX_MESSAGE_LENGTH - SHELL_MESSAGE_BUFFER_CHARS,
+        )
+        filename = f"shell-output-{secrets.token_hex(4)}.txt"
+        response_text, attachment = _prepare_shell_response(
+            full_body,
+            max_output_chars=max_output_chars,
+            filename=filename,
+        )
+        await self._deliver_turn_response(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            placeholder_id=placeholder_id,
+            response=response_text,
+        )
+        if attachment is not None:
+            await self._send_document(
+                message.chat_id,
+                attachment,
+                filename=filename,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+
     async def _handle_diff(
         self, message: TelegramMessage, _args: str, _runtime: Any
     ) -> None:
@@ -4542,6 +4672,36 @@ class TelegramBotService:
             parse_mode=parse_mode,
         )
 
+    async def _send_document(
+        self,
+        chat_id: int,
+        data: bytes,
+        *,
+        filename: str,
+        thread_id: Optional[int] = None,
+        reply_to: Optional[int] = None,
+        caption: Optional[str] = None,
+    ) -> None:
+        try:
+            await self._bot.send_document(
+                chat_id,
+                data,
+                filename=filename,
+                message_thread_id=thread_id,
+                reply_to_message_id=reply_to,
+                caption=caption,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.send_document.failed",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                reply_to_message_id=reply_to,
+                exc=exc,
+            )
+
     async def _answer_callback(
         self, callback: Optional[TelegramCallbackQuery], text: str
     ) -> None:
@@ -5265,6 +5425,9 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         spec = command_specs.get(name)
         if spec:
             lines.append(f"/{name} - {spec.description}")
+    lines.append("")
+    lines.append("Other:")
+    lines.append("!<cmd> - run a bash command in the bound workspace")
     return "\n".join(lines)
 
 
@@ -5285,6 +5448,76 @@ def _render_command_output(result: Any) -> str:
         if isinstance(stderr, str):
             return stderr
     return ""
+
+
+def _extract_command_result(result: Any) -> tuple[str, str, Optional[int]]:
+    stdout = ""
+    stderr = ""
+    exit_code = None
+    if isinstance(result, str):
+        stdout = result
+        return stdout, stderr, exit_code
+    if isinstance(result, dict):
+        stdout_value = result.get("stdout") or result.get("stdOut") or result.get("output")
+        stderr_value = result.get("stderr") or result.get("stdErr")
+        exit_value = result.get("exitCode") or result.get("exit_code")
+        if isinstance(stdout_value, str):
+            stdout = stdout_value
+        if isinstance(stderr_value, str):
+            stderr = stderr_value
+        if isinstance(exit_value, int):
+            exit_code = exit_value
+    return stdout, stderr, exit_code
+
+
+def _format_shell_body(
+    command: str, stdout: str, stderr: str, exit_code: Optional[int]
+) -> str:
+    lines = [f"$ {command}"]
+    if stdout:
+        lines.append(stdout.rstrip("\n"))
+    if stderr:
+        if stdout:
+            lines.append("")
+        lines.append("[stderr]")
+        lines.append(stderr.rstrip("\n"))
+    if not stdout and not stderr:
+        lines.append("(no output)")
+    if exit_code is not None and exit_code != 0:
+        lines.append(f"(exit {exit_code})")
+    return "\n".join(lines)
+
+
+def _format_shell_message(body: str, *, note: Optional[str]) -> str:
+    if note:
+        return f"{note}\n```text\n{body}\n```"
+    return f"```text\n{body}\n```"
+
+
+def _prepare_shell_response(
+    full_body: str,
+    *,
+    max_output_chars: int,
+    filename: str,
+) -> tuple[str, Optional[bytes]]:
+    message = _format_shell_message(full_body, note=None)
+    if len(full_body) <= max_output_chars and len(message) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+        return message, None
+    note = (
+        f"Output too long; attached full output as {filename}. Showing head."
+    )
+    limit = max_output_chars
+    head = full_body[:limit].rstrip()
+    head = f"{head}{SHELL_OUTPUT_TRUNCATION_SUFFIX}"
+    message = _format_shell_message(head, note=note)
+    if len(message) > TELEGRAM_MAX_MESSAGE_LENGTH:
+        excess = len(message) - TELEGRAM_MAX_MESSAGE_LENGTH
+        allowed = max(0, limit - excess)
+        head = full_body[:allowed].rstrip()
+        head = f"{head}{SHELL_OUTPUT_TRUNCATION_SUFFIX}"
+        message = _format_shell_message(head, note=note)
+    attachment = full_body.encode("utf-8", errors="replace")
+    return message, attachment
 
 
 def _looks_binary(data: bytes) -> bool:

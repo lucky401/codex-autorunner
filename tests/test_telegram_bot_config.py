@@ -25,6 +25,7 @@ def test_telegram_bot_config_env_resolution(tmp_path: Path) -> None:
     assert cfg.allowed_chat_ids == {-100}
     assert cfg.allowed_user_ids == {123}
     assert cfg.app_server_command == list(DEFAULT_APP_SERVER_COMMAND)
+    assert cfg.shell.enabled is False
 
 
 def test_telegram_bot_config_app_server_command_env_override(tmp_path: Path) -> None:
@@ -76,3 +77,21 @@ def test_telegram_bot_config_validate_poll_timeout(tmp_path: Path) -> None:
     cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
     with pytest.raises(TelegramBotConfigError):
         cfg.validate()
+
+
+def test_telegram_bot_config_shell_overrides(tmp_path: Path) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "shell": {"enabled": True, "timeout_ms": 5000, "max_output_chars": 123},
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "123",
+    }
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+    assert cfg.shell.enabled is True
+    assert cfg.shell.timeout_ms == 5000
+    assert cfg.shell.max_output_chars == 123
