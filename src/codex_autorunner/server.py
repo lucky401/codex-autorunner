@@ -696,8 +696,9 @@ def create_hub_app(
             raise HTTPException(
                 status_code=400, detail="Request body must be a JSON object"
             )
+        git_url = payload.get("git_url") or payload.get("gitUrl")
         repo_id = payload.get("id") or payload.get("repo_id")
-        if not repo_id:
+        if not repo_id and not git_url:
             raise HTTPException(status_code=400, detail="Missing repo id")
         repo_path_val = payload.get("path")
         repo_path = Path(repo_path_val) if repo_path_val else None
@@ -706,17 +707,59 @@ def create_hub_app(
         safe_log(
             app.state.logger,
             logging.INFO,
-            "Hub create repo id=%s path=%s git_init=%s force=%s"
-            % (repo_id, repo_path_val, git_init, force),
+            "Hub create repo id=%s path=%s git_init=%s force=%s git_url=%s"
+            % (repo_id, repo_path_val, git_init, force, bool(git_url)),
         )
         try:
-            snapshot = supervisor.create_repo(
-                str(repo_id), repo_path=repo_path, git_init=git_init, force=force
-            )
+            if git_url:
+                snapshot = supervisor.clone_repo(
+                    git_url=str(git_url),
+                    repo_id=str(repo_id) if repo_id else None,
+                    repo_path=repo_path,
+                    force=force,
+                )
+            else:
+                snapshot = supervisor.create_repo(
+                    str(repo_id), repo_path=repo_path, git_init=git_init, force=force
+                )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(config.root))
+
+    @app.get("/hub/repos/{repo_id}/remove-check")
+    async def remove_repo_check(repo_id: str):
+        safe_log(app.state.logger, logging.INFO, f"Hub remove-check {repo_id}")
+        try:
+            return supervisor.check_repo_removal(repo_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.post("/hub/repos/{repo_id}/remove")
+    async def remove_repo(repo_id: str, payload: Optional[dict] = None):
+        force = False
+        delete_dir = True
+        delete_worktrees = False
+        if payload and isinstance(payload, dict):
+            force = bool(payload.get("force", False))
+            delete_dir = bool(payload.get("delete_dir", True))
+            delete_worktrees = bool(payload.get("delete_worktrees", False))
+        safe_log(
+            app.state.logger,
+            logging.INFO,
+            "Hub remove repo id=%s force=%s delete_dir=%s delete_worktrees=%s"
+            % (repo_id, force, delete_dir, delete_worktrees),
+        )
+        try:
+            supervisor.remove_repo(
+                repo_id,
+                force=force,
+                delete_dir=delete_dir,
+                delete_worktrees=delete_worktrees,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"status": "ok"}
 
     @app.post("/hub/worktrees/create")
     async def create_worktree(payload: Optional[dict] = None):
