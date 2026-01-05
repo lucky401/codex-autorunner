@@ -8094,10 +8094,6 @@ def _extract_thread_preview_parts(entry: Any) -> tuple[Optional[str], Optional[s
     )
     user_preview = _coerce_preview_field(entry, user_preview_keys)
     assistant_preview = _coerce_preview_field(entry, assistant_preview_keys)
-    if user_preview is None:
-        preview = entry.get("preview")
-        if isinstance(preview, str) and preview.strip():
-            user_preview = preview.strip()
     turns = entry.get("turns")
     if turns and (not user_preview or not assistant_preview):
         turn_user, turn_assistant = _extract_turns_preview(turns)
@@ -8114,6 +8110,10 @@ def _extract_thread_preview_parts(entry: Any) -> tuple[Optional[str], Optional[s
                 user_preview = rollout_user
             if not assistant_preview and rollout_assistant:
                 assistant_preview = rollout_assistant
+    if user_preview is None:
+        preview = entry.get("preview")
+        if isinstance(preview, str) and preview.strip():
+            user_preview = preview.strip()
     if user_preview:
         user_preview = _truncate_text(
             _normalize_preview_text(user_preview), RESUME_PREVIEW_USER_LIMIT
