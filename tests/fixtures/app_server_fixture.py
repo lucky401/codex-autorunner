@@ -263,6 +263,18 @@ class FixtureServer:
                 self._pending_interrupts.remove(turn_id)
                 self._send_turn_completed(turn_id, status="interrupted")
             return
+        if method == "command/exec":
+            self.send(
+                {
+                    "id": req_id,
+                    "result": {
+                        "stdout": "fixture output\n",
+                        "stderr": "",
+                        "exitCode": 0,
+                    },
+                }
+            )
+            return
         if method == "fixture/status":
             self.send(
                 {

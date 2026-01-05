@@ -16,7 +16,9 @@ def fixture_command(scenario: str) -> list[str]:
     return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
 
 
-def make_config(root: Path, command: list[str]) -> TelegramBotConfig:
+def make_config(
+    root: Path, command: list[str], overrides: Optional[dict[str, object]] = None
+) -> TelegramBotConfig:
     raw = {
         "enabled": True,
         "mode": "polling",
@@ -25,6 +27,8 @@ def make_config(root: Path, command: list[str]) -> TelegramBotConfig:
         "require_topics": False,
         "app_server_command": command,
     }
+    if overrides:
+        raw.update(overrides)
     env = {
         "CAR_TELEGRAM_BOT_TOKEN": "test-token",
         "CAR_TELEGRAM_CHAT_ID": "123",
@@ -68,6 +72,7 @@ def build_service_in_closed_loop(
 class FakeBot:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
+        self.documents: list[dict[str, object]] = []
 
     async def send_message(
         self,
@@ -113,6 +118,29 @@ class FakeBot:
             }
         )
         return [{"message_id": len(self.messages)}]
+
+    async def send_document(
+        self,
+        chat_id: int,
+        document: bytes,
+        *,
+        filename: str,
+        message_thread_id: Optional[int] = None,
+        reply_to_message_id: Optional[int] = None,
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+    ) -> dict[str, object]:
+        self.documents.append(
+            {
+                "chat_id": chat_id,
+                "thread_id": message_thread_id,
+                "reply_to": reply_to_message_id,
+                "filename": filename,
+                "caption": caption,
+                "bytes_len": len(document),
+            }
+        )
+        return {"message_id": len(self.documents)}
 
     async def answer_callback_query(
         self,
@@ -200,6 +228,33 @@ async def test_error_notification_surfaces(tmp_path: Path) -> None:
     assert any(
         "Auth required" in msg["text"] for msg in fake_bot.messages
     )
+
+
+@pytest.mark.anyio
+async def test_bang_shell_attaches_output(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(
+        tmp_path,
+        fixture_command("basic"),
+        overrides={"shell": {"enabled": True, "max_output_chars": 8}},
+    )
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        runtime = service._router.runtime_for(
+            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        )
+        message = build_message("!echo hi", message_id=11)
+        await service._handle_bang_shell(message, "!echo hi", runtime)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert any("Output too long" in msg["text"] for msg in fake_bot.messages)
+    assert any("echo" in msg["text"] for msg in fake_bot.messages)
+    assert fake_bot.documents
 
 
 @pytest.mark.anyio

@@ -22,6 +22,7 @@ Config lives under `telegram_bot` in `codex-autorunner.yml` and the generated
 - `telegram_bot.debug.prefix_context`: when true, prefix outgoing messages with routing metadata.
 - `telegram_bot.app_server_command(_env)`: how to launch `codex app-server`.
 - `telegram_bot.media`: image/voice handling limits and prompts.
+- `telegram_bot.shell`: `!<cmd>` settings (enable flag, timeouts, output limits).
 - `telegram_bot.defaults`: approval/sandbox defaults for the app-server client.
 
 Required env vars are typically:
@@ -39,7 +40,8 @@ messages.
 2) `TelegramUpdatePoller` fetches updates from the Bot API.
 3) Updates are allowlisted, then routed by chat/topic to a workspace/thread.
 4) Commands (`/bind`, `/new`, `/resume`, `/approvals`, `/interrupt`) run locally;
-   normal messages are forwarded to the Codex app-server.
+   normal messages are forwarded to the Codex app-server. `!<cmd>` runs a shell
+   command in the bound workspace (if enabled).
 5) Responses are streamed back to Telegram with edits/chunks based on length.
 
 ## State and persistence

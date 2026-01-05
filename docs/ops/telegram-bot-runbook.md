@@ -14,6 +14,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - If the app-server command is a script (ex: Node-based `codex`), prefer an absolute path so the bot can prepend its directory to `PATH` under launchd.
 - Configure `telegram_bot` in `codex-autorunner.yml` or `.codex-autorunner/config.yml`.
 - Ensure `telegram_bot.allowed_user_ids` includes your Telegram user id.
+- Enable `telegram_bot.shell.enabled` if you want `!<cmd>` shell support.
 
 ## Start
 
@@ -36,6 +37,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - `/interrupt`: stop the active turn.
 - `/approvals yolo|safe`: toggle approval mode.
 - `/update [both|web|telegram]`: update CAR and restart selected services.
+- `!<cmd>`: run a bash command in the bound workspace (requires `telegram_bot.shell.enabled`).
 
 ## Media Support
 

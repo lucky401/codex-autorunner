@@ -932,6 +932,41 @@ class TelegramBotClient:
         result = await self._request("sendMessage", payload)
         return result if isinstance(result, dict) else {}
 
+    async def send_document(
+        self,
+        chat_id: Union[int, str],
+        document: bytes,
+        *,
+        filename: str,
+        message_thread_id: Optional[int] = None,
+        reply_to_message_id: Optional[int] = None,
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+    ) -> dict[str, Any]:
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.send_document",
+            chat_id=chat_id,
+            thread_id=message_thread_id,
+            reply_to_message_id=reply_to_message_id,
+            filename=filename,
+            bytes_len=len(document),
+            parse_mode=parse_mode,
+        )
+        data: dict[str, Any] = {"chat_id": chat_id}
+        if message_thread_id is not None:
+            data["message_thread_id"] = message_thread_id
+        if reply_to_message_id is not None:
+            data["reply_to_message_id"] = reply_to_message_id
+        if caption is not None:
+            data["caption"] = caption
+        if parse_mode is not None:
+            data["parse_mode"] = parse_mode
+        files = {"document": (filename, document, "text/plain")}
+        result = await self._request_multipart("sendDocument", data, files)
+        return result if isinstance(result, dict) else {}
+
     async def get_me(self) -> dict[str, Any]:
         log_event(self._logger, logging.DEBUG, "telegram.request", method="getMe")
         result = await self._request("getMe", {})
@@ -1092,6 +1127,28 @@ class TelegramBotClient:
             description = data.get("description") if isinstance(data, dict) else None
             raise TelegramAPIError(description or "Telegram API returned error")
         return data.get("result")
+
+    async def _request_multipart(
+        self, method: str, data: dict[str, Any], files: dict[str, Any]
+    ) -> Any:
+        url = f"{self._base_url}/{method}"
+        try:
+            response = await self._client.post(url, data=data, files=files)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.request.failed",
+                method=method,
+                exc=exc,
+            )
+            raise TelegramAPIError("Telegram request failed") from exc
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            description = payload.get("description") if isinstance(payload, dict) else None
+            raise TelegramAPIError(description or "Telegram API returned error")
+        return payload.get("result")
 
 
 class TelegramUpdatePoller:

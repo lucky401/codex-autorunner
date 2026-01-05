@@ -114,6 +114,11 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "max_voice_bytes": 10_000_000,
             "image_prompt": "Describe the image.",
         },
+        "shell": {
+            "enabled": False,
+            "timeout_ms": 120000,
+            "max_output_chars": 3800,
+        },
         "state_file": ".codex-autorunner/telegram_state.json",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
@@ -196,6 +201,11 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "max_image_bytes": 10_000_000,
             "max_voice_bytes": 10_000_000,
             "image_prompt": "Describe the image.",
+        },
+        "shell": {
+            "enabled": False,
+            "timeout_ms": 120000,
+            "max_output_chars": 3800,
         },
         "state_file": ".codex-autorunner/telegram_state.json",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
@@ -916,6 +926,17 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             media_cfg.get("image_prompt"), str
         ):
             raise ConfigError("telegram_bot.media.image_prompt must be a string")
+    shell_cfg = telegram_cfg.get("shell")
+    if shell_cfg is not None and not isinstance(shell_cfg, dict):
+        raise ConfigError("telegram_bot.shell must be a mapping if provided")
+    if isinstance(shell_cfg, dict):
+        if "enabled" in shell_cfg and not isinstance(shell_cfg.get("enabled"), bool):
+            raise ConfigError("telegram_bot.shell.enabled must be boolean")
+        for key in ("timeout_ms", "max_output_chars"):
+            if key in shell_cfg and not isinstance(shell_cfg.get(key), int):
+                raise ConfigError(f"telegram_bot.shell.{key} must be an integer")
+            if isinstance(shell_cfg.get(key), int) and shell_cfg.get(key) <= 0:
+                raise ConfigError(f"telegram_bot.shell.{key} must be greater than 0")
     if "state_file" in telegram_cfg and not isinstance(
         telegram_cfg.get("state_file"), str
     ):
