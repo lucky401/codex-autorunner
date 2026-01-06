@@ -6824,6 +6824,7 @@ def _format_rate_limits(rate_limits: Optional[dict[str, Any]]) -> list[str]:
     if not isinstance(rate_limits, dict):
         return []
     parts: list[str] = []
+    refresh_at = _select_refresh_reset_at(rate_limits)
     for key in ("primary", "secondary"):
         entry = rate_limits.get(key)
         if not isinstance(entry, dict):
@@ -6833,17 +6834,83 @@ def _format_rate_limits(rate_limits: Optional[dict[str, Any]]) -> list[str]:
         if used is None:
             used = _compute_used_percent(entry)
         used_text = _format_percent(used)
-        window_minutes = _coerce_int(entry.get("window_minutes", entry.get("windowMinutes")))
-        if window_minutes is None:
-            window_seconds = _coerce_int(entry.get("window_seconds", entry.get("windowSeconds")))
-            if window_seconds is not None:
-                window_minutes = max(int(round(window_seconds / 60)), 1)
-        label = _format_rate_limit_window(window_minutes) or key
         if used_text:
-            parts.append(f"{label} used {used_text}")
+            parts.append(f"[{key}: {used_text}]")
+    refresh_label = _format_reset_at(refresh_at)
+    if refresh_label:
+        parts.append(f"[refresh: {refresh_label}]")
     if not parts:
         return []
-    return [f"Rate limits: {', '.join(parts)}"]
+    return [f"Limits: {' '.join(parts)}"]
+
+
+def _select_refresh_reset_at(rate_limits: dict[str, Any]) -> Optional[int]:
+    candidates: list[tuple[int, int]] = []
+    for entry in rate_limits.values():
+        if not isinstance(entry, dict):
+            continue
+        reset_at = _extract_reset_at(entry)
+        if reset_at is None:
+            continue
+        window_minutes = _extract_window_minutes(entry)
+        candidates.append((window_minutes or 0, reset_at))
+    if not candidates:
+        return None
+    window_minutes, reset_at = max(candidates, key=lambda item: (item[0], item[1]))
+    if window_minutes <= 0:
+        return reset_at
+    return reset_at
+
+
+def _extract_window_minutes(entry: dict[str, Any]) -> Optional[int]:
+    window_minutes = _coerce_int(entry.get("window_minutes", entry.get("windowMinutes")))
+    if window_minutes is not None:
+        return window_minutes
+    window_seconds = _coerce_int(entry.get("window_seconds", entry.get("windowSeconds")))
+    if window_seconds is None:
+        return None
+    return max(int(round(window_seconds / 60)), 1)
+
+
+def _extract_reset_at(entry: dict[str, Any]) -> Optional[int]:
+    for key in (
+        "resets_at",
+        "resetsAt",
+        "reset_at",
+        "resetAt",
+        "reset_timestamp",
+        "resetTimestamp",
+    ):
+        value = _coerce_number(entry.get(key))
+        if value is None:
+            continue
+        return _normalize_epoch_seconds(value)
+    reset_seconds = _coerce_number(entry.get("reset_seconds", entry.get("resetSeconds")))
+    if reset_seconds is None:
+        return None
+    if reset_seconds < 0:
+        return None
+    return int(time.time() + reset_seconds)
+
+
+def _normalize_epoch_seconds(value: float) -> Optional[int]:
+    if value <= 0:
+        return None
+    if value > 1_000_000_000_000:
+        value /= 1000
+    return int(value)
+
+
+def _format_reset_at(reset_at: Optional[int]) -> Optional[str]:
+    if not isinstance(reset_at, int) or reset_at <= 0:
+        return None
+    dt = datetime.fromtimestamp(reset_at, tz=timezone.utc).astimezone()
+    month = dt.strftime("%b")
+    day = dt.day
+    hour = dt.strftime("%I").lstrip("0") or "12"
+    minute = dt.strftime("%M")
+    suffix = dt.strftime("%p").lower()
+    return f"{month} {day}, {hour}:{minute}{suffix}"
 
 
 def _compute_used_percent(entry: dict[str, Any]) -> Optional[float]:
