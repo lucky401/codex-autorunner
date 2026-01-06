@@ -9,6 +9,7 @@ from codex_autorunner.telegram_adapter import (
     UpdateCallback,
     PageCallback,
     ResumeCallback,
+    ReviewCommitCallback,
     TelegramAllowlist,
     TelegramUpdate,
     TelegramMessage,
@@ -25,6 +26,7 @@ from codex_autorunner.telegram_adapter import (
     encode_cancel_callback,
     encode_page_callback,
     encode_resume_callback,
+    encode_review_commit_callback,
     encode_update_callback,
     is_interrupt_alias,
     next_update_offset,
@@ -33,6 +35,7 @@ from codex_autorunner.telegram_adapter import (
     parse_update,
     TelegramBotClient,
     TELEGRAM_MAX_MESSAGE_LENGTH,
+    build_review_commit_keyboard,
 )
 
 
@@ -328,6 +331,9 @@ def test_callback_encoding_and_parsing() -> None:
     update = encode_update_callback("web")
     parsed_update = parse_callback_data(update)
     assert parsed_update == UpdateCallback(target="web")
+    review_commit = encode_review_commit_callback("abc123")
+    parsed_review_commit = parse_callback_data(review_commit)
+    assert parsed_review_commit == ReviewCommitCallback(sha="abc123")
     cancel = encode_cancel_callback("resume")
     parsed_cancel = parse_callback_data(cancel)
     assert parsed_cancel == CancelCallback(kind="resume")
@@ -361,6 +367,10 @@ def test_build_keyboards() -> None:
     )
     assert update_keyboard["inline_keyboard"][-1][0]["callback_data"].startswith(
         "cancel:"
+    )
+    review_keyboard = build_review_commit_keyboard([("abc123", "1) abc123")])
+    assert review_keyboard["inline_keyboard"][0][0]["callback_data"].startswith(
+        "review_commit:"
     )
 
 

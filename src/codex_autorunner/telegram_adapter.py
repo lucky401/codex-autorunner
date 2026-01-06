@@ -165,6 +165,11 @@ class UpdateConfirmCallback:
 
 
 @dataclass(frozen=True)
+class ReviewCommitCallback:
+    sha: str
+
+
+@dataclass(frozen=True)
 class CancelCallback:
     kind: str
 
@@ -600,6 +605,12 @@ def encode_update_confirm_callback(decision: str) -> str:
     return data
 
 
+def encode_review_commit_callback(sha: str) -> str:
+    data = f"review_commit:{sha}"
+    _validate_callback_data(data)
+    return data
+
+
 def encode_cancel_callback(kind: str) -> str:
     data = f"cancel:{kind}"
     _validate_callback_data(data)
@@ -623,6 +634,7 @@ def parse_callback_data(
         EffortCallback,
         UpdateCallback,
         UpdateConfirmCallback,
+        ReviewCommitCallback,
         CancelCallback,
         PageCallback,
     ]
@@ -665,6 +677,11 @@ def parse_callback_data(
         if not decision:
             return None
         return UpdateConfirmCallback(decision=decision)
+    if data.startswith("review_commit:"):
+        _, _, sha = data.partition(":")
+        if not sha:
+            return None
+        return ReviewCommitCallback(sha=sha)
     if data.startswith("cancel:"):
         _, _, kind = data.partition(":")
         if not kind:
@@ -769,6 +786,24 @@ def build_update_confirm_keyboard() -> dict[str, Any]:
             InlineButton("Cancel", encode_cancel_callback("update-confirm")),
         ]
     ]
+    return build_inline_keyboard(rows)
+
+
+def build_review_commit_keyboard(
+    options: Sequence[tuple[str, str]],
+    *,
+    page_button: Optional[tuple[str, str]] = None,
+    include_cancel: bool = False,
+) -> dict[str, Any]:
+    rows = [
+        [InlineButton(label, encode_review_commit_callback(sha))]
+        for sha, label in options
+    ]
+    if page_button:
+        label, callback_data = page_button
+        rows.append([InlineButton(label, callback_data)])
+    if include_cancel:
+        rows.append([InlineButton("Cancel", encode_cancel_callback("review-commit"))])
     return build_inline_keyboard(rows)
 
 

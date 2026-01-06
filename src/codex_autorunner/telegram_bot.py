@@ -42,6 +42,7 @@ from .telegram_adapter import (
     UpdateConfirmCallback,
     ModelCallback,
     PageCallback,
+    ReviewCommitCallback,
     ResumeCallback,
     TelegramAllowlist,
     TelegramBotClient,
@@ -57,11 +58,15 @@ from .telegram_adapter import (
     build_approval_keyboard,
     build_bind_keyboard,
     build_effort_keyboard,
+    build_inline_keyboard,
     build_model_keyboard,
+    build_review_commit_keyboard,
     build_update_confirm_keyboard,
     build_resume_keyboard,
     build_update_keyboard,
+    encode_cancel_callback,
     encode_page_callback,
+    InlineButton,
     is_interrupt_alias,
     parse_callback_data,
     parse_command,
@@ -141,6 +146,10 @@ BIND_PICKER_PROMPT = "Select a repo to bind (buttons below or reply with number/
 MODEL_PICKER_PROMPT = "Select a model (buttons below)."
 EFFORT_PICKER_PROMPT = "Select a reasoning effort for {model}."
 UPDATE_PICKER_PROMPT = "Select update target (buttons below)."
+REVIEW_COMMIT_PICKER_PROMPT = (
+    "Select a commit to review (buttons below or reply with number)."
+)
+REVIEW_COMMIT_BUTTON_LABEL_LIMIT = 80
 UPDATE_TARGET_OPTIONS = (
     ("both", "Both (web + Telegram)"),
     ("web", "Web only"),
@@ -552,6 +561,13 @@ class SelectionState:
 
 
 @dataclass
+class ReviewCommitSelectionState:
+    items: list[tuple[str, str]]
+    delivery: str
+    page: int = 0
+
+
+@dataclass
 class _CoalescedBuffer:
     message: TelegramMessage
     parts: list[str]
@@ -643,6 +659,9 @@ class TelegramBotService:
         self._bind_options: dict[str, SelectionState] = {}
         self._update_options: dict[str, SelectionState] = {}
         self._update_confirm_options: dict[str, bool] = {}
+        self._review_commit_options: dict[str, ReviewCommitSelectionState] = {}
+        self._review_commit_subjects: dict[str, dict[str, str]] = {}
+        self._pending_review_custom: dict[str, dict[str, Any]] = {}
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
         self._bot_username: Optional[str] = None
@@ -1934,6 +1953,11 @@ class TelegramBotService:
             )
             return
 
+        if text and await self._handle_pending_review_commit(
+            message, runtime, key, text
+        ):
+            return
+
         command_text = raw_text if raw_text.strip() else raw_caption
         command = (
             parse_command(
@@ -1942,6 +1966,10 @@ class TelegramBotService:
             if command_text
             else None
         )
+        if await self._handle_pending_review_custom(
+            key, message, runtime, command, raw_text, raw_caption
+        ):
+            return
         if command:
             if command.name != "resume":
                 self._resume_options.pop(key, None)
@@ -1950,11 +1978,18 @@ class TelegramBotService:
             if command.name != "model":
                 self._model_options.pop(key, None)
                 self._model_pending.pop(key, None)
+            if command.name != "review":
+                self._review_commit_options.pop(key, None)
+                self._review_commit_subjects.pop(key, None)
+                self._pending_review_custom.pop(key, None)
         else:
             self._resume_options.pop(key, None)
             self._bind_options.pop(key, None)
             self._model_options.pop(key, None)
             self._model_pending.pop(key, None)
+            self._review_commit_options.pop(key, None)
+            self._review_commit_subjects.pop(key, None)
+            self._pending_review_custom.pop(key, None)
         if command:
             spec = self._command_specs.get(command.name)
             if spec and spec.allow_during_turn:
@@ -2224,6 +2259,83 @@ class TelegramBotService:
         )
         return True
 
+    async def _handle_pending_review_commit(
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        key: str,
+        text: str,
+    ) -> bool:
+        if not text.isdigit():
+            return False
+        state = self._review_commit_options.get(key)
+        if not state:
+            return False
+        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
+        if not page_items:
+            return False
+        choice = int(text)
+        if choice <= 0 or choice > len(page_items):
+            return False
+        sha = page_items[choice - 1][0]
+        subjects = self._review_commit_subjects.get(key, {})
+        subject = subjects.get(sha)
+        self._review_commit_options.pop(key, None)
+        self._review_commit_subjects.pop(key, None)
+        record = await self._require_bound_record(message)
+        if not record:
+            return True
+        thread_id = await self._ensure_thread_id(message, record)
+        if not thread_id:
+            return True
+        target: dict[str, Any] = {"type": "commit", "sha": sha}
+        if subject:
+            target["title"] = subject
+        await self._start_review(
+            message,
+            runtime,
+            record=record,
+            thread_id=thread_id,
+            target=target,
+            delivery=state.delivery,
+        )
+        return True
+
+    async def _handle_pending_review_custom(
+        self,
+        key: str,
+        message: TelegramMessage,
+        runtime: Any,
+        command: Optional[TelegramCommand],
+        raw_text: str,
+        raw_caption: str,
+    ) -> bool:
+        if command is not None:
+            return False
+        pending = self._pending_review_custom.get(key)
+        if not pending:
+            return False
+        instructions = raw_text if raw_text.strip() else raw_caption
+        if not instructions.strip():
+            return False
+        self._pending_review_custom.pop(key, None)
+        record = await self._require_bound_record(message)
+        if not record:
+            return True
+        thread_id = await self._ensure_thread_id(message, record)
+        if not thread_id:
+            return True
+        target = {"type": "custom", "instructions": instructions}
+        await self._start_review(
+            message,
+            runtime,
+            record=record,
+            thread_id=thread_id,
+            target=target,
+            delivery=pending.get("delivery", "inline"),
+        )
+        return True
+
     def _should_process_update(self, key: str, update_id: int) -> bool:
         if not isinstance(update_id, int):
             return True
@@ -2278,6 +2390,9 @@ class TelegramBotService:
         elif isinstance(parsed, UpdateConfirmCallback):
             if key:
                 await self._handle_update_confirm_callback(key, callback, parsed)
+        elif isinstance(parsed, ReviewCommitCallback):
+            if key:
+                await self._handle_review_commit_callback(key, callback, parsed)
         elif isinstance(parsed, CancelCallback):
             if key:
                 await self._handle_selection_cancel(key, parsed, callback)
@@ -2385,6 +2500,57 @@ class TelegramBotService:
             return
         await self._prompt_update_selection_from_callback(key, callback)
         await self._answer_callback(callback, "Select update target")
+
+    async def _handle_review_commit_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: ReviewCommitCallback,
+    ) -> None:
+        state = self._review_commit_options.get(key)
+        subjects = self._review_commit_subjects.get(key, {})
+        if not state or not _selection_contains(state.items, parsed.sha):
+            await self._answer_callback(callback, "Selection expired")
+            return
+        if callback.chat_id is None or callback.message_id is None:
+            await self._answer_callback(callback, "Selection expired")
+            return
+        self._review_commit_options.pop(key, None)
+        self._review_commit_subjects.pop(key, None)
+        message = TelegramMessage(
+            update_id=callback.update_id,
+            message_id=callback.message_id,
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            from_user_id=callback.from_user_id,
+            text=None,
+            date=None,
+            is_topic_message=bool(callback.thread_id),
+        )
+        record = await self._require_bound_record(message)
+        if not record:
+            await self._finalize_selection(
+                key, callback, "Topic not bound. Use /bind <repo_id> or /bind <path>."
+            )
+            return
+        thread_id = await self._ensure_thread_id(message, record)
+        if not thread_id:
+            return
+        target: dict[str, Any] = {"type": "commit", "sha": parsed.sha}
+        subject = subjects.get(parsed.sha)
+        if subject:
+            target["title"] = subject
+        await self._answer_callback(callback, "Review started")
+        await self._finalize_selection(key, callback, "Starting review...")
+        runtime = self._router.runtime_for(key)
+        await self._start_review(
+            message,
+            runtime,
+            record=record,
+            thread_id=thread_id,
+            target=target,
+            delivery=state.delivery,
+        )
 
     def _enqueue_topic_work(
         self, key: str, work: Any, *, force_queue: bool = False
@@ -4610,15 +4776,16 @@ class TelegramBotService:
             reply_to=message.message_id,
         )
 
-    async def _handle_review(
-        self, message: TelegramMessage, args: str, runtime: Any
+    async def _start_review(
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        *,
+        record: "TelegramTopicRecord",
+        thread_id: str,
+        target: dict[str, Any],
+        delivery: str,
     ) -> None:
-        record = await self._require_bound_record(message)
-        if not record:
-            return
-        thread_id = await self._ensure_thread_id(message, record)
-        if not thread_id:
-            return
         client = await self._client_for_workspace(record.workspace_path)
         if client is None:
             await self._send_message(
@@ -4628,47 +4795,6 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        argv = self._parse_command_args(args)
-        delivery = "inline"
-        if argv and argv[0].lower() == "detached":
-            delivery = "detached"
-            argv = argv[1:]
-        target: dict[str, Any] = {"type": "uncommittedChanges"}
-        if argv:
-            keyword = argv[0].lower()
-            if keyword == "base":
-                if len(argv) < 2:
-                    await self._send_message(
-                        message.chat_id,
-                        "Usage: /review base <branch>",
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
-                    )
-                    return
-                target = {"type": "baseBranch", "branch": argv[1]}
-            elif keyword == "commit":
-                if len(argv) < 2:
-                    await self._send_message(
-                        message.chat_id,
-                        "Usage: /review commit <sha>",
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
-                    )
-                    return
-                target = {"type": "commit", "commit": argv[1]}
-            elif keyword == "custom":
-                instructions = " ".join(argv[1:]).strip()
-                if not instructions:
-                    await self._send_message(
-                        message.chat_id,
-                        "Usage: /review custom <instructions>",
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
-                    )
-                    return
-                target = {"type": "custom", "instructions": instructions}
-            else:
-                target = {"type": "custom", "instructions": " ".join(argv)}
         log_event(
             self._logger,
             logging.INFO,
@@ -4876,6 +5002,148 @@ class TelegramBotService:
             self._token_usage_by_turn.pop(turn_id, None)
         if response_sent:
             await self._delete_message(message.chat_id, placeholder_id)
+
+    async def _handle_review(
+        self, message: TelegramMessage, args: str, runtime: Any
+    ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        raw_args = args.strip()
+        delivery = "inline"
+        token, remainder = _consume_raw_token(raw_args)
+        if token and token.lower() in ("detached", "--detached"):
+            delivery = "detached"
+            raw_args = remainder
+        token, remainder = _consume_raw_token(raw_args)
+        target: dict[str, Any] = {"type": "uncommittedChanges"}
+        if token:
+            keyword = token.lower()
+            if keyword == "base":
+                argv = self._parse_command_args(raw_args)
+                if len(argv) < 2:
+                    await self._send_message(
+                        message.chat_id,
+                        "Usage: /review base <branch>",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                target = {"type": "baseBranch", "branch": argv[1]}
+            elif keyword == "commit":
+                argv = self._parse_command_args(raw_args)
+                if len(argv) < 2:
+                    await self._prompt_review_commit_picker(
+                        message, record, delivery=delivery
+                    )
+                    return
+                target = {"type": "commit", "sha": argv[1]}
+            elif keyword == "custom":
+                instructions = remainder
+                if instructions.startswith((" ", "\t")):
+                    instructions = instructions[1:]
+                if not instructions.strip():
+                    self._pending_review_custom[key] = {"delivery": delivery}
+                    cancel_keyboard = build_inline_keyboard(
+                        [
+                            [
+                                InlineButton(
+                                    "Cancel",
+                                    encode_cancel_callback("review-custom"),
+                                )
+                            ]
+                        ]
+                    )
+                    await self._send_message(
+                        message.chat_id,
+                        "Reply with review instructions (next message will be used).",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                        reply_markup=cancel_keyboard,
+                    )
+                    return
+                target = {"type": "custom", "instructions": instructions}
+            else:
+                instructions = raw_args.strip()
+                if instructions:
+                    target = {"type": "custom", "instructions": instructions}
+        thread_id = await self._ensure_thread_id(message, record)
+        if not thread_id:
+            return
+        await self._start_review(
+            message,
+            runtime,
+            record=record,
+            thread_id=thread_id,
+            target=target,
+            delivery=delivery,
+        )
+
+    async def _prompt_review_commit_picker(
+        self,
+        message: TelegramMessage,
+        record: "TelegramTopicRecord",
+        *,
+        delivery: str,
+    ) -> None:
+        commits = await self._list_recent_commits(record)
+        if not commits:
+            await self._send_message(
+                message.chat_id,
+                "No recent commits found.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        items: list[tuple[str, str]] = []
+        subjects: dict[str, str] = {}
+        for sha, subject in commits:
+            label = _format_review_commit_label(sha, subject)
+            items.append((sha, label))
+            if subject:
+                subjects[sha] = subject
+        state = ReviewCommitSelectionState(items=items, delivery=delivery)
+        self._review_commit_options[key] = state
+        self._review_commit_subjects[key] = subjects
+        keyboard = self._build_review_commit_keyboard(state)
+        await self._send_message(
+            message.chat_id,
+            self._selection_prompt(REVIEW_COMMIT_PICKER_PROMPT, state),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            reply_markup=keyboard,
+        )
+
+    async def _list_recent_commits(
+        self, record: "TelegramTopicRecord"
+    ) -> list[tuple[str, str]]:
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            return []
+        command = "git log -n 50 --pretty=format:%H%x1f%s%x1e"
+        try:
+            result = await client.request(
+                "command/exec",
+                {
+                    "cwd": record.workspace_path,
+                    "command": ["bash", "-lc", command],
+                    "timeoutMs": 10000,
+                },
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.review.commit_list.failed",
+                exc=exc,
+            )
+            return []
+        stdout, _stderr, exit_code = _extract_command_result(result)
+        if exit_code not in (None, 0) and not stdout.strip():
+            return []
+        return _parse_review_commit_log(stdout)
 
     async def _handle_bang_shell(
         self, message: TelegramMessage, text: str, _runtime: Any
@@ -6090,6 +6358,20 @@ class TelegramBotService:
             include_cancel=True,
         )
 
+    def _build_review_commit_keyboard(
+        self, state: ReviewCommitSelectionState
+    ) -> dict[str, Any]:
+        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
+        options = [
+            (item_id, f"{idx}) {label}")
+            for idx, (item_id, label) in enumerate(page_items, 1)
+        ]
+        return build_review_commit_keyboard(
+            options,
+            page_button=self._page_button("review-commit", state),
+            include_cancel=True,
+        )
+
     def _build_effort_keyboard(self, option: ModelOption) -> dict[str, Any]:
         options = []
         for effort in option.efforts:
@@ -6417,6 +6699,13 @@ class TelegramBotService:
         elif parsed.kind == "update-confirm":
             self._update_confirm_options.pop(key, None)
             text = "Update cancelled."
+        elif parsed.kind == "review-commit":
+            self._review_commit_options.pop(key, None)
+            self._review_commit_subjects.pop(key, None)
+            text = "Review commit selection cancelled."
+        elif parsed.kind == "review-custom":
+            self._pending_review_custom.pop(key, None)
+            text = "Custom review cancelled."
         else:
             await self._answer_callback(callback, "Selection expired")
             return
@@ -6441,6 +6730,10 @@ class TelegramBotService:
             state = self._model_options.get(key)
             prompt_base = MODEL_PICKER_PROMPT
             build_keyboard = self._build_model_keyboard
+        elif parsed.kind == "review-commit":
+            state = self._review_commit_options.get(key)
+            prompt_base = REVIEW_COMMIT_PICKER_PROMPT
+            build_keyboard = self._build_review_commit_keyboard
         else:
             await self._answer_callback(callback, "Selection expired")
             return
@@ -7421,6 +7714,13 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         spec = command_specs.get(name)
         if spec:
             lines.append(f"/{name} - {spec.description}")
+    if "review" in command_specs:
+        lines.append("")
+        lines.append("Review:")
+        lines.append("/review")
+        lines.append("/review commit <sha> (or /review commit to pick)")
+        lines.append("/review custom <instructions> (or /review custom to prompt)")
+        lines.append("/review detached ...")
     lines.append("")
     lines.append("Other:")
     lines.append("!<cmd> - run a bash command in the bound workspace")
@@ -8240,6 +8540,38 @@ def _truncate_text(text: str, limit: int) -> str:
     if limit <= 3:
         return text[:limit]
     return f"{text[: limit - 3]}..."
+
+
+def _consume_raw_token(raw: str) -> tuple[Optional[str], str]:
+    stripped = raw.lstrip()
+    if not stripped:
+        return None, ""
+    for idx, ch in enumerate(stripped):
+        if ch.isspace():
+            return stripped[:idx], stripped[idx:]
+    return stripped, ""
+
+
+def _parse_review_commit_log(output: str) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for record in output.split("\x1e"):
+        record = record.strip()
+        if not record:
+            continue
+        sha, _sep, subject = record.partition("\x1f")
+        if not sha:
+            continue
+        entries.append((sha, subject.strip()))
+    return entries
+
+
+def _format_review_commit_label(sha: str, subject: str) -> str:
+    short_sha = sha[:7]
+    if subject:
+        label = f"{short_sha} - {subject}"
+    else:
+        label = short_sha
+    return _truncate_text(label, REVIEW_COMMIT_BUTTON_LABEL_LIMIT)
 
 
 def _extract_first_bold_span(text: str) -> Optional[str]:

@@ -1048,7 +1048,7 @@ Tagged union: `{"type": ...}` with camelCase tags:
 * Commit:
 
   ```json
-  {"type":"commit","commit":"<sha or ref>"}
+  {"type":"commit","sha":"<sha or ref>"}
   ```
 * Custom:
 
@@ -1336,7 +1336,7 @@ Then you will receive normal turn/item streaming notifications (same as a `turn/
   "method":"review/start",
   "params":{
     "threadId":"thr_abc",
-    "target":{"type":"commit","commit":"9fceb02"},
+    "target":{"type":"commit","sha":"9fceb02"},
     "delivery":"inline"
   }
 }
