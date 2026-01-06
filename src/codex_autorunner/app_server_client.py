@@ -273,8 +273,17 @@ class CodexAppServerClient:
         self._register_turn_state(turn_id, thread_id)
         return TurnHandle(self, turn_id, thread_id)
 
-    async def turn_interrupt(self, turn_id: str) -> Any:
-        params = {"turnId": turn_id}
+    async def turn_interrupt(
+        self, turn_id: str, *, thread_id: Optional[str] = None
+    ) -> Any:
+        if thread_id is None:
+            _key, state = self._find_turn_state(turn_id, thread_id=None)
+            if state is None or not state.thread_id:
+                raise CodexAppServerProtocolError(
+                    f"Unknown thread id for turn {turn_id}"
+                )
+            thread_id = state.thread_id
+        params = {"turnId": turn_id, "threadId": thread_id}
         return await self.request("turn/interrupt", params)
 
     async def wait_for_turn(
@@ -1004,7 +1013,7 @@ def _summarize_params(method: str, params: Optional[Dict[str, Any]]) -> Dict[str
             summary["sandbox_policy"] = params.get("sandboxPolicy")
         return summary
     if method == "turn/interrupt":
-        return {"turn_id": params.get("turnId")}
+        return {"turn_id": params.get("turnId"), "thread_id": params.get("threadId")}
     if method == "thread/start":
         return {"cwd": params.get("cwd")}
     if method == "thread/resume":

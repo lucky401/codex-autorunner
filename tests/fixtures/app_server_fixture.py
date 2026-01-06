@@ -258,7 +258,19 @@ class FixtureServer:
             return
         if method == "turn/interrupt":
             turn_id = params.get("turnId")
-            self.send({"id": req_id, "result": {"id": turn_id, "status": "interrupted"}})
+            thread_id = params.get("threadId")
+            if not turn_id or not thread_id:
+                self.send(
+                    {
+                        "id": req_id,
+                        "error": {
+                            "code": -32602,
+                            "message": "turn/interrupt missing threadId or turnId",
+                        },
+                    }
+                )
+                return
+            self.send({"id": req_id, "result": {}})
             if self._scenario == "interrupt" and turn_id in self._pending_interrupts:
                 self._pending_interrupts.remove(turn_id)
                 self._send_turn_completed(turn_id, status="interrupted")

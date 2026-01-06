@@ -18,6 +18,7 @@ INTERRUPT_ALIASES = {
     "ctrl+c",
     "esc",
     "escape",
+    "/stop",
 }
 
 

@@ -171,7 +171,7 @@ async def test_turn_interrupt(tmp_path: Path) -> None:
     try:
         thread = await client.thread_start(str(tmp_path))
         handle = await client.turn_start(thread["id"], "hi")
-        await client.turn_interrupt(handle.turn_id)
+        await client.turn_interrupt(handle.turn_id, thread_id=handle.thread_id)
         result = await handle.wait()
         assert result.status == "interrupted"
     finally:
