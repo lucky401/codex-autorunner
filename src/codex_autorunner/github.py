@@ -199,6 +199,12 @@ def _parse_repo_info(payload: dict) -> RepoInfo:
 ISSUE_URL_RE = re.compile(
     r"^https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/issues/(?P<num>\d+)(?:[/?#].*)?$"
 )
+PR_URL_RE = re.compile(
+    r"^https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<num>\d+)(?:[/?#].*)?$"
+)
+GITHUB_LINK_RE = re.compile(
+    r"https?://github\.com/[^/\s]+/[^/\s]+/(?:issues|pull)/\d+(?:[/?#][^\s]*)?"
+)
 
 
 def parse_issue_input(issue: str) -> Tuple[Optional[str], int]:
@@ -220,6 +226,26 @@ def parse_issue_input(issue: str) -> Tuple[Optional[str], int]:
         )
     slug = f"{m.group('owner')}/{m.group('repo')}"
     return slug, int(m.group("num"))
+
+
+def parse_github_url(url: str) -> Optional[tuple[str, str, int]]:
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    m = ISSUE_URL_RE.match(raw)
+    if m:
+        slug = f"{m.group('owner')}/{m.group('repo')}"
+        return slug, "issue", int(m.group("num"))
+    m = PR_URL_RE.match(raw)
+    if m:
+        slug = f"{m.group('owner')}/{m.group('repo')}"
+        return slug, "pr", int(m.group("num"))
+    return None
+
+
+def find_github_links(text: str) -> list[str]:
+    raw = text or ""
+    return [m.group(0) for m in GITHUB_LINK_RE.finditer(raw)]
 
 
 class GitHubService:
@@ -345,7 +371,7 @@ class GitHubService:
                 "view",
                 str(number),
                 "--json",
-                "number,url,title,body,state",
+                "number,url,title,body,state,author,labels,comments",
             ],
             cwd=cwd or self.repo_root,
             check=True,
@@ -367,6 +393,175 @@ class GitHubService:
                 status_code=400,
             )
         return num
+
+    def pr_view(self, *, number: int, cwd: Optional[Path] = None) -> dict:
+        proc = self._gh(
+            [
+                "pr",
+                "view",
+                str(number),
+                "--json",
+                "number,url,title,body,state,author,labels,files,additions,deletions,changedFiles",
+            ],
+            cwd=cwd or self.repo_root,
+            check=True,
+            timeout_seconds=30,
+        )
+        try:
+            return json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise GitHubError(
+                "Unable to parse gh pr view output", status_code=500
+            ) from exc
+
+    def build_context_file_from_url(self, url: str) -> Optional[dict]:
+        parsed = parse_github_url(url)
+        if not parsed:
+            return None
+        if not self.gh_available():
+            return None
+        if not self.gh_authenticated():
+            return None
+        slug, kind, number = parsed
+        repo = self.repo_info()
+        if slug.lower() != repo.name_with_owner.lower():
+            return None
+
+        if kind == "issue":
+            issue_obj = self.issue_view(number=number)
+            lines = _format_issue_context(issue_obj, repo=repo.name_with_owner)
+        else:
+            pr_obj = self.pr_view(number=number)
+            lines = _format_pr_context(pr_obj, repo=repo.name_with_owner)
+
+        rel_dir = Path(".codex-autorunner") / "github_context"
+        abs_dir = self.repo_root / rel_dir
+        abs_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{kind}-{int(number)}.md"
+        rel_path = rel_dir / filename
+        abs_path = self.repo_root / rel_path
+        atomic_write(abs_path, "\n".join(lines).rstrip() + "\n")
+
+        hint = (
+            "Context: see "
+            f"{rel_path.as_posix()} "
+            "(gh available: true; use gh CLI for updates if asked)."
+        )
+        return {"path": rel_path.as_posix(), "hint": hint, "kind": kind}
+
+
+def _safe_text(value: Any, *, max_chars: int = 8000) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3] + "..."
+
+
+def _format_labels(labels: Any) -> str:
+    if not isinstance(labels, list):
+        return "none"
+    names = []
+    for label in labels:
+        if isinstance(label, dict):
+            name = label.get("name")
+        else:
+            name = label
+        if name:
+            names.append(str(name))
+    return ", ".join(names) if names else "none"
+
+
+def _format_author(author: Any) -> str:
+    if isinstance(author, dict):
+        return str(author.get("login") or author.get("name") or "unknown")
+    return str(author or "unknown")
+
+
+def _format_issue_context(issue: dict, *, repo: str) -> list[str]:
+    number = issue.get("number") or ""
+    title = issue.get("title") or ""
+    url = issue.get("url") or ""
+    state = issue.get("state") or ""
+    body = _safe_text(issue.get("body") or "")
+    labels = _format_labels(issue.get("labels"))
+    author = _format_author(issue.get("author"))
+    comments = issue.get("comments")
+    comment_count = 0
+    if isinstance(comments, dict):
+        total = comments.get("totalCount")
+        if isinstance(total, int):
+            comment_count = total
+        else:
+            nodes = comments.get("nodes")
+            edges = comments.get("edges")
+            if isinstance(nodes, list):
+                comment_count = len(nodes)
+            elif isinstance(edges, list):
+                comment_count = len(edges)
+    elif isinstance(comments, list):
+        comment_count = len(comments)
+
+    lines = [
+        "# GitHub Issue Context",
+        f"Repo: {repo}",
+        f"Issue: #{number} {title}".strip(),
+        f"URL: {url}",
+        f"State: {state}",
+        f"Author: {author}",
+        f"Labels: {labels}",
+        f"Comments: {comment_count}",
+        "",
+        "Body:",
+        body or "(no body)",
+    ]
+    return lines
+
+
+def _format_pr_context(pr: dict, *, repo: str) -> list[str]:
+    number = pr.get("number") or ""
+    title = pr.get("title") or ""
+    url = pr.get("url") or ""
+    state = pr.get("state") or ""
+    body = _safe_text(pr.get("body") or "")
+    labels = _format_labels(pr.get("labels"))
+    author = _format_author(pr.get("author"))
+    additions = pr.get("additions") or 0
+    deletions = pr.get("deletions") or 0
+    changed_files = pr.get("changedFiles") or 0
+    files = pr.get("files") if isinstance(pr.get("files"), list) else []
+    file_lines = []
+    for entry in files[:200]:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path") or entry.get("name") or ""
+        if not path:
+            continue
+        add = entry.get("additions")
+        dele = entry.get("deletions")
+        if isinstance(add, int) and isinstance(dele, int):
+            file_lines.append(f"- {path} (+{add}/-{dele})")
+        else:
+            file_lines.append(f"- {path}")
+    if len(files) > 200:
+        file_lines.append(f"... ({len(files) - 200} more)")
+
+    lines = [
+        "# GitHub PR Context",
+        f"Repo: {repo}",
+        f"PR: #{number} {title}".strip(),
+        f"URL: {url}",
+        f"State: {state}",
+        f"Author: {author}",
+        f"Labels: {labels}",
+        f"Stats: +{additions} -{deletions}; changed files: {changed_files}",
+        "",
+        "Body:",
+        body or "(no body)",
+        "",
+        "Files:",
+    ]
+    lines.extend(file_lines or ["(no files)"])
+    return lines
 
     # ── high-level operations ──────────────────────────────────────────────────
     def status_payload(self) -> dict:

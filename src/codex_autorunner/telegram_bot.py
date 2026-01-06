@@ -29,6 +29,8 @@ from .app_server_client import (
     _normalize_sandbox_policy,
 )
 from .app_server_supervisor import WorkspaceAppServerSupervisor
+from .config import load_config
+from .github import GitHubService, find_github_links
 from .logging_utils import log_event
 from .lock_utils import process_alive
 from .manifest import load_manifest
@@ -3086,6 +3088,16 @@ class TelegramBotService:
         prompt_text = self._maybe_append_whisper_disclaimer(
             prompt_text, transcript_text=transcript_text
         )
+        prompt_text, injected = await self._maybe_inject_github_context(
+            prompt_text, record
+        )
+        if injected:
+            await self._send_message(
+                message.chat_id,
+                "gh CLI used, github context injected",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
         try:
             if not thread_id:
                 thread = await client.thread_start(record.workspace_path)
@@ -3362,6 +3374,37 @@ class TelegramBotService:
         if prompt_text.strip():
             return f"{prompt_text}\n\n{WHISPER_TRANSCRIPT_DISCLAIMER}"
         return WHISPER_TRANSCRIPT_DISCLAIMER
+
+    async def _maybe_inject_github_context(
+        self, prompt_text: str, record: Any
+    ) -> tuple[str, bool]:
+        if not prompt_text or not record or not record.workspace_path:
+            return prompt_text, False
+        links = find_github_links(prompt_text)
+        if not links:
+            return prompt_text, False
+        workspace_root = Path(record.workspace_path)
+        repo_root = _repo_root(workspace_root)
+        if repo_root is None:
+            return prompt_text, False
+        try:
+            repo_config = load_config(repo_root)
+            raw_config = repo_config.raw if repo_config else None
+        except Exception:
+            raw_config = None
+        svc = GitHubService(repo_root, raw_config=raw_config)
+        for link in links:
+            try:
+                result = await asyncio.to_thread(
+                    svc.build_context_file_from_url, link
+                )
+            except Exception:
+                result = None
+            if result and result.get("hint"):
+                separator = "\n" if prompt_text.endswith("\n") else "\n\n"
+                hint = str(result["hint"])
+                return f"{prompt_text}{separator}{hint}", True
+        return prompt_text, False
 
     async def _handle_image_message(
         self,

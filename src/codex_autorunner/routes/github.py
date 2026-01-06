@@ -131,5 +131,25 @@ def build_github_routes() -> APIRouter:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
-    return router
+    @router.post("/api/github/context")
+    async def github_context(request: Request, payload: Optional[dict] = None):
+        if not payload or not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
+        url = payload.get("url")
+        if not url:
+            raise HTTPException(status_code=400, detail="Missing url")
+        try:
+            result = await asyncio.to_thread(
+                _github(request).build_context_file_from_url, str(url)
+            )
+            if not result:
+                return {"status": "ok", "injected": False}
+            return {"status": "ok", "injected": True, **result}
+        except GitHubError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
 
+    return router

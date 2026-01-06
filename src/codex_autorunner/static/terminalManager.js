@@ -36,6 +36,7 @@ const XTERM_COLOR_MODE_PALETTE_256 = 0x02000000;
 const XTERM_COLOR_MODE_RGB = 0x03000000;
 
 const CAR_CONTEXT_HOOK_ID = "car_context";
+const GITHUB_CONTEXT_HOOK_ID = "github_context";
 const CAR_CONTEXT_KEYWORDS = [
   "car",
   "codex",
@@ -47,6 +48,8 @@ const CAR_CONTEXT_KEYWORDS = [
   "autorunner",
   "work docs",
 ];
+const GITHUB_LINK_RE =
+  /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/\d+(?:[/?#][^\s]*)?/i;
 
 const LEGACY_SESSION_STORAGE_KEY = "codex_terminal_session_id";
 const SESSION_STORAGE_PREFIX = "codex_terminal_session_id:";
@@ -178,6 +181,7 @@ export class TerminalManager {
     this.textInputHintBase = null;
     this.textInputHooks = [];
     this.textInputSelection = { start: null, end: null };
+    this.textInputHookInFlight = false;
 
     // Mobile controls state
     this.mobileControlsEl = null;
@@ -231,6 +235,7 @@ export class TerminalManager {
     this.transcriptResetForConnect = false;
 
     this._registerTextInputHook(this._buildCarContextHook());
+    this._registerTextInputHook(this._buildGithubContextHook());
 
     // Bind methods that are used as callbacks
     this._handleResize = this._handleResize.bind(this);
@@ -438,6 +443,30 @@ export class TerminalManager {
     return next;
   }
 
+  async _applyTextInputHooksAsync(text) {
+    let next = text;
+    for (const hook of this.textInputHooks) {
+      try {
+        let result = hook.apply({ text: next, manager: this });
+        if (result && typeof result.then === "function") {
+          result = await result;
+        }
+        if (!result) continue;
+        if (typeof result === "string") {
+          next = result;
+          continue;
+        }
+        if (result && typeof result.text === "string") {
+          next = result.text;
+        }
+        if (result && result.stop) break;
+      } catch (_err) {
+        // ignore hook failures
+      }
+    }
+    return next;
+  }
+
   _buildCarContextHook() {
     return {
       id: CAR_CONTEXT_HOOK_ID,
@@ -455,6 +484,28 @@ export class TerminalManager {
           "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules.";
         const separator = text.endsWith("\n") ? "\n" : "\n\n";
         return { text: `${text}${separator}${injection}` };
+      },
+    };
+  }
+
+  _buildGithubContextHook() {
+    return {
+      id: GITHUB_CONTEXT_HOOK_ID,
+      apply: async ({ text }) => {
+        if (!text || !text.trim()) return null;
+        const match = text.match(GITHUB_LINK_RE);
+        if (!match) return null;
+        try {
+          const res = await api("/api/github/context", {
+            method: "POST",
+            body: { url: match[0] },
+          });
+          if (!res || !res.injected || !res.hint) return null;
+          const separator = text.endsWith("\n") ? "\n" : "\n\n";
+          return { text: `${text}${separator}${res.hint}` };
+        } catch (_err) {
+          return null;
+        }
       },
     };
   }
@@ -2821,7 +2872,7 @@ export class TerminalManager {
     this._updateTextInputSendUi();
   }
 
-  _sendFromTextarea() {
+  async _sendFromTextarea() {
     const text = this.textInputTextareaEl?.value || "";
     const normalized = this._normalizeNewlines(text);
     if (this.textInputPending) {
@@ -2834,7 +2885,17 @@ export class TerminalManager {
       }
     }
     this._persistTextInputDraft();
-    const payload = this._applyTextInputHooks(normalized);
+    if (this.textInputHookInFlight) {
+      flash("Send already in progress", "error");
+      return;
+    }
+    this.textInputHookInFlight = true;
+    let payload = normalized;
+    try {
+      payload = await this._applyTextInputHooksAsync(normalized);
+    } finally {
+      this.textInputHookInFlight = false;
+    }
     const needsEnter = Boolean(payload && !payload.endsWith("\n"));
     const ok = this._sendTextWithAck(payload, {
       appendNewline: false,
@@ -2977,7 +3038,7 @@ export class TerminalManager {
       this._setTextInputEnabled(!this.textInputEnabled, { focus: true, focusTextarea: true });
     });
 
-    const triggerSend = () => {
+    const triggerSend = async () => {
       if (this.textInputSendBtn?.disabled) {
         flash("Connect the terminal first", "error");
         return;
@@ -2987,7 +3048,7 @@ export class TerminalManager {
       if (now - this.lastSendTapAt < 300) return;
       this.lastSendTapAt = now;
       console.log("TerminalManager: sending text input");
-      this._sendFromTextarea();
+      await this._sendFromTextarea();
     };
     this.textInputSendBtn.addEventListener("pointerup", (e) => {
       if (e.pointerType !== "touch") return;
