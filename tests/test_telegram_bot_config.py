@@ -127,4 +127,7 @@ def test_telegram_bot_config_command_registration_defaults(tmp_path: Path) -> No
     cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
     registration = cfg.command_registration
     assert registration.enabled is True
-    assert registration.scopes[0].scope["type"] == "default"
+    assert [scope.scope["type"] for scope in registration.scopes] == [
+        "default",
+        "all_group_chats",
+    ]

@@ -153,7 +153,7 @@ class TelegramBotConfig:
         allowed_chat_ids.update(_parse_int_list(env.get(chat_id_env)))
         allowed_user_ids = set(_parse_int_list(cfg.get("allowed_user_ids")))
 
-        require_topics = bool(cfg.get("require_topics", True))
+        require_topics = bool(cfg.get("require_topics", False))
 
         defaults_raw_value = cfg.get("defaults")
         defaults_raw: dict[str, Any] = (
@@ -378,7 +378,10 @@ def _normalize_parse_mode(raw: Any) -> Optional[str]:
 def _parse_command_scopes(raw: Any) -> list[TelegramBotCommandScope]:
     scopes: list[TelegramBotCommandScope] = []
     if raw is None:
-        raw = [{"type": "default", "language_code": ""}]
+        raw = [
+            {"type": "default", "language_code": ""},
+            {"type": "all_group_chats", "language_code": ""},
+        ]
     if isinstance(raw, list):
         for item in raw:
             scope_payload: dict[str, Any] = {"type": "default"}

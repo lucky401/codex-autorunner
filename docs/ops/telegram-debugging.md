@@ -9,7 +9,8 @@ Use this guide when Telegram replies are missing, delayed, or out of order.
   - `launchctl print gui/$(id -u)/com.codex.autorunner.telegram`
 - Confirm the active log file:
   - The launchd plist `StandardOutPath` is the authoritative log path.
-  - In hub mode, expect Telegram JSON events in `.codex-autorunner/codex-autorunner-hub.log`.
+  - In hub mode, Telegram JSON events go to `.codex-autorunner/codex-autorunner-hub.log` (launchd stdout can be empty).
+  - In repo mode, Telegram JSON events go to `.codex-autorunner/codex-autorunner.log`.
 
 ## Follow a Turn End-to-End
 
@@ -17,6 +18,7 @@ Use this guide when Telegram replies are missing, delayed, or out of order.
    - Search for `telegram.update.received` with the chat/thread ids.
 2) Verify a turn starts:
    - Look for `telegram.turn.starting`.
+   - On startup, check for `telegram.commands.updated` to confirm slash-command registration.
 3) Verify the app-server request:
    - `app_server.request` with `method:"turn/start"` and the thread id.
 4) Verify the turn completes:

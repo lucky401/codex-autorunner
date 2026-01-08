@@ -104,7 +104,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         },
         "allowed_chat_ids": [],
         "allowed_user_ids": [],
-        "require_topics": True,
+        "require_topics": False,
         "defaults": {
             "approval_mode": "yolo",
             "approval_policy": "on-request",
@@ -131,7 +131,10 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         },
         "command_registration": {
             "enabled": True,
-            "scopes": [{"type": "default", "language_code": ""}],
+            "scopes": [
+                {"type": "default", "language_code": ""},
+                {"type": "all_group_chats", "language_code": ""},
+            ],
         },
         "state_file": ".codex-autorunner/telegram_state.json",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
@@ -254,7 +257,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         },
         "allowed_chat_ids": [],
         "allowed_user_ids": [],
-        "require_topics": True,
+        "require_topics": False,
         "defaults": {
             "approval_mode": "yolo",
             "approval_policy": "on-request",
@@ -281,7 +284,10 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         },
         "command_registration": {
             "enabled": True,
-            "scopes": [{"type": "default", "language_code": ""}],
+            "scopes": [
+                {"type": "default", "language_code": ""},
+                {"type": "all_group_chats", "language_code": ""},
+            ],
         },
         "state_file": ".codex-autorunner/telegram_state.json",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",

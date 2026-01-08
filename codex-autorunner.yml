@@ -106,7 +106,7 @@ repo:
     parse_mode: HTML
     allowed_chat_ids: []
     allowed_user_ids: []
-    require_topics: true
+    require_topics: false
     defaults:
       approval_mode: yolo
       approval_policy: on-request
@@ -128,6 +128,8 @@ repo:
       enabled: true
       scopes:
         - type: default
+          language_code: ""
+        - type: all_group_chats
           language_code: ""
     state_file: .codex-autorunner/telegram_state.json
     # Optional env var that contains the full app-server command.
@@ -213,7 +215,7 @@ hub:
     parse_mode: HTML
     allowed_chat_ids: []
     allowed_user_ids: []
-    require_topics: true
+    require_topics: false
     defaults:
       approval_mode: yolo
       approval_policy: on-request
@@ -235,6 +237,8 @@ hub:
       enabled: true
       scopes:
         - type: default
+          language_code: ""
+        - type: all_group_chats
           language_code: ""
     state_file: .codex-autorunner/telegram_state.json
     # Optional env var that contains the full app-server command.
