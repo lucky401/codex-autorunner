@@ -1307,6 +1307,15 @@ def _strip_user_message_begin(text: Optional[str]) -> Optional[str]:
     return stripped if stripped != text else text
 
 
+def _sanitize_user_preview(text: Optional[str]) -> Optional[str]:
+    if not isinstance(text, str):
+        return text
+    stripped = _strip_user_message_begin(text)
+    if _is_ignored_first_user_preview(stripped):
+        return None
+    return stripped
+
+
 def _github_preview_matcher(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str) or not text.strip():
         return None
@@ -1520,7 +1529,9 @@ def _extract_rollout_preview(path: Path) -> tuple[Optional[str], Optional[str]]:
             if role == "assistant" and last_assistant is None:
                 last_assistant = text
             elif role == "user" and last_user is None:
-                last_user = text
+                sanitized = _sanitize_user_preview(text)
+                if sanitized:
+                    last_user = sanitized
             if last_user and last_assistant:
                 return last_user, last_assistant
     return last_user, last_assistant
@@ -1571,7 +1582,9 @@ def _extract_turns_preview(turns: Any) -> tuple[Optional[str], Optional[str]]:
                     if role == "assistant" and last_assistant is None:
                         last_assistant = text
                     elif role == "user" and last_user is None:
-                        last_user = text
+                        sanitized = _sanitize_user_preview(text)
+                        if sanitized:
+                            last_user = sanitized
                     if last_user and last_assistant:
                         return last_user, last_assistant
     return last_user, last_assistant
@@ -1631,6 +1644,7 @@ def _extract_thread_preview_parts(entry: Any) -> tuple[Optional[str], Optional[s
         "responsePreview",
     )
     user_preview = _coerce_preview_field(entry, user_preview_keys)
+    user_preview = _sanitize_user_preview(user_preview)
     assistant_preview = _coerce_preview_field(entry, assistant_preview_keys)
     turns = entry.get("turns")
     if turns and (not user_preview or not assistant_preview):
@@ -1651,7 +1665,7 @@ def _extract_thread_preview_parts(entry: Any) -> tuple[Optional[str], Optional[s
     if user_preview is None:
         preview = entry.get("preview")
         if isinstance(preview, str) and preview.strip():
-            user_preview = preview.strip()
+            user_preview = _sanitize_user_preview(preview.strip())
     if user_preview:
         user_preview = _truncate_text(
             _normalize_preview_text(user_preview), RESUME_PREVIEW_USER_LIMIT
@@ -1691,6 +1705,7 @@ def _extract_thread_resume_parts(entry: Any) -> tuple[Optional[str], Optional[st
         "responsePreview",
     )
     user_preview = _coerce_preview_field_raw(entry, user_preview_keys)
+    user_preview = _sanitize_user_preview(user_preview)
     assistant_preview = _coerce_preview_field_raw(entry, assistant_preview_keys)
     turns = entry.get("turns")
     if turns and (not user_preview or not assistant_preview):
@@ -1711,7 +1726,7 @@ def _extract_thread_resume_parts(entry: Any) -> tuple[Optional[str], Optional[st
     if user_preview is None:
         preview = entry.get("preview")
         if isinstance(preview, str) and preview.strip():
-            user_preview = preview
+            user_preview = _sanitize_user_preview(preview)
     if assistant_preview and _is_no_agent_response(assistant_preview):
         assistant_preview = None
     return user_preview, assistant_preview
