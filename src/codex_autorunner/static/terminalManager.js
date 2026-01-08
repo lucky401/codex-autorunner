@@ -37,6 +37,7 @@ const XTERM_COLOR_MODE_RGB = 0x03000000;
 
 const CAR_CONTEXT_HOOK_ID = "car_context";
 const GITHUB_CONTEXT_HOOK_ID = "github_context";
+const PROMPT_CONTEXT_HOOK_ID = "prompt_context";
 const CAR_CONTEXT_KEYWORDS = [
   "car",
   "codex",
@@ -50,6 +51,19 @@ const CAR_CONTEXT_KEYWORDS = [
 ];
 const GITHUB_LINK_RE =
   /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/\d+(?:[/?#][^\s]*)?/i;
+const PROMPT_CONTEXT_RE = /\bprompt\b/i;
+const PROMPT_CONTEXT_HINT =
+  "If the user asks to write a prompt, put the prompt in a ```code block```.";
+const INJECTED_CONTEXT_TAG_RE = /<injected context>/i;
+
+function wrapInjectedContext(text) {
+  return `<injected context>\n${text}\n</injected context>`;
+}
+
+function wrapInjectedContextIfNeeded(text) {
+  if (!text) return text;
+  return INJECTED_CONTEXT_TAG_RE.test(text) ? text : wrapInjectedContext(text);
+}
 
 const LEGACY_SESSION_STORAGE_KEY = "codex_terminal_session_id";
 const SESSION_STORAGE_PREFIX = "codex_terminal_session_id:";
@@ -236,6 +250,7 @@ export class TerminalManager {
 
     this._registerTextInputHook(this._buildCarContextHook());
     this._registerTextInputHook(this._buildGithubContextHook());
+    this._registerTextInputHook(this._buildPromptContextHook());
 
     // Bind methods that are used as callbacks
     this._handleResize = this._handleResize.bind(this);
@@ -480,8 +495,9 @@ export class TerminalManager {
         if (lowered.includes("about_car.md")) return null;
 
         manager._markTextInputHookFired(CAR_CONTEXT_HOOK_ID);
-        const injection =
-          "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules.";
+        const injection = wrapInjectedContextIfNeeded(
+          "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules."
+        );
         const separator = text.endsWith("\n") ? "\n" : "\n\n";
         return { text: `${text}${separator}${injection}` };
       },
@@ -501,11 +517,26 @@ export class TerminalManager {
             body: { url: match[0] },
           });
           if (!res || !res.injected || !res.hint) return null;
+          const injection = wrapInjectedContextIfNeeded(res.hint);
           const separator = text.endsWith("\n") ? "\n" : "\n\n";
-          return { text: `${text}${separator}${res.hint}` };
+          return { text: `${text}${separator}${injection}` };
         } catch (_err) {
           return null;
         }
+      },
+    };
+  }
+
+  _buildPromptContextHook() {
+    return {
+      id: PROMPT_CONTEXT_HOOK_ID,
+      apply: ({ text }) => {
+        if (!text || !text.trim()) return null;
+        if (!PROMPT_CONTEXT_RE.test(text)) return null;
+        if (text.includes(PROMPT_CONTEXT_HINT)) return null;
+        const injection = wrapInjectedContextIfNeeded(PROMPT_CONTEXT_HINT);
+        const separator = text.endsWith("\n") ? "\n" : "\n\n";
+        return { text: `${text}${separator}${injection}` };
       },
     };
   }

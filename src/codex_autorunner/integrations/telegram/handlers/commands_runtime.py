@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import secrets
 import shlex
 import time
@@ -129,6 +130,18 @@ from ..types import (
 
 if TYPE_CHECKING:
     from ..state import TelegramTopicRecord
+
+
+INJECTED_CONTEXT_START = "<injected context>"
+INJECTED_CONTEXT_END = "</injected context>"
+PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
+PROMPT_CONTEXT_HINT = (
+    "If the user asks to write a prompt, put the prompt in a ```code block```."
+)
+
+
+def _wrap_injected_context(text: str) -> str:
+    return f"{INJECTED_CONTEXT_START}\n{text}\n{INJECTED_CONTEXT_END}"
 
 
 class TelegramCommandHandlers:
@@ -635,6 +648,16 @@ class TelegramCommandHandlers:
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
+        prompt_text, injected = self._maybe_inject_prompt_context(prompt_text)
+        if injected:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.prompt_context.injected",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+            )
         try:
             if not thread_id:
                 workspace_path = record.workspace_path
@@ -984,6 +1007,17 @@ class TelegramCommandHandlers:
             repo_root=str(repo_root),
         )
         return prompt_text, False
+
+    def _maybe_inject_prompt_context(self, prompt_text: str) -> tuple[str, bool]:
+        if not prompt_text or not prompt_text.strip():
+            return prompt_text, False
+        if PROMPT_CONTEXT_HINT in prompt_text:
+            return prompt_text, False
+        if not PROMPT_CONTEXT_RE.search(prompt_text):
+            return prompt_text, False
+        separator = "\n" if prompt_text.endswith("\n") else "\n\n"
+        injection = _wrap_injected_context(PROMPT_CONTEXT_HINT)
+        return f"{prompt_text}{separator}{injection}", True
 
     async def _handle_image_message(
         self,

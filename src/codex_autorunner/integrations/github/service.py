@@ -103,6 +103,10 @@ def _get_nested(d: Any, *keys: str, default: Any = None) -> Any:
     return cur if cur is not None else default
 
 
+def _wrap_injected_context(text: str) -> str:
+    return f"<injected context>\n{text}\n</injected context>"
+
+
 def _run_codex_sync_agent(
     *,
     repo_root: Path,
@@ -537,7 +541,7 @@ class GitHubService:
         abs_path = self.repo_root / rel_path
         atomic_write(abs_path, "\n".join(lines).rstrip() + "\n")
 
-        hint = (
+        hint = _wrap_injected_context(
             "Context: see "
             f"{rel_path.as_posix()} "
             "(gh available: true; use gh CLI for updates if asked)."
