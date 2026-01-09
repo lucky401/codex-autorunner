@@ -269,4 +269,15 @@ class TelegramMessageTransport:
     ) -> None:
         if callback is None:
             return
-        await self._bot.answer_callback_query(callback.callback_id, text=text)
+        try:
+            await self._bot.answer_callback_query(callback.callback_id, text=text)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.answer_callback.failed",
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+                callback_id=callback.callback_id,
+                exc=exc,
+            )
