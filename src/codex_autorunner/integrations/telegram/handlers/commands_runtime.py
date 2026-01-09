@@ -3848,12 +3848,19 @@ class TelegramCommandHandlers:
             state.summary_text,
         )
         if not success:
-            await self._edit_message_text(
+            edited = await self._edit_message_text(
                 callback.chat_id,
                 state.message_id,
                 f"{state.display_text}\n\nFailed to start new thread with summary.",
                 reply_markup=None,
             )
+            if not edited:
+                await self._send_message(
+                    callback.chat_id,
+                    "Failed to start new thread with summary.",
+                    thread_id=callback.thread_id,
+                    reply_to=callback.message_id,
+                )
             if failure_message:
                 await self._send_message(
                     callback.chat_id,
@@ -3861,12 +3868,19 @@ class TelegramCommandHandlers:
                     thread_id=callback.thread_id,
                 )
             return
-        await self._edit_message_text(
+        edited = await self._edit_message_text(
             callback.chat_id,
             state.message_id,
             f"{state.display_text}\n\nStarted a new thread with this summary.",
             reply_markup=None,
         )
+        if not edited:
+            await self._send_message(
+                callback.chat_id,
+                "Started a new thread with this summary.",
+                thread_id=callback.thread_id,
+                reply_to=callback.message_id,
+            )
 
     async def _handle_rollout(
         self, message: TelegramMessage, _args: str, _runtime: Any
