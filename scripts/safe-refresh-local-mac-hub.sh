@@ -17,6 +17,9 @@ set -euo pipefail
 #   UPDATE_TARGET          Which services to restart (both|web|telegram; default: both)
 #   PIPX_ROOT              pipx root (default: ~/.local/pipx)
 #   PIPX_VENV              existing pipx venv path (default: ${PIPX_ROOT}/venvs/codex-autorunner)
+#   PIPX_PYTHON            python used for new venvs (default: pyenv python3, then Homebrew)
+#   PYENV_PYTHON           override path used when pyenv is installed (optional)
+#   CONFIG_PYTHON_KEY      config key for python selection (default: refresh.python)
 #   CURRENT_VENV_LINK      symlink path used by launchd (default: ${PIPX_ROOT}/venvs/codex-autorunner.current)
 #   PREV_VENV_LINK         symlink path used for rollback (default: ${PIPX_ROOT}/venvs/codex-autorunner.prev)
 #   HEALTH_TIMEOUT_SECONDS seconds to wait for health (default: 30)
@@ -42,10 +45,11 @@ PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
 
 PIPX_ROOT="${PIPX_ROOT:-$HOME/.local/pipx}"
 PIPX_VENV="${PIPX_VENV:-$PIPX_ROOT/venvs/codex-autorunner}"
-PIPX_PYTHON="${PIPX_PYTHON:-$PIPX_VENV/bin/python}"
+PIPX_PYTHON="${PIPX_PYTHON:-}"
 CURRENT_VENV_LINK="${CURRENT_VENV_LINK:-$PIPX_ROOT/venvs/codex-autorunner.current}"
 PREV_VENV_LINK="${PREV_VENV_LINK:-$PIPX_ROOT/venvs/codex-autorunner.prev}"
 HELPER_PYTHON="${HELPER_PYTHON:-$PIPX_PYTHON}"
+CONFIG_PYTHON_KEY="${CONFIG_PYTHON_KEY:-refresh.python}"
 
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
 HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-0.5}"
@@ -130,7 +134,7 @@ normalize_bool() {
   esac
 }
 
-if [[ ! -x "${HELPER_PYTHON}" ]]; then
+if [[ -z "${HELPER_PYTHON}" || ! -x "${HELPER_PYTHON}" ]]; then
   if command -v python3 >/dev/null 2>&1; then
     HELPER_PYTHON="$(command -v python3)"
   elif command -v python >/dev/null 2>&1; then
@@ -140,6 +144,156 @@ fi
 
 if [[ ! -x "${HELPER_PYTHON}" ]]; then
   fail "Python not found (set PIPX_PYTHON or HELPER_PYTHON)."
+fi
+
+_plist_arg_value() {
+  local key
+  key="$1"
+  "${HELPER_PYTHON}" - "$key" "${PLIST_PATH}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+key = sys.argv[1]
+path = Path(sys.argv[2])
+try:
+    text = path.read_text(encoding="utf-8")
+except Exception:
+    sys.exit(0)
+
+pattern = re.compile(r"(?:--%s(?:=|\s+))([^\s<]+)" % re.escape(key))
+match = pattern.search(text)
+if not match:
+    sys.exit(0)
+
+value = match.group(1).strip("\"'")
+if value:
+    sys.stdout.write(value)
+PY
+}
+
+_config_python() {
+  local root key
+  root="$1"
+  key="$2"
+  "${HELPER_PYTHON}" - "$root" "$key" <<'PY'
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except Exception:
+    sys.exit(0)
+
+root = Path(sys.argv[1]).expanduser()
+key = sys.argv[2]
+config_path = root / ".codex-autorunner" / "config.yml"
+if not config_path.exists():
+    sys.exit(0)
+
+try:
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+except Exception:
+    sys.exit(0)
+
+if not isinstance(data, dict) or not key:
+    sys.exit(0)
+
+value = data
+for part in key.split("."):
+    if not isinstance(value, dict):
+        value = None
+        break
+    value = value.get(part)
+if isinstance(value, str) and value.strip():
+    sys.stdout.write(value.strip())
+PY
+}
+
+_resolve_pyenv_python() {
+  local candidate
+  if command -v pyenv >/dev/null 2>&1; then
+    candidate="$(pyenv which python3 2>/dev/null || true)"
+    if [[ -x "${candidate}" ]]; then
+      echo "${candidate}"
+      return 0
+    fi
+    candidate="$(pyenv which python 2>/dev/null || true)"
+    if [[ -x "${candidate}" ]]; then
+      echo "${candidate}"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+_resolve_config_python() {
+  local hub_root raw version candidate
+  hub_root="$(_plist_arg_value path)"
+  if [[ -z "${hub_root}" ]]; then
+    return 1
+  fi
+  raw="$(_config_python "${hub_root}" "${CONFIG_PYTHON_KEY}")"
+  if [[ -z "${raw}" ]]; then
+    return 1
+  fi
+  case "${raw}" in
+    pyenv)
+      _resolve_pyenv_python
+      return $?
+      ;;
+    pyenv:*)
+      version="${raw#pyenv:}"
+      if command -v pyenv >/dev/null 2>&1; then
+        candidate="$(PYENV_VERSION="${version}" pyenv which python3 2>/dev/null || true)"
+        if [[ -x "${candidate}" ]]; then
+          echo "${candidate}"
+          return 0
+        fi
+        candidate="$(PYENV_VERSION="${version}" pyenv which python 2>/dev/null || true)"
+        if [[ -x "${candidate}" ]]; then
+          echo "${candidate}"
+          return 0
+        fi
+      fi
+      return 1
+      ;;
+  esac
+  if [[ -x "${raw}" ]]; then
+    echo "${raw}"
+    return 0
+  fi
+  return 1
+}
+
+if [[ -z "${PIPX_PYTHON}" || ! -x "${PIPX_PYTHON}" ]]; then
+  PIPX_PYTHON="$(_resolve_config_python || true)"
+fi
+
+if [[ -z "${PIPX_PYTHON}" || ! -x "${PIPX_PYTHON}" ]]; then
+  if [[ -n "${PYENV_PYTHON:-}" && -x "${PYENV_PYTHON}" ]]; then
+    PIPX_PYTHON="${PYENV_PYTHON}"
+  fi
+fi
+
+if [[ -z "${PIPX_PYTHON}" || ! -x "${PIPX_PYTHON}" ]]; then
+  PIPX_PYTHON="$(_resolve_pyenv_python || true)"
+fi
+
+if [[ -z "${PIPX_PYTHON}" || ! -x "${PIPX_PYTHON}" ]]; then
+  if [[ -x "/opt/homebrew/bin/python3" ]]; then
+    PIPX_PYTHON="/opt/homebrew/bin/python3"
+  elif [[ -x "${PIPX_VENV}/bin/python" ]]; then
+    PIPX_PYTHON="${PIPX_VENV}/bin/python"
+  fi
+fi
+
+if [[ -z "${PIPX_PYTHON}" || ! -x "${PIPX_PYTHON}" ]]; then
+  fail "Unable to resolve a Python interpreter for pipx venv creation."
+fi
+
+if [[ -z "${HELPER_PYTHON}" || ! -x "${HELPER_PYTHON}" ]]; then
+  HELPER_PYTHON="${PIPX_PYTHON}"
 fi
 
 UPDATE_TARGET="$(normalize_update_target "${UPDATE_TARGET}")"
@@ -209,8 +363,8 @@ fi
 ts="$(date +%Y%m%d-%H%M%S)"
 next_venv="${PIPX_ROOT}/venvs/codex-autorunner.next-${ts}"
 
-echo "Creating staged venv at ${next_venv} (python: ${HELPER_PYTHON})..."
-"${HELPER_PYTHON}" -m venv "${next_venv}"
+echo "Creating staged venv at ${next_venv} (python: ${PIPX_PYTHON})..."
+"${PIPX_PYTHON}" -m venv "${next_venv}"
 "${next_venv}/bin/python" -m pip -q install --upgrade pip
 
 echo "Installing codex-autorunner from ${PACKAGE_SRC} into staged venv..."
@@ -344,32 +498,6 @@ _reload_telegram() {
   launchctl unload -w "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
   launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
   launchctl kickstart -k "${telegram_domain}" >/dev/null
-}
-
-_plist_arg_value() {
-  local key
-  key="$1"
-  "${HELPER_PYTHON}" - "$key" "${PLIST_PATH}" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-key = sys.argv[1]
-path = Path(sys.argv[2])
-try:
-    text = path.read_text(encoding="utf-8")
-except Exception:
-    sys.exit(0)
-
-pattern = re.compile(r"(?:--%s(?:=|\s+))([^\s<]+)" % re.escape(key))
-match = pattern.search(text)
-if not match:
-    sys.exit(0)
-
-value = match.group(1).strip("\"'")
-if value:
-    sys.stdout.write(value)
-PY
 }
 
 _telegram_state() {

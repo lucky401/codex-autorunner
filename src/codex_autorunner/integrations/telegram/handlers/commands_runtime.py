@@ -3783,7 +3783,7 @@ class TelegramCommandHandlers:
         callback: TelegramCallbackQuery,
         parsed: CompactCallback,
     ) -> None:
-        async def _send_compact_status(text: str) -> None:
+        async def _send_compact_status(text: str) -> bool:
             try:
                 await self._send_message(
                     callback.chat_id,
@@ -3791,12 +3791,15 @@ class TelegramCommandHandlers:
                     thread_id=callback.thread_id,
                     reply_to=callback.message_id,
                 )
+                return True
             except Exception:
                 await self._send_message(
                     callback.chat_id,
                     text,
                     thread_id=callback.thread_id,
                 )
+                return True
+            return False
 
         state = self._compact_pending.get(key)
         if not state or callback.message_id != state.message_id:
@@ -3847,6 +3850,14 @@ class TelegramCommandHandlers:
             f"{state.display_text}\n\nApplying summary...",
             reply_markup=None,
         )
+        status = self._write_compact_status(
+            "running",
+            "Applying summary...",
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            message_id=state.message_id,
+            display_text=state.display_text,
+        )
         if not edited:
             await _send_compact_status("Applying summary...")
         message = TelegramMessage(
@@ -3865,14 +3876,25 @@ class TelegramCommandHandlers:
             state.summary_text,
         )
         if not success:
+            status = self._write_compact_status(
+                "error",
+                failure_message or "Failed to start new thread with summary.",
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+                message_id=state.message_id,
+                display_text=state.display_text,
+                error_detail=failure_message,
+            )
             edited = await self._edit_message_text(
                 callback.chat_id,
                 state.message_id,
                 f"{state.display_text}\n\nFailed to start new thread with summary.",
                 reply_markup=None,
             )
-            if not edited:
-                await _send_compact_status("Failed to start new thread with summary.")
+            if edited:
+                self._mark_compact_notified(status)
+            elif await _send_compact_status("Failed to start new thread with summary."):
+                self._mark_compact_notified(status)
             if failure_message:
                 await self._send_message(
                     callback.chat_id,
@@ -3880,14 +3902,24 @@ class TelegramCommandHandlers:
                     thread_id=callback.thread_id,
                 )
             return
+        status = self._write_compact_status(
+            "ok",
+            "Summary applied.",
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            message_id=state.message_id,
+            display_text=state.display_text,
+        )
         edited = await self._edit_message_text(
             callback.chat_id,
             state.message_id,
             f"{state.display_text}\n\nSummary applied.",
             reply_markup=None,
         )
-        if not edited:
-            await _send_compact_status("Summary applied.")
+        if edited:
+            self._mark_compact_notified(status)
+        elif await _send_compact_status("Summary applied."):
+            self._mark_compact_notified(status)
 
     async def _handle_rollout(
         self, message: TelegramMessage, _args: str, _runtime: Any
@@ -4210,6 +4242,51 @@ class TelegramCommandHandlers:
                 exc=exc,
             )
 
+    def _compact_status_path(self) -> Path:
+        return Path.home() / ".codex-autorunner" / "compact_status.json"
+
+    def _read_compact_status(self) -> Optional[dict[str, Any]]:
+        path = self._compact_status_path()
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _write_compact_status(
+        self, status: str, message: str, **extra: Any
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"status": status, "message": message, "at": time.time()}
+        payload.update(extra)
+        path = self._compact_status_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.compact.status_write_failed",
+                exc=exc,
+            )
+        return payload
+
+    def _mark_compact_notified(self, status: dict[str, Any]) -> None:
+        path = self._compact_status_path()
+        updated = dict(status)
+        updated["notify_sent_at"] = time.time()
+        try:
+            path.write_text(json.dumps(updated), encoding="utf-8")
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.compact.notify_write_failed",
+                exc=exc,
+            )
+
     async def _maybe_send_update_status_notice(self) -> None:
         status = self._read_update_status()
         if not status:
@@ -4238,6 +4315,62 @@ class TelegramCommandHandlers:
             reply_to=notify_reply_to,
         )
         self._mark_update_notified(status)
+
+    async def _maybe_send_compact_status_notice(self) -> None:
+        status = self._read_compact_status()
+        if not status or status.get("notify_sent_at"):
+            return
+        chat_id = status.get("chat_id")
+        if not isinstance(chat_id, int):
+            return
+        thread_id = status.get("thread_id")
+        if not isinstance(thread_id, int):
+            thread_id = None
+        message_id = status.get("message_id")
+        if not isinstance(message_id, int):
+            message_id = None
+        display_text = status.get("display_text")
+        if not isinstance(display_text, str):
+            display_text = None
+        state = str(status.get("status") or "")
+        message = str(status.get("message") or "")
+        if state == "running":
+            message = "Compact apply interrupted by restart. Please retry."
+            status = self._write_compact_status(
+                "interrupted",
+                message,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                message_id=message_id,
+                display_text=display_text,
+                started_at=status.get("at"),
+            )
+        sent = False
+        if message_id is not None and display_text is not None and message:
+            edited = await self._edit_message_text(
+                chat_id,
+                message_id,
+                f"{display_text}\n\n{message}",
+                reply_markup=None,
+            )
+            sent = edited
+        if not sent and message:
+            try:
+                await self._send_message(
+                    chat_id,
+                    message,
+                    thread_id=thread_id,
+                    reply_to=message_id,
+                )
+                sent = True
+            except Exception:
+                try:
+                    await self._send_message(chat_id, message, thread_id=thread_id)
+                    sent = True
+                except Exception:
+                    sent = False
+        if sent:
+            self._mark_compact_notified(status)
 
     async def _handle_update(
         self, message: TelegramMessage, args: str, _runtime: Any

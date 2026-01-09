@@ -393,6 +393,15 @@ class TelegramBotService(
                     "telegram.update.notify_failed",
                     exc=exc,
                 )
+            try:
+                await self._maybe_send_compact_status_notice()
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.compact.notify_failed",
+                    exc=exc,
+                )
             while True:
                 updates = []
                 try:
