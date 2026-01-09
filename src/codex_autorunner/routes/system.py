@@ -99,9 +99,21 @@ def _read_update_status() -> Optional[dict[str, object]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
-    if isinstance(payload, dict):
-        return payload
-    return None
+    if not isinstance(payload, dict):
+        return None
+    status = payload.get("status")
+    if status in ("running", "spawned") and _update_lock_active() is None:
+        _write_update_status(
+            "error",
+            "Update not running; last update may have crashed.",
+            previous_status=status,
+        )
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+    return payload
 
 
 def _update_lock_path() -> Path:
