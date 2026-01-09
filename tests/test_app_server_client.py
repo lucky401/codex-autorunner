@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.app_server_client import CodexAppServerClient
+from codex_autorunner.integrations.app_server.client import CodexAppServerClient
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
 

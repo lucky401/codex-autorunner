@@ -2,7 +2,7 @@ import types
 
 import pytest
 
-from codex_autorunner.telegram_adapter import (
+from codex_autorunner.integrations.telegram.adapter import (
     TELEGRAM_MAX_MESSAGE_LENGTH,
     ApprovalCallback,
     BindCallback,

@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp
 
-from ..api_routes import build_repo_router
+from ..routes import build_repo_router
 from ..core.config import ConfigError, HubConfig, _normalize_base_path, load_config
 from ..core.doc_chat import DocChatService
 from ..core.engine import Engine, LockError

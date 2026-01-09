@@ -2,7 +2,7 @@ import threading
 import time
 from pathlib import Path
 
-from codex_autorunner.state import state_lock
+from codex_autorunner.core.state import state_lock
 
 
 def test_state_lock_blocks_until_release(tmp_path: Path) -> None:

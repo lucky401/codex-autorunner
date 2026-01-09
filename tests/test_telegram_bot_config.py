@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.telegram_bot import (
+from codex_autorunner.integrations.telegram.config import (
     DEFAULT_APP_SERVER_COMMAND,
     TelegramBotConfig,
     TelegramBotConfigError,

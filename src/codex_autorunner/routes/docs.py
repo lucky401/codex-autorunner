@@ -16,7 +16,7 @@ from ..core.doc_chat import (
     _normalize_kind,
 )
 from ..core.utils import atomic_write
-from ..snapshot import (
+from ..core.snapshot import (
     SnapshotError,
     generate_snapshot,
     load_snapshot,
@@ -28,7 +28,7 @@ from ..spec_ingest import (
     generate_docs_from_spec,
     write_ingested_docs,
 )
-from ..usage import (
+from ..core.usage import (
     UsageError,
     default_codex_home,
     get_repo_usage_series_cached,

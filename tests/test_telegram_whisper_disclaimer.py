@@ -1,11 +1,11 @@
 import asyncio
 from pathlib import Path
 
-from codex_autorunner.telegram_bot import (
+from codex_autorunner.integrations.telegram.config import TelegramBotConfig
+from codex_autorunner.integrations.telegram.constants import (
     WHISPER_TRANSCRIPT_DISCLAIMER,
-    TelegramBotConfig,
-    TelegramBotService,
 )
+from codex_autorunner.integrations.telegram.service import TelegramBotService
 from codex_autorunner.voice import VoiceConfig
 
 

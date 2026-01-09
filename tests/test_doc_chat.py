@@ -6,9 +6,9 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from codex_autorunner.config import DEFAULT_CONFIG
-from codex_autorunner.doc_chat import DocChatRequest, DocChatService
-from codex_autorunner.engine import Engine
+from codex_autorunner.core.config import DEFAULT_CONFIG
+from codex_autorunner.core.doc_chat import DocChatRequest, DocChatService
+from codex_autorunner.core.engine import Engine
 from codex_autorunner.server import create_app
 
 

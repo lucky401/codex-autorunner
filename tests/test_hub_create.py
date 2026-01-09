@@ -6,8 +6,8 @@ import yaml
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
-from codex_autorunner.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG, load_config
-from codex_autorunner.hub import HubSupervisor
+from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG, load_config
+from codex_autorunner.core.hub import HubSupervisor
 
 
 def _write_config(path: Path, data: dict) -> None:

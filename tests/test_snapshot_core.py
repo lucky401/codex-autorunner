@@ -1,8 +1,8 @@
 from pathlib import Path
 
 from codex_autorunner.bootstrap import seed_repo_files
-from codex_autorunner.engine import Engine
-from codex_autorunner.snapshot import (
+from codex_autorunner.core.engine import Engine
+from codex_autorunner.core.snapshot import (
     collect_seed_context,
     redact_text,
 )

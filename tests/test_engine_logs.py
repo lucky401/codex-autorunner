@@ -1,4 +1,4 @@
-from codex_autorunner.engine import Engine
+from codex_autorunner.core.engine import Engine
 
 
 def test_engine_reads_run_log_file(repo):

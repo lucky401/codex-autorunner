@@ -26,7 +26,7 @@ def test_get_snapshot_when_missing(repo: Path) -> None:
 def test_post_snapshot_persists_and_loads(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from codex_autorunner import snapshot as snapshot_mod
+    from codex_autorunner.core import snapshot as snapshot_mod
 
     monkeypatch.setattr(
         snapshot_mod, "_run_codex", lambda *a, **k: "# Snapshot\n\nHello\n"
@@ -49,7 +49,7 @@ def test_post_snapshot_persists_and_loads(
 def test_post_snapshot_ignores_legacy_params(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from codex_autorunner import snapshot as snapshot_mod
+    from codex_autorunner.core import snapshot as snapshot_mod
 
     monkeypatch.setattr(
         snapshot_mod, "_run_codex", lambda *a, **k: "# Snapshot\n\nHi\n"

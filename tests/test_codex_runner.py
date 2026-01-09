@@ -7,8 +7,8 @@ from codex_autorunner.codex_runner import (
     build_codex_command,
     run_codex_capture_async,
 )
-from codex_autorunner.config import ConfigError
-from codex_autorunner.engine import Engine
+from codex_autorunner.core.config import ConfigError
+from codex_autorunner.core.engine import Engine
 
 
 def test_build_codex_command_missing_binary(repo):

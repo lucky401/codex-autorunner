@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.github import GitHubService, parse_github_url
+from codex_autorunner.integrations.github.service import GitHubService, parse_github_url
 
 
 def _fixture(path: str) -> dict:

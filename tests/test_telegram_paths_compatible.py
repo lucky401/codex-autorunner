@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from codex_autorunner.telegram_bot import _paths_compatible
+from codex_autorunner.integrations.telegram.helpers import _paths_compatible
 
 
 def _make_repo(path: Path) -> None:

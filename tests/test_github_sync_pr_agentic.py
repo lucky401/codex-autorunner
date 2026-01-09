@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.github import GitHubError, GitHubService
+from codex_autorunner.integrations.github.service import GitHubError, GitHubService
 
 
 def _ok_completed(

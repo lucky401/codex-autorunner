@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from codex_autorunner.lock_utils import read_lock_info, write_lock_info
+from codex_autorunner.core.locks import read_lock_info, write_lock_info
 
 
 def test_read_lock_info_pid_text(tmp_path: Path) -> None:

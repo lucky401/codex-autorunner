@@ -5,8 +5,9 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.telegram_adapter import TelegramMessage
-from codex_autorunner.telegram_bot import TelegramBotConfig, TelegramBotService
+from codex_autorunner.integrations.telegram.adapter import TelegramMessage
+from codex_autorunner.integrations.telegram.config import TelegramBotConfig
+from codex_autorunner.integrations.telegram.service import TelegramBotService
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
 

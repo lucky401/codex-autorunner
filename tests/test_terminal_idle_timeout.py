@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from codex_autorunner.config import (
+from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_REPO_CONFIG,
     ConfigError,

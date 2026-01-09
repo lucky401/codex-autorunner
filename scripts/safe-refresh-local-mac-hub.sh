@@ -215,11 +215,11 @@ echo "Smoke-checking telegram module..."
 import importlib.util
 import py_compile
 
-spec = importlib.util.find_spec("codex_autorunner.telegram_bot")
+spec = importlib.util.find_spec("codex_autorunner.integrations.telegram.service")
 if spec is None or spec.origin is None:
-    raise SystemExit("telegram_bot module not found in staged venv")
+    raise SystemExit("telegram service module not found in staged venv")
 py_compile.compile(spec.origin, doraise=True)
-print("telegram_bot ok")
+print("telegram service ok")
 PY
 
 domain="gui/$(id -u)/${LABEL}"

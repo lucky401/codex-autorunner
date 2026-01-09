@@ -3,7 +3,7 @@ from pathlib import Path
 import yaml
 
 from codex_autorunner.bootstrap import write_repo_config
-from codex_autorunner.config import CONFIG_FILENAME, load_config
+from codex_autorunner.core.config import CONFIG_FILENAME, load_config
 
 
 def _write_yaml(path: Path, payload: dict) -> None:

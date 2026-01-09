@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.bootstrap import seed_repo_files
-from codex_autorunner.engine import Engine
-from codex_autorunner.snapshot import (
+from codex_autorunner.core.engine import Engine
+from codex_autorunner.core.snapshot import (
     SeedContext,
     generate_snapshot,
     summarize_changes,
@@ -100,7 +100,7 @@ def test_summarize_changes_falls_back_to_seed_hash_diffs(repo: Path) -> None:
 
 
 def test_generate_snapshot_persists_state(repo: Path, monkeypatch) -> None:
-    from codex_autorunner import snapshot as snapshot_mod
+    from codex_autorunner.core import snapshot as snapshot_mod
 
     def _fake_run_codex(*_args, **_kwargs) -> str:
         return "# Repo Snapshot\n\n" + ("a" * 500)

@@ -8,7 +8,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_repo_files
-from codex_autorunner.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.server import create_hub_app
 
 

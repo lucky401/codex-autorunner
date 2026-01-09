@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from codex_autorunner.telegram_state import TelegramStateStore
+from codex_autorunner.integrations.telegram.state import TelegramStateStore
 
 
 def test_telegram_state_global_update_id(tmp_path: Path) -> None:

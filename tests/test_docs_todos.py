@@ -1,4 +1,4 @@
-from codex_autorunner.docs import parse_todos
+from codex_autorunner.core.docs import parse_todos
 
 
 def test_parse_todos_collects_outstanding_and_done() -> None:
