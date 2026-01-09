@@ -73,6 +73,21 @@ def _update_status_path() -> Path:
 def _write_update_status(status: str, message: str, **extra) -> None:
     payload = {"status": status, "message": message, "at": time.time(), **extra}
     path = _update_status_path()
+    existing = None
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            existing = None
+    if isinstance(existing, dict):
+        for key in (
+            "notify_chat_id",
+            "notify_thread_id",
+            "notify_reply_to",
+            "notify_sent_at",
+        ):
+            if key not in payload and key in existing:
+                payload[key] = existing[key]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -511,6 +526,9 @@ def _spawn_update_process(
     update_dir: Path,
     logger: logging.Logger,
     update_target: str = "both",
+    notify_chat_id: Optional[int] = None,
+    notify_thread_id: Optional[int] = None,
+    notify_reply_to: Optional[int] = None,
 ) -> None:
     active = _update_lock_active()
     if active:
@@ -527,6 +545,10 @@ def _spawn_update_process(
         repo_ref=repo_ref,
         update_target=update_target,
         log_path=str(log_path),
+        notify_chat_id=notify_chat_id,
+        notify_thread_id=notify_thread_id,
+        notify_reply_to=notify_reply_to,
+        notify_sent_at=None,
     )
     cmd = [
         sys.executable,

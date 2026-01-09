@@ -384,6 +384,15 @@ class TelegramBotService(
                 media_voice=self._config.media.voice,
                 poller_offset=self._poller.offset,
             )
+            try:
+                await self._maybe_send_update_status_notice()
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.update.notify_failed",
+                    exc=exc,
+                )
             while True:
                 updates = []
                 try:

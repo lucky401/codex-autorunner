@@ -3825,6 +3825,13 @@ class TelegramCommandHandlers:
             return
         if callback.chat_id is None:
             return
+        await self._answer_callback(callback, "Starting new thread...")
+        await self._edit_message_text(
+            callback.chat_id,
+            state.message_id,
+            f"{state.display_text}\n\nStarting a new thread with this summary...",
+            reply_markup=None,
+        )
         message = TelegramMessage(
             update_id=callback.update_id,
             message_id=callback.message_id or 0,
@@ -3853,7 +3860,6 @@ class TelegramCommandHandlers:
                     failure_message,
                     thread_id=callback.thread_id,
                 )
-            await self._answer_callback(callback, "Failed")
             return
         await self._edit_message_text(
             callback.chat_id,
@@ -3861,7 +3867,6 @@ class TelegramCommandHandlers:
             f"{state.display_text}\n\nStarted a new thread with this summary.",
             reply_markup=None,
         )
-        await self._answer_callback(callback, "Started")
 
     async def _handle_rollout(
         self, message: TelegramMessage, _args: str, _runtime: Any
@@ -3991,6 +3996,9 @@ class TelegramCommandHandlers:
         if not repo_ref:
             repo_ref = DEFAULT_UPDATE_REPO_REF
         update_dir = Path.home() / ".codex-autorunner" / "update_cache"
+        notify_reply_to = reply_to
+        if notify_reply_to is None and callback is not None:
+            notify_reply_to = callback.message_id
         try:
             _spawn_update_process(
                 repo_url=repo_url,
@@ -3998,6 +4006,9 @@ class TelegramCommandHandlers:
                 update_dir=update_dir,
                 logger=self._logger,
                 update_target=update_target,
+                notify_chat_id=chat_id,
+                notify_thread_id=thread_id,
+                notify_reply_to=notify_reply_to,
             )
             log_event(
                 self._logger,
@@ -4148,7 +4159,7 @@ class TelegramCommandHandlers:
             deadline = time.monotonic() + timeout_seconds
             while time.monotonic() < deadline:
                 status = self._read_update_status()
-                if status and status.get("status") in ("ok", "error"):
+                if status and status.get("status") in ("ok", "error", "rollback"):
                     await self._send_message(
                         chat_id,
                         self._format_update_status_message(status),
@@ -4163,6 +4174,49 @@ class TelegramCommandHandlers:
             )
 
         asyncio.create_task(_watch())
+
+    def _mark_update_notified(self, status: dict[str, Any]) -> None:
+        path = self._update_status_path()
+        updated = dict(status)
+        updated["notify_sent_at"] = time.time()
+        try:
+            path.write_text(json.dumps(updated), encoding="utf-8")
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.update.notify_write_failed",
+                exc=exc,
+            )
+
+    async def _maybe_send_update_status_notice(self) -> None:
+        status = self._read_update_status()
+        if not status:
+            return
+        notify_chat_id = status.get("notify_chat_id")
+        if not isinstance(notify_chat_id, int):
+            return
+        if status.get("notify_sent_at"):
+            return
+        notify_thread_id = status.get("notify_thread_id")
+        if not isinstance(notify_thread_id, int):
+            notify_thread_id = None
+        notify_reply_to = status.get("notify_reply_to")
+        if not isinstance(notify_reply_to, int):
+            notify_reply_to = None
+        state = str(status.get("status") or "")
+        if state in ("running", "spawned"):
+            self._schedule_update_status_watch(notify_chat_id, notify_thread_id)
+            return
+        if state not in ("ok", "error", "rollback"):
+            return
+        await self._send_message(
+            notify_chat_id,
+            self._format_update_status_message(status),
+            thread_id=notify_thread_id,
+            reply_to=notify_reply_to,
+        )
+        self._mark_update_notified(status)
 
     async def _handle_update(
         self, message: TelegramMessage, args: str, _runtime: Any
