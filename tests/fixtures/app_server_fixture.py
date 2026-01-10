@@ -140,6 +140,24 @@ class FixtureServer:
                     }
                 )
                 return
+            if self._scenario == "thread_list_compact_seed":
+                entry = {
+                    "id": "thread-compact",
+                    "first_user_message": (
+                        "Context handoff from previous thread:\n\n"
+                        "Goals: Fix resume labels\n\n"
+                        "Continue from this context. Ask for missing info if needed."
+                    ),
+                    "last_user_message": "Latest user request",
+                    "last_assistant_message": "Latest assistant reply",
+                }
+                self.send(
+                    {
+                        "id": req_id,
+                        "result": {"threads": [entry], "nextCursor": None},
+                    }
+                )
+                return
             cwd = params.get("cwd") if isinstance(params.get("cwd"), str) else None
             entry = {
                 "id": "thread-seed",

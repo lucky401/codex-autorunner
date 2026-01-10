@@ -452,6 +452,32 @@ async def test_resume_refresh_updates_cached_preview(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_resume_compact_seed_button_label_is_condensed(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("thread_list_compact_seed"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    resume_message = build_message("/resume", message_id=11)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_resume(resume_message, "--all")
+    finally:
+        await service._app_server_supervisor.close_all()
+    resume_msg = next(
+        msg for msg in fake_bot.messages if "Select a thread to resume" in msg["text"]
+    )
+    keyboard = resume_msg["reply_markup"]["inline_keyboard"]
+    labels = [button["text"] for row in keyboard for button in row if "text" in button]
+    assert any("Compacted:" in label for label in labels)
+    assert all("Context handoff from previous thread" not in label for label in labels)
+
+
+@pytest.mark.anyio
 async def test_resume_paginates_thread_list(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

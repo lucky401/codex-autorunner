@@ -1332,7 +1332,65 @@ def _github_preview_matcher(text: Optional[str]) -> Optional[str]:
     return None
 
 
+COMPACT_SEED_PREFIX = "Context handoff from previous thread:"
+COMPACT_SEED_SUFFIX = "Continue from this context. Ask for missing info if needed."
+
+
+def _strip_list_marker(text: str) -> str:
+    if text.startswith("- "):
+        return text[2:].strip()
+    if text.startswith("* "):
+        return text[2:].strip()
+    return text
+
+
+def _compact_seed_summary(text: Optional[str]) -> Optional[str]:
+    if not isinstance(text, str):
+        return None
+    prefix_idx = text.find(COMPACT_SEED_PREFIX)
+    if prefix_idx < 0:
+        return None
+    content = text[prefix_idx + len(COMPACT_SEED_PREFIX) :].lstrip()
+    suffix_idx = content.find(COMPACT_SEED_SUFFIX)
+    if suffix_idx >= 0:
+        content = content[:suffix_idx]
+    return content.strip() or None
+
+
+def _extract_compact_goal(summary: str) -> Optional[str]:
+    lines = summary.splitlines()
+    expecting_goal_line = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        if expecting_goal_line:
+            return _strip_list_marker(stripped)
+        if lowered.startswith("goals:") or lowered.startswith("goal:"):
+            after = stripped.split(":", 1)[1].strip()
+            if after:
+                return after
+            expecting_goal_line = True
+    return None
+
+
+def _compact_seed_preview_matcher(text: Optional[str]) -> Optional[str]:
+    summary = _compact_seed_summary(text)
+    if not summary:
+        return None
+    goal = _extract_compact_goal(summary)
+    if goal:
+        return f"Compacted: {goal}"
+    for line in summary.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return f"Compacted: {_strip_list_marker(stripped)}"
+    return "Compacted"
+
+
 SPECIAL_PREVIEW_MATCHERS: tuple[Callable[[Optional[str]], Optional[str]], ...] = (
+    _compact_seed_preview_matcher,
     _github_preview_matcher,
 )
 
