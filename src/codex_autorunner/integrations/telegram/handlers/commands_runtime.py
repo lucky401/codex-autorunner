@@ -144,6 +144,14 @@ PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
 PROMPT_CONTEXT_HINT = (
     "If the user asks to write a prompt, put the prompt in a ```code block```."
 )
+OUTBOX_CONTEXT_RE = re.compile(
+    r"(?:\b(?:pdf|png|jpg|jpeg|gif|webp|svg|csv|tsv|json|yaml|yml|zip|tar|"
+    r"gz|tgz|xlsx|xls|docx|pptx|md|txt|log|html|xml)\b|"
+    r"\.(?:pdf|png|jpg|jpeg|gif|webp|svg|csv|tsv|json|yaml|yml|zip|tar|"
+    r"gz|tgz|xlsx|xls|docx|pptx|md|txt|log|html|xml)\b|"
+    r"\b(?:outbox)\b)",
+    re.IGNORECASE,
+)
 CAR_CONTEXT_KEYWORDS = (
     "car",
     "codex",
@@ -161,6 +169,8 @@ CAR_CONTEXT_HINT = (
 FILES_HINT_TEMPLATE = (
     "Inbox: {inbox}\n"
     "Outbox (pending): {outbox}\n"
+    "Topic key: {topic_key}\n"
+    "Topic dir: {topic_dir}\n"
     "Place files in outbox pending to send after this turn finishes.\n"
     "Check delivery with /files outbox.\n"
     "Max file size: {max_bytes} bytes."
@@ -798,6 +808,18 @@ class TelegramCommandHandlers:
                 thread_id=message.thread_id,
                 message_id=message.message_id,
             )
+        prompt_text, injected = self._maybe_inject_outbox_context(
+            prompt_text, record=record, topic_key=key
+        )
+        if injected:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.outbox_context.injected",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+            )
         try:
             if not thread_id:
                 if not allow_new_thread:
@@ -1208,6 +1230,34 @@ class TelegramCommandHandlers:
             return prompt_text, False
         separator = "\n" if prompt_text.endswith("\n") else "\n\n"
         injection = wrap_injected_context(CAR_CONTEXT_HINT)
+        return f"{prompt_text}{separator}{injection}", True
+
+    def _maybe_inject_outbox_context(
+        self,
+        prompt_text: str,
+        *,
+        record: "TelegramTopicRecord",
+        topic_key: str,
+    ) -> tuple[str, bool]:
+        if not prompt_text or not prompt_text.strip():
+            return prompt_text, False
+        if "Outbox (pending):" in prompt_text or "Inbox:" in prompt_text:
+            return prompt_text, False
+        if not OUTBOX_CONTEXT_RE.search(prompt_text):
+            return prompt_text, False
+        inbox_dir = self._files_inbox_dir(record.workspace_path, topic_key)
+        outbox_dir = self._files_outbox_pending_dir(record.workspace_path, topic_key)
+        topic_dir = self._files_topic_dir(record.workspace_path, topic_key)
+        separator = "\n" if prompt_text.endswith("\n") else "\n\n"
+        injection = wrap_injected_context(
+            FILES_HINT_TEMPLATE.format(
+                inbox=str(inbox_dir),
+                outbox=str(outbox_dir),
+                topic_key=topic_key,
+                topic_dir=str(topic_dir),
+                max_bytes=self._config.media.max_file_bytes,
+            )
+        )
         return f"{prompt_text}{separator}{injection}", True
 
     async def _handle_image_message(
@@ -1759,10 +1809,13 @@ class TelegramCommandHandlers:
         )
         inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
         outbox_dir = self._files_outbox_pending_dir(workspace_path, topic_key)
+        topic_dir = self._files_topic_dir(workspace_path, topic_key)
         hint = wrap_injected_context(
             FILES_HINT_TEMPLATE.format(
                 inbox=str(inbox_dir),
                 outbox=str(outbox_dir),
+                topic_key=topic_key,
+                topic_dir=str(topic_dir),
                 max_bytes=self._config.media.max_file_bytes,
             )
         )
