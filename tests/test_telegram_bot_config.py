@@ -4,6 +4,7 @@ import pytest
 
 from codex_autorunner.integrations.telegram.config import (
     DEFAULT_APP_SERVER_COMMAND,
+    DEFAULT_MEDIA_MAX_FILE_BYTES,
     TelegramBotConfig,
     TelegramBotConfigError,
 )
@@ -131,3 +132,19 @@ def test_telegram_bot_config_command_registration_defaults(tmp_path: Path) -> No
         "default",
         "all_group_chats",
     ]
+
+
+def test_telegram_bot_config_media_file_defaults(tmp_path: Path) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "123",
+    }
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+    assert cfg.media.files is True
+    assert cfg.media.max_file_bytes == DEFAULT_MEDIA_MAX_FILE_BYTES

@@ -10,7 +10,9 @@ def test_missing_optional_dependencies_reports_missing(monkeypatch) -> None:
     def fake_find_spec(name: str) -> object | None:
         return None if name == "missing" else object()
 
-    monkeypatch.setattr(optional_dependencies.importlib.util, "find_spec", fake_find_spec)
+    monkeypatch.setattr(
+        optional_dependencies.importlib.util, "find_spec", fake_find_spec
+    )
     missing = optional_dependencies.missing_optional_dependencies(
         [("missing", "Missing Dep"), ("ok", "Ok Dep")]
     )

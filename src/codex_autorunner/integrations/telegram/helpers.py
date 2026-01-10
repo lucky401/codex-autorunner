@@ -1422,7 +1422,9 @@ def _coerce_preview_field(entry: dict[str, Any], keys: Sequence[str]) -> Optiona
     return None
 
 
-def _coerce_preview_field_raw(entry: dict[str, Any], keys: Sequence[str]) -> Optional[str]:
+def _coerce_preview_field_raw(
+    entry: dict[str, Any], keys: Sequence[str]
+) -> Optional[str]:
     for key in keys:
         value = entry.get(key)
         if isinstance(value, str) and value.strip():

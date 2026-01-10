@@ -15,18 +15,11 @@ from ..core.doc_chat import (
     DocChatValidationError,
     _normalize_kind,
 )
-from ..core.utils import atomic_write
 from ..core.snapshot import (
     SnapshotError,
     generate_snapshot,
     load_snapshot,
     load_snapshot_state,
-)
-from ..spec_ingest import (
-    SpecIngestError,
-    clear_work_docs,
-    generate_docs_from_spec,
-    write_ingested_docs,
 )
 from ..core.usage import (
     UsageError,
@@ -34,6 +27,13 @@ from ..core.usage import (
     get_repo_usage_series_cached,
     parse_iso_datetime,
     summarize_repo_usage,
+)
+from ..core.utils import atomic_write
+from ..spec_ingest import (
+    SpecIngestError,
+    clear_work_docs,
+    generate_docs_from_spec,
+    write_ingested_docs,
 )
 from ..web.schemas import (
     DocChatPayload,

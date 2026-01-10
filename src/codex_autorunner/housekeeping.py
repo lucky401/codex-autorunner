@@ -6,7 +6,7 @@ import os
 import time
 from collections import deque
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional, Protocol, cast
 
 
 @dataclasses.dataclass(frozen=True)
@@ -77,9 +77,7 @@ def parse_housekeeping_config(raw: Optional[dict]) -> HousekeepingConfig:
                     kind=str(rule.get("kind", "directory")),
                     path=str(rule.get("path", "")),
                     glob=(
-                        str(rule.get("glob"))
-                        if rule.get("glob") is not None
-                        else None
+                        str(rule.get("glob")) if rule.get("glob") is not None else None
                     ),
                     recursive=bool(rule.get("recursive", False)),
                     max_files=_int_or_none(rule.get("max_files")),
@@ -341,7 +339,7 @@ def _truncate_lines(path: Path, max_lines: int, *, dry_run: bool) -> int:
         size = path.stat().st_size
     except OSError:
         return 0
-    lines = deque(maxlen=max_lines)
+    lines: deque[bytes] = deque(maxlen=max_lines)
     try:
         with path.open("rb") as handle:
             for line in handle:
@@ -384,18 +382,42 @@ def _prune_empty_dirs(base: Path) -> None:
 def _int_or_none(value: object) -> Optional[int]:
     if value is None:
         return None
-    try:
+    if isinstance(value, bool):
         return int(value)
-    except (TypeError, ValueError):
-        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _log_event(
     logger: logging.Logger, level: int, event: str, **fields: object
 ) -> None:
+    class _LogEvent(Protocol):
+        def __call__(
+            self,
+            logger: logging.Logger,
+            level: int,
+            event: str,
+            *,
+            exc: Optional[Exception] = None,
+            **fields: Any,
+        ) -> None: ...
+
+    raw_exc = fields.pop("exc", None)
+    exc_value = raw_exc if isinstance(raw_exc, Exception) else None
+    if raw_exc is not None and exc_value is None:
+        fields["exc_info"] = raw_exc
     try:
         from .core.logging_utils import log_event
     except Exception:
         logger.log(level, f"{event} {fields}")
         return
-    log_event(logger, level, event, **fields)
+    log_event_typed = cast(_LogEvent, log_event)
+    log_event_typed(logger, level, event, exc=exc_value, **fields)

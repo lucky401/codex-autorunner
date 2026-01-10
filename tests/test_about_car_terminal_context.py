@@ -1,8 +1,11 @@
 from pathlib import Path
 
-from codex_autorunner.core.about_car import ABOUT_CAR_GENERATED_MARKER, ABOUT_CAR_REL_PATH
-from codex_autorunner.routes.shared import build_codex_terminal_cmd
+from codex_autorunner.core.about_car import (
+    ABOUT_CAR_GENERATED_MARKER,
+    ABOUT_CAR_REL_PATH,
+)
 from codex_autorunner.core.engine import Engine
+from codex_autorunner.routes.shared import build_codex_terminal_cmd
 
 
 def test_about_car_is_seeded(repo: Path):

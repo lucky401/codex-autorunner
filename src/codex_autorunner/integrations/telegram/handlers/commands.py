@@ -52,6 +52,12 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             handlers._handle_status,
             allow_during_turn=True,
         ),
+        "files": CommandSpec(
+            "files",
+            "list or manage Telegram file inbox/outbox",
+            handlers._handle_files,
+            allow_during_turn=True,
+        ),
         "debug": CommandSpec(
             "debug",
             "show topic debug info",

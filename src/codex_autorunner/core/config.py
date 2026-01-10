@@ -120,8 +120,10 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "enabled": True,
             "images": True,
             "voice": True,
+            "files": True,
             "max_image_bytes": 10_000_000,
             "max_voice_bytes": 10_000_000,
+            "max_file_bytes": 10_000_000,
             "image_prompt": "Describe the image.",
         },
         "shell": {
@@ -227,6 +229,16 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 "max_age_days": 14,
             },
             {
+                "name": "telegram_files",
+                "kind": "directory",
+                "path": ".codex-autorunner/uploads/telegram-files",
+                "glob": "*",
+                "recursive": True,
+                "max_files": 500,
+                "max_total_bytes": 500_000_000,
+                "max_age_days": 14,
+            },
+            {
                 "name": "github_context",
                 "kind": "directory",
                 "path": ".codex-autorunner/github_context",
@@ -273,8 +285,10 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "enabled": True,
             "images": True,
             "voice": True,
+            "files": True,
             "max_image_bytes": 10_000_000,
             "max_voice_bytes": 10_000_000,
+            "max_file_bytes": 10_000_000,
             "image_prompt": "Describe the image.",
         },
         "shell": {
@@ -363,6 +377,16 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
                 "path": ".codex-autorunner/uploads/telegram-voice",
                 "glob": "*",
                 "recursive": False,
+                "max_files": 500,
+                "max_total_bytes": 500_000_000,
+                "max_age_days": 14,
+            },
+            {
+                "name": "telegram_files",
+                "kind": "directory",
+                "path": ".codex-autorunner/uploads/telegram-files",
+                "glob": "*",
+                "recursive": True,
                 "max_files": 500,
                 "max_total_bytes": 500_000_000,
                 "max_age_days": 14,
@@ -1097,9 +1121,7 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
                         f"housekeeping.rules[{idx}].kind must be 'directory' or 'file'"
                     )
             if "path" in rule and not isinstance(rule.get("path"), str):
-                raise ConfigError(
-                    f"housekeeping.rules[{idx}].path must be a string"
-                )
+                raise ConfigError(f"housekeeping.rules[{idx}].path must be a string")
             if "glob" in rule and not isinstance(rule.get("glob"), str):
                 raise ConfigError(
                     f"housekeeping.rules[{idx}].glob must be a string if provided"
@@ -1121,9 +1143,7 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
                     )
                 value = rule.get(key)
                 if isinstance(value, int) and value < 0:
-                    raise ConfigError(
-                        f"housekeeping.rules[{idx}].{key} must be >= 0"
-                    )
+                    raise ConfigError(f"housekeeping.rules[{idx}].{key} must be >= 0")
 
 
 def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
@@ -1212,7 +1232,9 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             raise ConfigError("telegram_bot.media.images must be boolean")
         if "voice" in media_cfg and not isinstance(media_cfg.get("voice"), bool):
             raise ConfigError("telegram_bot.media.voice must be boolean")
-        for key in ("max_image_bytes", "max_voice_bytes"):
+        if "files" in media_cfg and not isinstance(media_cfg.get("files"), bool):
+            raise ConfigError("telegram_bot.media.files must be boolean")
+        for key in ("max_image_bytes", "max_voice_bytes", "max_file_bytes"):
             value = media_cfg.get(key)
             if value is not None and not isinstance(value, int):
                 raise ConfigError(f"telegram_bot.media.{key} must be an integer")
@@ -1241,7 +1263,9 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
         if "enabled" in command_reg_cfg and not isinstance(
             command_reg_cfg.get("enabled"), bool
         ):
-            raise ConfigError("telegram_bot.command_registration.enabled must be boolean")
+            raise ConfigError(
+                "telegram_bot.command_registration.enabled must be boolean"
+            )
         if "scopes" in command_reg_cfg:
             scopes = command_reg_cfg.get("scopes")
             if not isinstance(scopes, list):

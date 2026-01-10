@@ -5,7 +5,10 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import TelegramMessage
+from codex_autorunner.integrations.telegram.adapter import (
+    TelegramDocument,
+    TelegramMessage,
+)
 from codex_autorunner.integrations.telegram.config import TelegramBotConfig
 from codex_autorunner.integrations.telegram.service import TelegramBotService
 
@@ -54,6 +57,30 @@ def build_message(
         text=text,
         date=0,
         is_topic_message=thread_id is not None,
+    )
+
+
+def build_document_message(
+    document: TelegramDocument,
+    *,
+    chat_id: int = 123,
+    thread_id: Optional[int] = None,
+    user_id: int = 456,
+    message_id: int = 1,
+    update_id: int = 1,
+    caption: Optional[str] = None,
+) -> TelegramMessage:
+    return TelegramMessage(
+        update_id=update_id,
+        message_id=message_id,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        from_user_id=user_id,
+        text=None,
+        caption=caption,
+        date=0,
+        is_topic_message=thread_id is not None,
+        document=document,
     )
 
 
@@ -205,6 +232,64 @@ async def test_normal_message_runs_turn(tmp_path: Path) -> None:
         await service._app_server_supervisor.close_all()
     assert any("Bound to" in msg["text"] for msg in fake_bot.messages)
     assert any("fixture reply" in msg["text"] for msg in fake_bot.messages)
+
+
+@pytest.mark.anyio
+async def test_document_message_saves_inbox(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+
+    async def fake_download(_file_id: str) -> tuple[bytes, str, int]:
+        return b"data", "files/report.txt", 4
+
+    service._download_telegram_file = fake_download
+    document = TelegramDocument("d1", None, "report.txt", "text/plain", 4)
+    message = build_document_message(document, message_id=11)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        runtime = service._router.runtime_for(
+            service._router.resolve_key(message.chat_id, message.thread_id)
+        )
+        await service._handle_media_message(message, runtime, "")
+    finally:
+        await service._app_server_supervisor.close_all()
+    inbox_root = repo / ".codex-autorunner" / "uploads" / "telegram-files"
+    inbox_files = [path for path in inbox_root.rglob("*") if path.is_file()]
+    assert inbox_files
+
+
+@pytest.mark.anyio
+async def test_outbox_pending_file_sent_after_turn(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        key = service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        pending_dir = service._files_outbox_pending_dir(str(repo), key)
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        pending_file = pending_dir / "report.txt"
+        pending_file.write_text("hello", encoding="utf-8")
+        runtime = service._router.runtime_for(key)
+        message = build_message("hello", message_id=11)
+        await service._handle_normal_message(message, runtime)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert fake_bot.documents
+    assert fake_bot.documents[-1]["filename"] == "report.txt"
+    assert not pending_file.exists()
+    sent_dir = service._files_outbox_sent_dir(str(repo), key)
+    sent_files = [path for path in sent_dir.iterdir() if path.is_file()]
+    assert sent_files
 
 
 @pytest.mark.anyio

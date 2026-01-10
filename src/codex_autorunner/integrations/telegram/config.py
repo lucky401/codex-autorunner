@@ -21,6 +21,7 @@ DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
 DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
+DEFAULT_MEDIA_MAX_FILE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_IMAGE_PROMPT = "Describe the image."
 DEFAULT_SHELL_TIMEOUT_MS = 120_000
 DEFAULT_SHELL_MAX_OUTPUT_CHARS = 3800
@@ -66,8 +67,10 @@ class TelegramBotMediaConfig:
     enabled: bool
     images: bool
     voice: bool
+    files: bool
     max_image_bytes: int
     max_voice_bytes: int
+    max_file_bytes: int
     image_prompt: str
 
 
@@ -204,6 +207,7 @@ class TelegramBotConfig:
         media_enabled = bool(media_raw.get("enabled", True))
         media_images = bool(media_raw.get("images", True))
         media_voice = bool(media_raw.get("voice", True))
+        media_files = bool(media_raw.get("files", True))
         max_image_bytes = int(
             media_raw.get("max_image_bytes", DEFAULT_MEDIA_MAX_IMAGE_BYTES)
         )
@@ -214,6 +218,11 @@ class TelegramBotConfig:
         )
         if max_voice_bytes <= 0:
             max_voice_bytes = DEFAULT_MEDIA_MAX_VOICE_BYTES
+        max_file_bytes = int(
+            media_raw.get("max_file_bytes", DEFAULT_MEDIA_MAX_FILE_BYTES)
+        )
+        if max_file_bytes <= 0:
+            max_file_bytes = DEFAULT_MEDIA_MAX_FILE_BYTES
         image_prompt = str(
             media_raw.get("image_prompt", DEFAULT_MEDIA_IMAGE_PROMPT)
         ).strip()
@@ -223,8 +232,10 @@ class TelegramBotConfig:
             enabled=media_enabled,
             images=media_images,
             voice=media_voice,
+            files=media_files,
             max_image_bytes=max_image_bytes,
             max_voice_bytes=max_voice_bytes,
+            max_file_bytes=max_file_bytes,
             image_prompt=image_prompt,
         )
 
@@ -249,9 +260,7 @@ class TelegramBotConfig:
 
         command_reg_raw_value = cfg.get("command_registration")
         command_reg_raw: dict[str, Any] = (
-            command_reg_raw_value
-            if isinstance(command_reg_raw_value, dict)
-            else {}
+            command_reg_raw_value if isinstance(command_reg_raw_value, dict) else {}
         )
         command_reg_enabled = bool(command_reg_raw.get("enabled", True))
         scopes = _parse_command_scopes(command_reg_raw.get("scopes"))
@@ -393,9 +402,11 @@ def _parse_command_scopes(raw: Any) -> list[TelegramBotCommandScope]:
                     scope_payload = dict(item.get("scope", {}))
                 else:
                     scope_payload = {
-                        "type": str(item.get("type", "default"))
-                        if item.get("type") is not None
-                        else "default"
+                        "type": (
+                            str(item.get("type", "default"))
+                            if item.get("type") is not None
+                            else "default"
+                        )
                     }
                     for key, value in item.items():
                         if key in ("scope", "type", "language_code"):

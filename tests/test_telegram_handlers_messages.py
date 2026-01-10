@@ -13,6 +13,7 @@ from codex_autorunner.integrations.telegram.handlers.messages import (
     build_coalesced_message,
     document_is_image,
     message_has_media,
+    select_file_candidate,
     select_image_candidate,
     select_photo,
     select_voice_candidate,
@@ -103,6 +104,24 @@ def test_select_voice_candidate_prefers_voice() -> None:
     assert candidate is not None
     assert candidate.kind == "voice"
     assert candidate.file_id == "v1"
+
+
+def test_select_file_candidate_uses_document() -> None:
+    message = _message(
+        document=TelegramDocument("d1", None, "report.txt", "text/plain", 42)
+    )
+    candidate = select_file_candidate(message)
+    assert candidate is not None
+    assert candidate.kind == "file"
+    assert candidate.file_id == "d1"
+
+
+def test_select_file_candidate_ignores_image_document() -> None:
+    message = _message(
+        document=TelegramDocument("d1", None, "photo.png", "image/png", 42)
+    )
+    candidate = select_file_candidate(message)
+    assert candidate is None
 
 
 def test_should_bypass_topic_queue_for_interrupt() -> None:

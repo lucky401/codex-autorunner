@@ -1,4 +1,9 @@
-from codex_autorunner.core.state import RunnerState, SessionRecord, load_state, save_state
+from codex_autorunner.core.state import (
+    RunnerState,
+    SessionRecord,
+    load_state,
+    save_state,
+)
 
 
 def test_state_session_registry_roundtrip(tmp_path):

@@ -6,7 +6,11 @@ import yaml
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
-from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG, load_config
+from codex_autorunner.core.config import (
+    CONFIG_FILENAME,
+    DEFAULT_HUB_CONFIG,
+    load_config,
+)
 from codex_autorunner.core.hub import HubSupervisor
 
 

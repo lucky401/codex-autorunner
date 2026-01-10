@@ -40,6 +40,9 @@ echo "Formatting check (black)..."
 echo "Linting Python (ruff)..."
 "$PYTHON_BIN" -m ruff check "${paths[@]}"
 
+echo "Linting injected context hints..."
+"$PYTHON_BIN" scripts/check_injected_context.py
+
 echo "Type check (mypy)..."
 "$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server
 

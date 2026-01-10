@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .pty_session import ActiveSession
 from ..core.state import persist_session_registry
+from .pty_session import ActiveSession
 
 
 def parse_last_seen_at(value: Optional[str]) -> Optional[float]:

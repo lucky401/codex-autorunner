@@ -14,7 +14,6 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp
 
-from ..routes import build_repo_router
 from ..core.config import ConfigError, HubConfig, _normalize_base_path, load_config
 from ..core.doc_chat import DocChatService
 from ..core.engine import Engine, LockError
@@ -29,8 +28,9 @@ from ..core.usage import (
     parse_iso_datetime,
     summarize_hub_usage,
 )
-from ..manifest import load_manifest
 from ..housekeeping import run_housekeeping_once
+from ..manifest import load_manifest
+from ..routes import build_repo_router
 from ..routes.system import build_system_routes
 from ..voice import VoiceConfig, VoiceService
 from .middleware import AuthTokenMiddleware, BasePathRouterMiddleware

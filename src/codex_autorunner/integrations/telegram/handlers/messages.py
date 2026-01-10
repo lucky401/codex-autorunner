@@ -372,6 +372,21 @@ def select_voice_candidate(
     return None
 
 
+def select_file_candidate(
+    message: TelegramMessage,
+) -> Optional[TelegramMediaCandidate]:
+    if message.document and not document_is_image(message.document):
+        document = message.document
+        return TelegramMediaCandidate(
+            kind="file",
+            file_id=document.file_id,
+            file_name=document.file_name,
+            mime_type=document.mime_type,
+            file_size=document.file_size,
+        )
+    return None
+
+
 async def handle_media_message(
     handlers: Any, message: TelegramMessage, runtime: Any, caption_text: str
 ) -> None:
@@ -425,6 +440,21 @@ async def handle_media_message(
             return
         await handlers._handle_voice_message(
             message, runtime, record, voice_candidate, caption_text
+        )
+        return
+
+    file_candidate = select_file_candidate(message)
+    if file_candidate:
+        if not handlers._config.media.files:
+            await handlers._send_message(
+                message.chat_id,
+                "File handling is disabled.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await handlers._handle_file_message(
+            message, runtime, record, file_candidate, caption_text
         )
         return
 

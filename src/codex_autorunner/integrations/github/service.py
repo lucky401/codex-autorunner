@@ -10,6 +10,7 @@ from ...core.git_utils import (
     git_branch,
     git_is_clean,
 )
+from ...core.injected_context import wrap_injected_context
 from ...core.prompts import build_github_issue_to_spec_prompt, build_sync_agent_prompt
 from ...core.utils import (
     atomic_write,
@@ -99,10 +100,6 @@ def _get_nested(d: Any, *keys: str, default: Any = None) -> Any:
             return default
         cur = cur.get(k)
     return cur if cur is not None else default
-
-
-def _wrap_injected_context(text: str) -> str:
-    return f"<injected context>\n{text}\n</injected context>"
 
 
 def _run_codex_sync_agent(
@@ -523,7 +520,7 @@ class GitHubService:
         abs_path = self.repo_root / rel_path
         atomic_write(abs_path, "\n".join(lines).rstrip() + "\n")
 
-        hint = _wrap_injected_context(
+        hint = wrap_injected_context(
             "Context: see "
             f"{rel_path.as_posix()} "
             "(gh available: true; use gh CLI for updates if asked)."
@@ -816,9 +813,7 @@ def _format_review_threads(review_threads: list[dict[str, Any]]) -> list[str]:
                 continue
             author = _format_author(comment.get("author"))
             created_at = comment.get("createdAt") or ""
-            location = _format_review_location(
-                comment.get("path"), comment.get("line")
-            )
+            location = _format_review_location(comment.get("path"), comment.get("line"))
             header = f"  - {location} {author}".strip()
             if created_at:
                 header = f"{header} ({created_at})"

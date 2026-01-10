@@ -28,13 +28,13 @@ from .adapter import (
     TelegramUpdate,
     TelegramUpdatePoller,
 )
+from .commands_registry import build_command_payloads, diff_command_lists
 from .config import (
     TelegramBotConfig,
     TelegramBotConfigError,
     TelegramBotLockError,
     TelegramMediaCandidate,
 )
-from .commands_registry import build_command_payloads, diff_command_lists
 from .constants import (
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
     DEFAULT_WORKSPACE_STATE_ROOT,

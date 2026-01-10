@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 from ....core.config import load_config
+from ....core.injected_context import wrap_injected_context
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.utils import canonicalize_path
@@ -95,8 +97,8 @@ from ..helpers import (
     _format_model_list,
     _format_persist_note,
     _format_rate_limits,
-    _format_review_commit_label,
     _format_resume_summary,
+    _format_review_commit_label,
     _format_sandbox_policy,
     _format_shell_body,
     _format_skills_list,
@@ -138,11 +140,14 @@ if TYPE_CHECKING:
     from ..state import TelegramTopicRecord
 
 
-INJECTED_CONTEXT_START = "<injected context>"
-INJECTED_CONTEXT_END = "</injected context>"
 PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
 PROMPT_CONTEXT_HINT = (
     "If the user asks to write a prompt, put the prompt in a ```code block```."
+)
+FILES_HINT_TEMPLATE = (
+    "Inbox: {inbox}\n"
+    "Outbox (pending): {outbox}\n"
+    "To send a file to the user, place it in the outbox pending directory."
 )
 
 
@@ -174,10 +179,6 @@ class _RuntimeStub:
     interrupt_requested: bool = False
     interrupt_message_id: Optional[int] = None
     interrupt_turn_id: Optional[str] = None
-
-
-def _wrap_injected_context(text: str) -> str:
-    return f"{INJECTED_CONTEXT_START}\n{text}\n{INJECTED_CONTEXT_END}"
 
 
 class TelegramCommandHandlers:
@@ -663,6 +664,12 @@ class TelegramCommandHandlers:
                 outcome.transcript_message_id,
                 outcome.transcript_text,
             )
+        await self._flush_outbox_files(
+            outcome.record,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
 
     async def _run_turn_and_collect_result(
         self,
@@ -1073,9 +1080,10 @@ class TelegramCommandHandlers:
         provider = provider or "openai_whisper"
         if provider != "openai_whisper":
             return prompt_text
+        disclaimer = wrap_injected_context(WHISPER_TRANSCRIPT_DISCLAIMER)
         if prompt_text.strip():
-            return f"{prompt_text}\n\n{WHISPER_TRANSCRIPT_DISCLAIMER}"
-        return WHISPER_TRANSCRIPT_DISCLAIMER
+            return f"{prompt_text}\n\n{disclaimer}"
+        return disclaimer
 
     async def _maybe_inject_github_context(
         self, prompt_text: str, record: Any
@@ -1159,7 +1167,7 @@ class TelegramCommandHandlers:
         if not PROMPT_CONTEXT_RE.search(prompt_text):
             return prompt_text, False
         separator = "\n" if prompt_text.endswith("\n") else "\n\n"
-        injection = _wrap_injected_context(PROMPT_CONTEXT_HINT)
+        injection = wrap_injected_context(PROMPT_CONTEXT_HINT)
         return f"{prompt_text}{separator}{injection}", True
 
     async def _handle_image_message(
@@ -1341,6 +1349,122 @@ class TelegramCommandHandlers:
         )
         self._spawn_task(self._voice_manager.attempt(pending.record_id))
 
+    async def _handle_file_message(
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        record: Any,
+        candidate: TelegramMediaCandidate,
+        caption_text: str,
+    ) -> None:
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.media.file.received",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            file_id=candidate.file_id,
+            file_size=candidate.file_size,
+            has_caption=bool(caption_text),
+        )
+        max_bytes = self._config.media.max_file_bytes
+        if candidate.file_size and candidate.file_size > max_bytes:
+            await self._send_message(
+                message.chat_id,
+                f"File too large (max {max_bytes} bytes).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        try:
+            data, file_path, file_size = await self._download_telegram_file(
+                candidate.file_id
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media.file.download_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Failed to download file.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if file_size and file_size > max_bytes:
+            await self._send_message(
+                message.chat_id,
+                f"File too large (max {max_bytes} bytes).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if len(data) > max_bytes:
+            await self._send_message(
+                message.chat_id,
+                f"File too large (max {max_bytes} bytes).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        try:
+            file_path_local = self._save_inbox_file(
+                record.workspace_path,
+                key,
+                data,
+                candidate=candidate,
+                file_path=file_path,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media.file.save_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Failed to save file.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        prompt_text = self._format_file_prompt(
+            caption_text,
+            candidate=candidate,
+            saved_path=file_path_local,
+            source_path=file_path,
+            file_size=file_size or len(data),
+            topic_key=key,
+            workspace_path=record.workspace_path,
+        )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.media.file.ready",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            path=str(file_path_local),
+        )
+        await self._handle_normal_message(
+            message,
+            runtime,
+            text_override=prompt_text,
+            record=record,
+        )
+
     async def _download_telegram_file(
         self, file_id: str
     ) -> tuple[bytes, Optional[str], Optional[int]]:
@@ -1493,6 +1617,270 @@ class TelegramCommandHandlers:
         path = images_dir / name
         path.write_bytes(data)
         return path
+
+    def _files_root_dir(self, workspace_path: str) -> Path:
+        return Path(workspace_path) / ".codex-autorunner" / "uploads" / "telegram-files"
+
+    def _sanitize_topic_dir_name(self, key: str) -> str:
+        cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", key).strip("._-")
+        if not cleaned:
+            cleaned = "topic"
+        if len(cleaned) > 80:
+            digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
+            cleaned = f"{cleaned[:72]}-{digest}"
+        return cleaned
+
+    def _files_topic_dir(self, workspace_path: str, topic_key: str) -> Path:
+        return self._files_root_dir(workspace_path) / self._sanitize_topic_dir_name(
+            topic_key
+        )
+
+    def _files_inbox_dir(self, workspace_path: str, topic_key: str) -> Path:
+        return self._files_topic_dir(workspace_path, topic_key) / "inbox"
+
+    def _files_outbox_pending_dir(self, workspace_path: str, topic_key: str) -> Path:
+        return self._files_topic_dir(workspace_path, topic_key) / "outbox" / "pending"
+
+    def _files_outbox_sent_dir(self, workspace_path: str, topic_key: str) -> Path:
+        return self._files_topic_dir(workspace_path, topic_key) / "outbox" / "sent"
+
+    def _sanitize_filename_component(self, value: str, *, fallback: str) -> str:
+        cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._-")
+        return cleaned or fallback
+
+    def _choose_file_extension(
+        self,
+        *,
+        file_name: Optional[str],
+        file_path: Optional[str],
+        mime_type: Optional[str],
+    ) -> str:
+        for candidate in (file_name, file_path):
+            if candidate:
+                suffix = Path(candidate).suffix
+                if suffix:
+                    return suffix
+        if mime_type and mime_type.startswith("text/"):
+            return ".txt"
+        return ".bin"
+
+    def _choose_file_stem(
+        self, file_name: Optional[str], file_path: Optional[str]
+    ) -> str:
+        for candidate in (file_name, file_path):
+            if candidate:
+                stem = Path(candidate).stem
+                if stem:
+                    return stem
+        return "file"
+
+    def _save_inbox_file(
+        self,
+        workspace_path: str,
+        topic_key: str,
+        data: bytes,
+        *,
+        candidate: TelegramMediaCandidate,
+        file_path: Optional[str],
+    ) -> Path:
+        inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        stem = self._sanitize_filename_component(
+            self._choose_file_stem(candidate.file_name, file_path),
+            fallback="file",
+        )
+        ext = self._choose_file_extension(
+            file_name=candidate.file_name,
+            file_path=file_path,
+            mime_type=candidate.mime_type,
+        )
+        token = secrets.token_hex(6)
+        name = f"{stem}-{token}{ext}"
+        path = inbox_dir / name
+        path.write_bytes(data)
+        return path
+
+    def _format_file_prompt(
+        self,
+        caption_text: str,
+        *,
+        candidate: TelegramMediaCandidate,
+        saved_path: Path,
+        source_path: Optional[str],
+        file_size: int,
+        topic_key: str,
+        workspace_path: str,
+    ) -> str:
+        header = caption_text.strip() or "File received."
+        original_name = (
+            candidate.file_name
+            or (Path(source_path).name if source_path else None)
+            or "unknown"
+        )
+        inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
+        outbox_dir = self._files_outbox_pending_dir(workspace_path, topic_key)
+        hint = wrap_injected_context(
+            FILES_HINT_TEMPLATE.format(inbox=str(inbox_dir), outbox=str(outbox_dir))
+        )
+        parts = [
+            header,
+            "",
+            "File details:",
+            f"- Name: {original_name}",
+            f"- Size: {file_size} bytes",
+        ]
+        if candidate.mime_type:
+            parts.append(f"- Mime: {candidate.mime_type}")
+        parts.append(f"- Saved to: {saved_path}")
+        parts.append("")
+        parts.append(hint)
+        return "\n".join(parts)
+
+    def _format_bytes(self, size: int) -> str:
+        if size < 1024:
+            return f"{size} B"
+        value = size / 1024
+        for unit in ("KB", "MB", "GB", "TB"):
+            if value < 1024:
+                return f"{value:.1f} {unit}"
+            value /= 1024
+        return f"{value:.1f} PB"
+
+    def _list_files(self, folder: Path) -> list[Path]:
+        if not folder.exists():
+            return []
+        files: list[Path] = []
+        for path in folder.iterdir():
+            try:
+                if path.is_file():
+                    files.append(path)
+            except OSError:
+                continue
+
+        def _mtime(entry: Path) -> float:
+            try:
+                return entry.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        return sorted(files, key=_mtime, reverse=True)
+
+    async def _send_outbox_file(
+        self,
+        path: Path,
+        *,
+        sent_dir: Path,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> bool:
+        try:
+            data = path.read_bytes()
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.files.outbox.read_failed",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                path=str(path),
+                exc=exc,
+            )
+            return False
+        try:
+            await self._bot.send_document(
+                chat_id,
+                data,
+                filename=path.name,
+                message_thread_id=thread_id,
+                reply_to_message_id=reply_to,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.files.outbox.send_failed",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                path=str(path),
+                exc=exc,
+            )
+            return False
+        try:
+            sent_dir.mkdir(parents=True, exist_ok=True)
+            destination = sent_dir / path.name
+            if destination.exists():
+                token = secrets.token_hex(3)
+                destination = sent_dir / f"{path.stem}-{token}{path.suffix}"
+            path.replace(destination)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.files.outbox.move_failed",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                path=str(path),
+                exc=exc,
+            )
+            return False
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.files.outbox.sent",
+            chat_id=chat_id,
+            thread_id=thread_id,
+            path=str(path),
+        )
+        return True
+
+    async def _flush_outbox_files(
+        self,
+        record: Optional["TelegramTopicRecord"],
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+        topic_key: Optional[str] = None,
+    ) -> None:
+        if (
+            record is None
+            or not record.workspace_path
+            or not self._config.media.enabled
+            or not self._config.media.files
+        ):
+            return
+        key = topic_key or self._resolve_topic_key(chat_id, thread_id)
+        pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)
+        if not pending_dir.exists():
+            return
+        files = self._list_files(pending_dir)
+        if not files:
+            return
+        sent_dir = self._files_outbox_sent_dir(record.workspace_path, key)
+        max_bytes = self._config.media.max_file_bytes
+        for path in files:
+            if not _path_within(pending_dir, path):
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size > max_bytes:
+                await self._send_message(
+                    chat_id,
+                    f"Outbox file too large: {path.name} (max {max_bytes} bytes).",
+                    thread_id=thread_id,
+                    reply_to=reply_to,
+                )
+                continue
+            await self._send_outbox_file(
+                path,
+                sent_dir=sent_dir,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                reply_to=reply_to,
+            )
 
     async def _handle_interrupt(self, message: TelegramMessage, runtime: Any) -> None:
         turn_id = runtime.current_turn_id
@@ -2336,6 +2724,188 @@ class TelegramCommandHandlers:
             reply_to=message.message_id,
         )
 
+    def _format_file_listing(self, title: str, files: list[Path]) -> str:
+        if not files:
+            return f"{title}: (empty)"
+        lines = [f"{title} ({len(files)}):"]
+        for path in files[:50]:
+            try:
+                stats = path.stat()
+            except OSError:
+                continue
+            mtime = datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds")
+            lines.append(
+                f"- {path.name} ({self._format_bytes(stats.st_size)}, {mtime})"
+            )
+        if len(files) > 50:
+            lines.append(f"... and {len(files) - 50} more")
+        return "\n".join(lines)
+
+    def _delete_files_in_dir(self, folder: Path) -> int:
+        if not folder.exists():
+            return 0
+        deleted = 0
+        for path in folder.iterdir():
+            try:
+                if path.is_file():
+                    path.unlink()
+                    deleted += 1
+            except OSError:
+                continue
+        return deleted
+
+    async def _handle_files(
+        self, message: TelegramMessage, args: str, _runtime: Any
+    ) -> None:
+        if not self._config.media.enabled or not self._config.media.files:
+            await self._send_message(
+                message.chat_id,
+                "File handling is disabled.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        inbox_dir = self._files_inbox_dir(record.workspace_path, key)
+        pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)
+        sent_dir = self._files_outbox_sent_dir(record.workspace_path, key)
+        argv = self._parse_command_args(args)
+        if not argv:
+            inbox_items = self._list_files(inbox_dir)
+            pending_items = self._list_files(pending_dir)
+            sent_items = self._list_files(sent_dir)
+            text = "\n".join(
+                [
+                    f"Inbox: {len(inbox_items)} item(s)",
+                    f"Outbox pending: {len(pending_items)} item(s)",
+                    f"Outbox sent: {len(sent_items)} item(s)",
+                    "Usage: /files inbox|outbox|clear inbox|outbox|all|send <filename>",
+                ]
+            )
+            await self._send_message(
+                message.chat_id,
+                text,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        subcommand = argv[0].lower()
+        if subcommand == "inbox":
+            files = self._list_files(inbox_dir)
+            text = self._format_file_listing("Inbox", files)
+            await self._send_message(
+                message.chat_id,
+                text,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if subcommand == "outbox":
+            pending_items = self._list_files(pending_dir)
+            sent_items = self._list_files(sent_dir)
+            text = "\n".join(
+                [
+                    self._format_file_listing("Outbox pending", pending_items),
+                    "",
+                    self._format_file_listing("Outbox sent", sent_items),
+                ]
+            )
+            await self._send_message(
+                message.chat_id,
+                text,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if subcommand == "clear":
+            if len(argv) < 2:
+                await self._send_message(
+                    message.chat_id,
+                    "Usage: /files clear inbox|outbox|all",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            target = argv[1].lower()
+            deleted = 0
+            if target == "inbox":
+                deleted = self._delete_files_in_dir(inbox_dir)
+            elif target == "outbox":
+                deleted = self._delete_files_in_dir(pending_dir)
+                deleted += self._delete_files_in_dir(sent_dir)
+            elif target == "all":
+                deleted = self._delete_files_in_dir(inbox_dir)
+                deleted += self._delete_files_in_dir(pending_dir)
+                deleted += self._delete_files_in_dir(sent_dir)
+            else:
+                await self._send_message(
+                    message.chat_id,
+                    "Usage: /files clear inbox|outbox|all",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                f"Deleted {deleted} file(s).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if subcommand == "send":
+            if len(argv) < 2:
+                await self._send_message(
+                    message.chat_id,
+                    "Usage: /files send <filename>",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            name = Path(argv[1]).name
+            candidate = pending_dir / name
+            if not _path_within(pending_dir, candidate) or not candidate.is_file():
+                await self._send_message(
+                    message.chat_id,
+                    f"Outbox pending file not found: {name}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            size = candidate.stat().st_size
+            max_bytes = self._config.media.max_file_bytes
+            if size > max_bytes:
+                await self._send_message(
+                    message.chat_id,
+                    f"Outbox file too large: {name} (max {max_bytes} bytes).",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            success = await self._send_outbox_file(
+                candidate,
+                sent_dir=sent_dir,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            result = "Sent." if success else "Failed to send."
+            await self._send_message(
+                message.chat_id,
+                result,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            "Usage: /files inbox|outbox|clear inbox|outbox|all|send <filename>",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
     async def _handle_debug(
         self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
     ) -> None:
@@ -2902,6 +3472,12 @@ class TelegramCommandHandlers:
             self._token_usage_by_turn.pop(turn_id, None)
         if response_sent:
             await self._delete_message(message.chat_id, placeholder_id)
+        await self._flush_outbox_files(
+            record,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
 
     async def _handle_review(
         self, message: TelegramMessage, args: str, runtime: Any
@@ -3522,7 +4098,9 @@ class TelegramCommandHandlers:
             record=record,
         )
 
-    def _prepare_compact_summary_delivery(self, summary_text: str) -> tuple[str, bytes | None]:
+    def _prepare_compact_summary_delivery(
+        self, summary_text: str
+    ) -> tuple[str, bytes | None]:
         summary_text = summary_text.strip() or "(no summary)"
         if len(summary_text) <= TELEGRAM_MAX_MESSAGE_LENGTH:
             return summary_text, None
@@ -3561,7 +4139,9 @@ class TelegramCommandHandlers:
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
             )
-            message_id = response.get("message_id") if isinstance(response, dict) else None
+            message_id = (
+                response.get("message_id") if isinstance(response, dict) else None
+            )
         except Exception as exc:
             log_event(
                 self._logger,
@@ -3742,6 +4322,12 @@ class TelegramCommandHandlers:
             message.chat_id,
             outcome.transcript_message_id,
             outcome.transcript_text,
+        )
+        await self._flush_outbox_files(
+            record,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
         )
         if auto_apply:
             success, failure_message = await self._apply_compact_summary(
@@ -4171,9 +4757,7 @@ class TelegramCommandHandlers:
             return None
         return data if isinstance(data, dict) else None
 
-    def _format_update_status_message(
-        self, status: Optional[dict[str, Any]]
-    ) -> str:
+    def _format_update_status_message(self, status: Optional[dict[str, Any]]) -> str:
         if not status:
             return "No update status recorded."
         state = str(status.get("status") or "unknown")
@@ -4181,7 +4765,9 @@ class TelegramCommandHandlers:
         timestamp = status.get("at")
         rendered_time = ""
         if isinstance(timestamp, (int, float)):
-            rendered_time = datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")
+            rendered_time = datetime.fromtimestamp(timestamp).isoformat(
+                timespec="seconds"
+            )
         lines = [f"Update status: {state}"]
         if message:
             lines.append(f"Message: {message}")
@@ -4258,7 +4844,11 @@ class TelegramCommandHandlers:
     def _write_compact_status(
         self, status: str, message: str, **extra: Any
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"status": status, "message": message, "at": time.time()}
+        payload: dict[str, Any] = {
+            "status": status,
+            "message": message,
+            "at": time.time(),
+        }
         payload.update(extra)
         path = self._compact_status_path()
         try:
