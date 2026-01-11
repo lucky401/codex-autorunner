@@ -4,7 +4,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from ..routes.system import _system_update_worker
+from .update import _system_update_worker
 
 
 def _build_logger(log_path: Path) -> logging.Logger:

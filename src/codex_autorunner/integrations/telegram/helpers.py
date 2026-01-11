@@ -10,8 +10,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
-import httpx
-
 from ...core.logging_utils import log_event
 from ...core.utils import (
     RepoNotFoundError,
@@ -22,7 +20,7 @@ from ...core.utils import (
     subprocess_env,
 )
 from ...integrations.github.service import find_github_links, parse_github_url
-from .adapter import TELEGRAM_MAX_MESSAGE_LENGTH
+from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from .constants import (
     DEFAULT_MODEL_LIST_LIMIT,
     DEFAULT_PAGE_SIZE,
@@ -538,37 +536,6 @@ def _format_future_time(delay_seconds: float) -> Optional[str]:
         return None
     dt = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _extract_retry_after_seconds(exc: Exception) -> Optional[int]:
-    current: Optional[BaseException] = exc
-    while current is not None:
-        if isinstance(current, httpx.HTTPStatusError):
-            header = current.response.headers.get("Retry-After")
-            if header and header.isdigit():
-                return int(header)
-            try:
-                payload = current.response.json()
-            except Exception:
-                payload = None
-            if isinstance(payload, dict):
-                parameters = payload.get("parameters")
-                if isinstance(parameters, dict):
-                    retry_after = parameters.get("retry_after")
-                    if isinstance(retry_after, int):
-                        return retry_after
-            message = (
-                str(payload.get("description")) if isinstance(payload, dict) else ""
-            )
-            match = re.search(r"retry after (\d+)", message.lower())
-            if match:
-                return int(match.group(1))
-        message = str(current)
-        match = re.search(r"retry after (\d+)", message.lower())
-        if match:
-            return int(match.group(1))
-        current = current.__cause__ or current.__context__
-    return None
 
 
 def _approval_age_seconds(created_at: Optional[str]) -> Optional[int]:

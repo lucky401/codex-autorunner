@@ -9,7 +9,7 @@ from ...core.logging_utils import log_event
 from ...core.utils import canonicalize_path
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from ..app_server.client import CodexAppServerClient
-from .adapter import TELEGRAM_MAX_MESSAGE_LENGTH
+from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from .constants import (
     APP_SERVER_START_BACKOFF_INITIAL_SECONDS,
     APP_SERVER_START_BACKOFF_MAX_SECONDS,

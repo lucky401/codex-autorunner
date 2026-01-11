@@ -21,11 +21,8 @@ from .constants import (
     VOICE_RETRY_JITTER_RATIO,
     VOICE_RETRY_MAX_SECONDS,
 )
-from .helpers import (
-    _extract_retry_after_seconds,
-    _format_future_time,
-    _parse_iso_timestamp,
-)
+from .helpers import _format_future_time, _parse_iso_timestamp
+from .retry import _extract_retry_after_seconds
 from .state import PendingVoiceRecord, TelegramStateStore
 
 SendMessageFn = Callable[..., Awaitable[None]]

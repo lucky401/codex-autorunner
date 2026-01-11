@@ -83,7 +83,10 @@ class TelegramOutboxManager:
         for delay in OUTBOX_IMMEDIATE_RETRY_DELAYS:
             if await self._attempt_send(record):
                 return True
-            if record.attempts >= OUTBOX_MAX_ATTEMPTS:
+            current = self._store.get_outbox(record.record_id)
+            if current is None:
+                return False
+            if current.attempts >= OUTBOX_MAX_ATTEMPTS:
                 return False
             await asyncio.sleep(delay)
         return False

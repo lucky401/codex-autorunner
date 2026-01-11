@@ -20,7 +20,7 @@ from ....core.state import now_iso
 from ....core.utils import canonicalize_path
 from ....integrations.github.service import GitHubService
 from ....manifest import load_manifest
-from ....routes.system import _normalize_update_target, _spawn_update_process
+from ....core.update import _normalize_update_target, _spawn_update_process
 from ...app_server.client import (
     CodexAppServerClient,
     CodexAppServerDisconnected,
@@ -28,7 +28,6 @@ from ...app_server.client import (
     _normalize_sandbox_policy,
 )
 from ..adapter import (
-    TELEGRAM_MAX_MESSAGE_LENGTH,
     CompactCallback,
     InlineButton,
     TelegramCallbackQuery,
@@ -63,6 +62,7 @@ from ..constants import (
     RESUME_REFRESH_LIMIT,
     REVIEW_COMMIT_PICKER_PROMPT,
     SHELL_MESSAGE_BUFFER_CHARS,
+    TELEGRAM_MAX_MESSAGE_LENGTH,
     THREAD_LIST_MAX_PAGES,
     THREAD_LIST_PAGE_LIMIT,
     UPDATE_PICKER_PROMPT,

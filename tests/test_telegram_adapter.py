@@ -1,5 +1,6 @@
 import types
 
+import httpx
 import pytest
 
 from codex_autorunner.integrations.telegram.adapter import (
@@ -327,6 +328,45 @@ async def test_send_message_chunks_long_text() -> None:
     second_payload = calls[1]["payload"]
     assert "reply_markup" in first_payload
     assert "reply_markup" not in second_payload
+
+
+@pytest.mark.anyio
+async def test_request_retries_on_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"count": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(
+                429,
+                json={
+                    "ok": False,
+                    "description": "Too Many Requests: retry after 1",
+                    "parameters": {"retry_after": 1},
+                },
+            )
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 123}})
+
+    transport = httpx.MockTransport(handler)
+    http_client = httpx.AsyncClient(transport=transport)
+    bot = TelegramBotClient("test-token", client=http_client)
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.adapter.asyncio.sleep",
+        fake_sleep,
+    )
+    try:
+        response = await bot.send_message(123, "hello")
+    finally:
+        await bot.close()
+
+    assert response.get("message_id") == 123
+    assert calls["count"] == 2
+    assert sleeps and sleeps[0] >= 0.9
 
 
 def test_callback_encoding_and_parsing() -> None:

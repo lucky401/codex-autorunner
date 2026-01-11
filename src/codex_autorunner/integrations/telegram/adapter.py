@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional, Sequence, Union
+from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence, Union
 
 import httpx
 
 from ...core.logging_utils import log_event
-
-TELEGRAM_MAX_MESSAGE_LENGTH = 4096
-TELEGRAM_CALLBACK_DATA_LIMIT = 64
+from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
+from .retry import _extract_retry_after_seconds
+_RATE_LIMIT_BUFFER_SECONDS = 0.0
 
 INTERRUPT_ALIASES = {
     "^c",
@@ -898,6 +899,8 @@ class TelegramBotClient:
         else:
             self._client = client
             self._owns_client = False
+        self._rate_limit_until: Optional[float] = None
+        self._rate_limit_lock: Optional[asyncio.Lock] = None
 
     async def close(self) -> None:
         if self._owns_client:
@@ -1231,47 +1234,122 @@ class TelegramBotClient:
 
     async def _request(self, method: str, payload: dict[str, Any]) -> Any:
         url = f"{self._base_url}/{method}"
-        try:
-            response = await self._client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.request.failed",
-                method=method,
-                exc=exc,
-            )
-            raise TelegramAPIError("Telegram request failed") from exc
-        if not isinstance(data, dict) or not data.get("ok"):
-            description = data.get("description") if isinstance(data, dict) else None
-            raise TelegramAPIError(description or "Telegram API returned error")
-        return data.get("result")
+        async def send() -> httpx.Response:
+            return await self._client.post(url, json=payload)
+
+        return await self._request_with_retry(method, send)
 
     async def _request_multipart(
         self, method: str, data: dict[str, Any], files: dict[str, Any]
     ) -> Any:
         url = f"{self._base_url}/{method}"
-        try:
-            response = await self._client.post(url, data=data, files=files)
-            response.raise_for_status()
-            payload = response.json()
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.request.failed",
-                method=method,
-                exc=exc,
-            )
-            raise TelegramAPIError("Telegram request failed") from exc
-        if not isinstance(payload, dict) or not payload.get("ok"):
-            description = (
-                payload.get("description") if isinstance(payload, dict) else None
-            )
-            raise TelegramAPIError(description or "Telegram API returned error")
-        return payload.get("result")
+        async def send() -> httpx.Response:
+            return await self._client.post(url, data=data, files=files)
+
+        return await self._request_with_retry(method, send)
+
+    async def _request_with_retry(
+        self, method: str, send: Callable[[], Awaitable[httpx.Response]]
+    ) -> Any:
+        while True:
+            await self._wait_for_rate_limit(method)
+            try:
+                response = await send()
+                response.raise_for_status()
+                payload = response.json()
+            except Exception as exc:
+                retry_after = _extract_retry_after_seconds(exc)
+                if retry_after is not None:
+                    await self._apply_rate_limit(method, retry_after)
+                    continue
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.request.failed",
+                    method=method,
+                    exc=exc,
+                )
+                raise TelegramAPIError("Telegram request failed") from exc
+            if not isinstance(payload, dict) or not payload.get("ok"):
+                retry_after = self._retry_after_from_payload(payload)
+                if retry_after is not None:
+                    await self._apply_rate_limit(method, retry_after)
+                    continue
+                description = (
+                    payload.get("description") if isinstance(payload, dict) else None
+                )
+                raise TelegramAPIError(description or "Telegram API returned error")
+            return payload.get("result")
+
+    def _retry_after_from_payload(self, payload: Any) -> Optional[int]:
+        if not isinstance(payload, dict):
+            return None
+        parameters = payload.get("parameters")
+        if isinstance(parameters, dict):
+            retry_after = parameters.get("retry_after")
+            if isinstance(retry_after, int):
+                return retry_after
+        description = payload.get("description")
+        if isinstance(description, str) and description:
+            return _extract_retry_after_seconds(Exception(description))
+        return None
+
+    def _ensure_rate_limit_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        lock = self._rate_limit_lock
+        lock_loop = getattr(lock, "_loop", None) if lock else None
+        if (
+            lock is None
+            or lock_loop is None
+            or lock_loop is not loop
+            or lock_loop.is_closed()
+        ):
+            lock = asyncio.Lock()
+            self._rate_limit_lock = lock
+            self._rate_limit_until = None
+        return lock
+
+    async def _apply_rate_limit(self, method: str, retry_after: int) -> None:
+        delay = float(retry_after)
+        loop = asyncio.get_running_loop()
+        until = loop.time() + delay + _RATE_LIMIT_BUFFER_SECONDS
+        lock = self._ensure_rate_limit_lock()
+        async with lock:
+            if self._rate_limit_until is None or until > self._rate_limit_until:
+                self._rate_limit_until = until
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.rate_limit.hit",
+            method=method,
+            retry_after=retry_after,
+        )
+        await self._wait_for_rate_limit(method)
+
+    async def _wait_for_rate_limit(self, method: str) -> None:
+        lock = self._ensure_rate_limit_lock()
+        async with lock:
+            until = self._rate_limit_until
+        if until is None:
+            return
+        loop = asyncio.get_running_loop()
+        delay = until - loop.time()
+        if delay <= 0:
+            async with lock:
+                if self._rate_limit_until == until:
+                    self._rate_limit_until = None
+            return
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.rate_limit.wait",
+            method=method,
+            delay_seconds=delay,
+        )
+        await asyncio.sleep(delay)
+        async with lock:
+            if self._rate_limit_until == until:
+                self._rate_limit_until = None
 
 
 class TelegramUpdatePoller:

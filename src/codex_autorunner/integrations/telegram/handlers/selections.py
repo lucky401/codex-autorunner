@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, cast
 
-from ....routes.system import _normalize_update_target
+from ....core.update import _normalize_update_target
 from ..adapter import (
-    TELEGRAM_MAX_MESSAGE_LENGTH,
     CancelCallback,
     EffortCallback,
     ModelCallback,
@@ -28,6 +27,7 @@ from ..constants import (
     DEFAULT_PAGE_SIZE,
     EFFORT_PICKER_PROMPT,
     MODEL_PICKER_PROMPT,
+    TELEGRAM_MAX_MESSAGE_LENGTH,
     RESUME_BUTTON_PREVIEW_LIMIT,
     RESUME_PICKER_PROMPT,
     REVIEW_COMMIT_PICKER_PROMPT,

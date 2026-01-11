@@ -6,7 +6,8 @@ from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from ...core.state import now_iso
-from .adapter import TELEGRAM_MAX_MESSAGE_LENGTH, TelegramCallbackQuery
+from .adapter import TelegramCallbackQuery
+from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from .constants import PLACEHOLDER_TEXT
 from .helpers import _format_turn_metrics, _should_trace_message, _with_conversation_id
 from .state import OutboxRecord
