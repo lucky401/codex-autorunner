@@ -220,6 +220,41 @@ class TelegramMessageTransport:
                 chat_id=chat_id,
                 thread_id=thread_id,
             )
+        prefix = self._build_debug_prefix(
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to,
+        )
+        if prefix:
+            text = f"{prefix}{text}"
+        parse_mode = self._config.parse_mode
+        if parse_mode:
+            rendered, used_mode = self._render_message(text)
+            if used_mode and len(rendered) > TELEGRAM_MAX_MESSAGE_LENGTH:
+                extension = "txt"
+                if used_mode in ("Markdown", "MarkdownV2"):
+                    extension = "md"
+                elif used_mode == "HTML":
+                    extension = "html"
+                await self._send_document(
+                    chat_id,
+                    text.encode("utf-8"),
+                    filename=f"response.{extension}",
+                    thread_id=thread_id,
+                    reply_to=reply_to,
+                    caption="Response too long; see attached.",
+                )
+                return
+            payload_text = rendered if used_mode else text
+            await self._bot.send_message_chunks(
+                chat_id,
+                payload_text,
+                message_thread_id=thread_id,
+                reply_to_message_id=reply_to,
+                reply_markup=reply_markup,
+                parse_mode=used_mode,
+            )
+            return
         payload_text, parse_mode = self._prepare_outgoing_text(
             text,
             chat_id=chat_id,
