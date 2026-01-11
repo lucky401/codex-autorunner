@@ -46,6 +46,7 @@ from .constants import (
     REASONING_BUFFER_TTL_SECONDS,
     SELECTION_STATE_TTL_SECONDS,
     TURN_PREVIEW_TTL_SECONDS,
+    UPDATE_ID_PERSIST_INTERVAL_SECONDS,
     TurnKey,
 )
 from .dispatch import dispatch_update
@@ -171,6 +172,8 @@ class TelegramBotService(
         self._outbox_task: Optional[asyncio.Task[None]] = None
         self._cache_cleanup_task: Optional[asyncio.Task[None]] = None
         self._cache_timestamps: dict[str, dict[object, float]] = {}
+        self._last_update_ids: dict[str, int] = {}
+        self._last_update_persisted_at: dict[str, float] = {}
         self._outbox_manager = TelegramOutboxManager(
             self._store,
             send_message=self._send_message,
@@ -862,19 +865,31 @@ class TelegramBotService(
             return True
         if isinstance(update_id, bool):
             return True
-        duplicate = False
+        last_id = self._last_update_ids.get(key)
+        if last_id is None:
+            record = self._store.get_topic(key)
+            last_id = record.last_update_id if record else None
+            if isinstance(last_id, int) and not isinstance(last_id, bool):
+                self._last_update_ids[key] = last_id
+            else:
+                last_id = None
+        if isinstance(last_id, int) and update_id <= last_id:
+            return False
+        self._last_update_ids[key] = update_id
+        self._maybe_persist_update_id(key, update_id)
+        return True
+
+    def _maybe_persist_update_id(self, key: str, update_id: int) -> None:
+        now = time.monotonic()
+        last_persisted = self._last_update_persisted_at.get(key, 0.0)
+        if (now - last_persisted) < UPDATE_ID_PERSIST_INTERVAL_SECONDS:
+            return
 
         def apply(record: "TelegramTopicRecord") -> None:
-            nonlocal duplicate
-            last_id = record.last_update_id
-            if isinstance(last_id, int) and not isinstance(last_id, bool):
-                if update_id <= last_id:
-                    duplicate = True
-                    return
             record.last_update_id = update_id
 
         self._store.update_topic(key, apply)
-        return not duplicate
+        self._last_update_persisted_at[key] = now
 
     async def _handle_callback(self, callback: TelegramCallbackQuery) -> None:
         await callback_handlers.handle_callback(self, callback)
