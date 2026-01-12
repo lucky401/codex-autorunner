@@ -10,6 +10,7 @@ import httpx
 from ...core.logging_utils import log_event
 from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .retry import _extract_retry_after_seconds
+
 _RATE_LIMIT_BUFFER_SECONDS = 0.0
 
 INTERRUPT_ALIASES = {
@@ -901,6 +902,7 @@ class TelegramBotClient:
             self._owns_client = False
         self._rate_limit_until: Optional[float] = None
         self._rate_limit_lock: Optional[asyncio.Lock] = None
+        self._rate_limit_lock_loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def close(self) -> None:
         if self._owns_client:
@@ -1234,6 +1236,7 @@ class TelegramBotClient:
 
     async def _request(self, method: str, payload: dict[str, Any]) -> Any:
         url = f"{self._base_url}/{method}"
+
         async def send() -> httpx.Response:
             return await self._client.post(url, json=payload)
 
@@ -1243,6 +1246,7 @@ class TelegramBotClient:
         self, method: str, data: dict[str, Any], files: dict[str, Any]
     ) -> Any:
         url = f"{self._base_url}/{method}"
+
         async def send() -> httpx.Response:
             return await self._client.post(url, data=data, files=files)
 
@@ -1297,7 +1301,7 @@ class TelegramBotClient:
     def _ensure_rate_limit_lock(self) -> asyncio.Lock:
         loop = asyncio.get_running_loop()
         lock = self._rate_limit_lock
-        lock_loop = getattr(lock, "_loop", None) if lock else None
+        lock_loop = self._rate_limit_lock_loop
         if (
             lock is None
             or lock_loop is None
@@ -1306,6 +1310,7 @@ class TelegramBotClient:
         ):
             lock = asyncio.Lock()
             self._rate_limit_lock = lock
+            self._rate_limit_lock_loop = loop
             self._rate_limit_until = None
         return lock
 
@@ -1324,9 +1329,11 @@ class TelegramBotClient:
             method=method,
             retry_after=retry_after,
         )
-        await self._wait_for_rate_limit(method)
+        await self._wait_for_rate_limit(method, min_delay=delay)
 
-    async def _wait_for_rate_limit(self, method: str) -> None:
+    async def _wait_for_rate_limit(
+        self, method: str, min_delay: Optional[float] = None
+    ) -> None:
         lock = self._ensure_rate_limit_lock()
         async with lock:
             until = self._rate_limit_until
@@ -1334,6 +1341,8 @@ class TelegramBotClient:
             return
         loop = asyncio.get_running_loop()
         delay = until - loop.time()
+        if min_delay is not None and delay < min_delay:
+            delay = min_delay
         if delay <= 0:
             async with lock:
                 if self._rate_limit_until == until:

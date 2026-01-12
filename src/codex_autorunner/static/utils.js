@@ -5,6 +5,22 @@ const toast = document.getElementById("toast");
 const decoder = new TextDecoder();
 const AUTH_TOKEN_KEY = "car_auth_token";
 
+/**
+ * @typedef {Object} ApiOptions
+ * @property {string} [method]
+ * @property {any} [body]
+ * @property {Record<string, string>} [headers]
+ */
+
+/**
+ * @typedef {Object} StreamOptions
+ * @property {string} [method]
+ * @property {any} [body]
+ * @property {(data: string, event: string) => void} [onMessage]
+ * @property {(err: Error) => void} [onError]
+ * @property {() => void} [onFinish]
+ */
+
 export function getAuthToken() {
   let token = null;
   try {
@@ -15,24 +31,10 @@ export function getAuthToken() {
   if (token) {
     return token;
   }
-  if (!window?.location?.href) {
-    return null;
+  if (window?.__CAR_AUTH_TOKEN) {
+    return window.__CAR_AUTH_TOKEN;
   }
-  const url = new URL(window.location.href);
-  const urlToken = url.searchParams.get("token");
-  if (!urlToken) {
-    return null;
-  }
-  try {
-    sessionStorage.setItem(AUTH_TOKEN_KEY, urlToken);
-  } catch (_err) {
-    // Ignore storage errors; token can still be used for this session.
-  }
-  url.searchParams.delete("token");
-  if (typeof history !== "undefined" && history.replaceState) {
-    history.replaceState(null, "", url.toString());
-  }
-  return urlToken;
+  return null;
 }
 
 export function resolvePath(path) {
@@ -51,6 +53,30 @@ export function resolvePath(path) {
     return `${BASE_PATH}${path}`;
   }
   return `${BASE_PATH}/${path}`;
+}
+
+export function getUrlParams() {
+  try {
+    return new URLSearchParams(window.location.search || "");
+  } catch (_err) {
+    return new URLSearchParams();
+  }
+}
+
+export function updateUrlParams(updates = {}) {
+  if (!window?.location?.href) return;
+  if (typeof history === "undefined" || !history.replaceState) return;
+  const url = new URL(window.location.href);
+  const params = url.searchParams;
+  Object.entries(updates).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") {
+      params.delete(key);
+    } else {
+      params.set(key, String(value));
+    }
+  });
+  url.search = params.toString();
+  history.replaceState(null, "", url.toString());
 }
 
 export function buildWsUrl(path, query = "") {
@@ -95,7 +121,74 @@ export function statusPill(el, status) {
   }
 }
 
+function extractErrorDetail(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const detail = payload.detail ?? payload.message ?? payload.error;
+  if (!detail) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (!item) return "";
+        if (typeof item === "string") return item;
+        if (typeof item === "object") {
+          const msg = item.msg || item.message || "";
+          const loc = Array.isArray(item.loc) ? item.loc.join(".") : item.loc;
+          if (msg && loc) return `${loc}: ${msg}`;
+          if (msg) return msg;
+        }
+        try {
+          return JSON.stringify(item);
+        } catch (_err) {
+          return String(item);
+        }
+      })
+      .filter(Boolean);
+    return parts.join(" | ");
+  }
+  try {
+    return JSON.stringify(detail);
+  } catch (_err) {
+    return String(detail);
+  }
+}
+
+async function buildErrorMessage(res) {
+  if (res.status === 401) {
+    return "Unauthorized. Provide a valid token to access this server.";
+  }
+  let text = "";
+  try {
+    text = await res.text();
+  } catch (_err) {
+    text = "";
+  }
+  let payload = null;
+  const contentType = res.headers.get("content-type") || "";
+  const trimmed = text.trim();
+  if (
+    contentType.includes("application/json") ||
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[")
+  ) {
+    try {
+      payload = JSON.parse(text);
+    } catch (_err) {
+      payload = null;
+    }
+  }
+  const detail = extractErrorDetail(payload);
+  if (detail) return detail;
+  if (text) return text;
+  return `Request failed (${res.status})`;
+}
+
+/**
+ * @param {string} path
+ * @param {ApiOptions} [options]
+ */
 export async function api(path, options = {}) {
+  /** @type {Record<string, string>} */
   const headers = options.headers ? { ...options.headers } : {};
   const opts = { ...options, headers };
   const target = resolvePath(path);
@@ -109,8 +202,8 @@ export async function api(path, options = {}) {
   }
   const res = await fetch(target, opts);
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `Request failed (${res.status})`);
+    const message = await buildErrorMessage(res);
+    throw new Error(message);
   }
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) {
@@ -119,13 +212,16 @@ export async function api(path, options = {}) {
   return res.text();
 }
 
-export function streamEvents(
-  path,
-  { method = "GET", body = null, onMessage, onError, onFinish } = {}
-) {
+/**
+ * @param {string} path
+ * @param {StreamOptions} [options]
+ */
+export function streamEvents(path, options = {}) {
+  const { method = "GET", body = null, onMessage, onError, onFinish } = options;
   const controller = new AbortController();
   let fetchBody = body;
   const target = resolvePath(path);
+  /** @type {Record<string, string>} */
   const headers = {};
   const token = getAuthToken();
   if (token) {
@@ -138,8 +234,8 @@ export function streamEvents(
   fetch(target, { method, body: fetchBody, headers, signal: controller.signal })
     .then(async (res) => {
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `Request failed (${res.status})`);
+        const message = await buildErrorMessage(res);
+        throw new Error(message);
       }
       if (!res.body) {
         throw new Error("Streaming not supported in this browser");
@@ -164,6 +260,7 @@ export function streamEvents(
               dataLines.push(line.slice(5).trimStart());
             }
           }
+          if (!dataLines.length) continue;
           const data = dataLines.join("\n");
           if (onMessage) onMessage(data, event || "message");
         }
@@ -219,6 +316,135 @@ export function setMobileComposeFixed(enabled) {
   document.documentElement.classList.toggle("mobile-compose-fixed", Boolean(enabled));
 }
 
+const MODAL_BACKGROUND_IDS = ["hub-shell", "repo-shell"];
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type=\"hidden\"])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex=\"-1\"])",
+].join(",");
+let modalOpenCount = 0;
+
+function getFocusableElements(container) {
+  if (!container || !container.querySelectorAll) return [];
+  return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR)).filter(
+    (el) => el && el.tabIndex !== -1 && !el.hidden && !el.disabled
+  );
+}
+
+function setModalBackgroundHidden(hidden) {
+  if (hidden) {
+    modalOpenCount += 1;
+  } else {
+    modalOpenCount = Math.max(0, modalOpenCount - 1);
+  }
+  const shouldHide = modalOpenCount > 0;
+  MODAL_BACKGROUND_IDS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (shouldHide) {
+      el.setAttribute("aria-hidden", "true");
+      try {
+        el.inert = true;
+      } catch (_err) {
+        el.setAttribute("inert", "");
+      }
+    } else {
+      el.removeAttribute("aria-hidden");
+      try {
+        el.inert = false;
+      } catch (_err) {
+        el.removeAttribute("inert");
+      }
+    }
+  });
+}
+
+function handleTabKey(event, container) {
+  const focusable = getFocusableElements(container);
+  if (!focusable.length) {
+    event.preventDefault();
+    container?.focus?.();
+    return;
+  }
+  const currentIndex = focusable.indexOf(document.activeElement);
+  const lastIndex = focusable.length - 1;
+  if (event.shiftKey) {
+    if (currentIndex <= 0) {
+      event.preventDefault();
+      focusable[lastIndex].focus();
+    }
+  } else if (currentIndex === -1 || currentIndex === lastIndex) {
+    event.preventDefault();
+    focusable[0].focus();
+  }
+}
+
+export function openModal(overlay, options = {}) {
+  if (!overlay) return () => {};
+  const {
+    closeOnEscape = true,
+    closeOnOverlay = true,
+    initialFocus,
+    returnFocusTo,
+    onKeydown,
+    onRequestClose,
+  } = options;
+  const dialog = overlay.querySelector(".modal-dialog") || overlay;
+  const previousActive = returnFocusTo || document.activeElement;
+  let isClosed = false;
+
+  const close = () => {
+    if (isClosed) return;
+    isClosed = true;
+    overlay.hidden = true;
+    overlay.removeEventListener("click", handleOverlayClick);
+    document.removeEventListener("keydown", handleKeydown);
+    setModalBackgroundHidden(false);
+    if (previousActive && previousActive.focus) {
+      previousActive.focus();
+    }
+  };
+
+  const requestClose = onRequestClose || close;
+
+  const handleOverlayClick = (event) => {
+    if (closeOnOverlay && event.target === overlay) {
+      requestClose("overlay");
+    }
+  };
+
+  const handleKeydown = (event) => {
+    if (event.key === "Escape" && closeOnEscape) {
+      event.preventDefault();
+      requestClose("escape");
+      return;
+    }
+    if (event.key === "Tab") {
+      handleTabKey(event, dialog);
+      return;
+    }
+    if (onKeydown) {
+      onKeydown(event);
+    }
+  };
+
+  overlay.hidden = false;
+  setModalBackgroundHidden(true);
+
+  overlay.addEventListener("click", handleOverlayClick);
+  document.addEventListener("keydown", handleKeydown);
+
+  const focusTarget = initialFocus || getFocusableElements(dialog)[0] || dialog;
+  if (focusTarget && focusTarget.focus) {
+    focusTarget.focus();
+  }
+
+  return close;
+}
+
 /**
  * Show a custom confirmation modal dialog.
  * Works consistently across desktop and mobile.
@@ -237,54 +463,49 @@ export function confirmModal(message, options = {}) {
     const okBtn = document.getElementById("confirm-modal-ok");
     const cancelBtn = document.getElementById("confirm-modal-cancel");
 
+    const triggerEl = document.activeElement;
     messageEl.textContent = message;
     okBtn.textContent = confirmText;
     cancelBtn.textContent = cancelText;
     okBtn.className = danger ? "danger" : "primary";
-    overlay.hidden = false;
+    let closeModal = null;
+    let settled = false;
 
-    const cleanup = () => {
-      overlay.hidden = true;
+    const finalize = (result) => {
+      if (settled) return;
+      settled = true;
       okBtn.removeEventListener("click", onOk);
       cancelBtn.removeEventListener("click", onCancel);
-      overlay.removeEventListener("click", onOverlayClick);
-      document.removeEventListener("keydown", onKeydown);
+      if (closeModal) {
+        const close = closeModal;
+        closeModal = null;
+        close();
+      }
+      resolve(result);
     };
 
     const onOk = () => {
-      cleanup();
-      resolve(true);
+      finalize(true);
     };
 
     const onCancel = () => {
-      cleanup();
-      resolve(false);
+      finalize(false);
     };
 
-    const onOverlayClick = (e) => {
-      if (e.target === overlay) {
-        cleanup();
-        resolve(false);
-      }
-    };
-
-    const onKeydown = (e) => {
-      if (e.key === "Escape") {
-        cleanup();
-        resolve(false);
-      } else if (e.key === "Enter") {
-        cleanup();
-        resolve(true);
-      }
-    };
+    closeModal = openModal(overlay, {
+      initialFocus: cancelBtn,
+      returnFocusTo: triggerEl,
+      onRequestClose: () => finalize(false),
+      onKeydown: (event) => {
+        if (event.key === "Enter" && document.activeElement === okBtn) {
+          event.preventDefault();
+          finalize(true);
+        }
+      },
+    });
 
     okBtn.addEventListener("click", onOk);
     cancelBtn.addEventListener("click", onCancel);
-    overlay.addEventListener("click", onOverlayClick);
-    document.addEventListener("keydown", onKeydown);
-
-    // Focus the cancel button for safety (less destructive default)
-    cancelBtn.focus();
   });
 }
 
@@ -304,57 +525,64 @@ export function inputModal(message, options = {}) {
   return new Promise((resolve) => {
     const overlay = document.getElementById("input-modal");
     const messageEl = document.getElementById("input-modal-message");
-    const inputEl = document.getElementById("input-modal-input");
-    const okBtn = document.getElementById("input-modal-ok");
-    const cancelBtn = document.getElementById("input-modal-cancel");
+    const inputEl = /** @type {HTMLInputElement} */ (
+      document.getElementById("input-modal-input")
+    );
+    const okBtn = /** @type {HTMLButtonElement} */ (
+      document.getElementById("input-modal-ok")
+    );
+    const cancelBtn = /** @type {HTMLButtonElement} */ (
+      document.getElementById("input-modal-cancel")
+    );
 
+    const triggerEl = document.activeElement;
     messageEl.textContent = message;
     inputEl.placeholder = placeholder;
     inputEl.value = defaultValue;
     okBtn.textContent = confirmText;
     cancelBtn.textContent = cancelText;
-    overlay.hidden = false;
+    let closeModal = null;
+    let settled = false;
 
-    const cleanup = () => {
-      overlay.hidden = true;
+    const finalize = (result) => {
+      if (settled) return;
+      settled = true;
       okBtn.removeEventListener("click", onOk);
       cancelBtn.removeEventListener("click", onCancel);
-      overlay.removeEventListener("click", onOverlayClick);
-      document.removeEventListener("keydown", onKeydown);
+      if (closeModal) {
+        const close = closeModal;
+        closeModal = null;
+        close();
+      }
+      resolve(result);
     };
 
     const onOk = () => {
       const value = inputEl.value.trim();
-      cleanup();
-      resolve(value || null);
+      finalize(value || null);
     };
 
     const onCancel = () => {
-      cleanup();
-      resolve(null);
+      finalize(null);
     };
 
-    const onOverlayClick = (e) => {
-      if (e.target === overlay) {
-        cleanup();
-        resolve(null);
-      }
-    };
-
-    const onKeydown = (e) => {
-      if (e.key === "Escape") {
-        cleanup();
-        resolve(null);
-      } else if (e.key === "Enter" && document.activeElement === inputEl) {
-        e.preventDefault();
-        onOk();
-      }
-    };
+    closeModal = openModal(overlay, {
+      initialFocus: inputEl,
+      returnFocusTo: triggerEl,
+      onRequestClose: () => finalize(null),
+      onKeydown: (event) => {
+        if (event.key === "Enter") {
+          const active = document.activeElement;
+          if (active === inputEl || active === okBtn) {
+            event.preventDefault();
+            onOk();
+          }
+        }
+      },
+    });
 
     okBtn.addEventListener("click", onOk);
     cancelBtn.addEventListener("click", onCancel);
-    overlay.addEventListener("click", onOverlayClick);
-    document.addEventListener("keydown", onKeydown);
 
     // Focus the input field
     inputEl.focus();

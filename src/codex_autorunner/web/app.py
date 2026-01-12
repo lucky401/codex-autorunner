@@ -12,6 +12,7 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
 from ..core.config import ConfigError, HubConfig, _normalize_base_path, load_config
@@ -20,6 +21,7 @@ from ..core.engine import Engine, LockError
 from ..core.hub import HubSupervisor
 from ..core.logging_utils import safe_log, setup_rotating_logger
 from ..core.optional_dependencies import require_optional_dependencies
+from ..core.request_context import get_request_id
 from ..core.state import load_state, persist_session_registry
 from ..core.usage import (
     UsageError,
@@ -33,12 +35,19 @@ from ..manifest import load_manifest
 from ..routes import build_repo_router
 from ..routes.system import build_system_routes
 from ..voice import VoiceConfig, VoiceService
-from .middleware import AuthTokenMiddleware, BasePathRouterMiddleware
+from .hub_jobs import HubJobManager
+from .middleware import (
+    AuthTokenMiddleware,
+    BasePathRouterMiddleware,
+    RequestIdMiddleware,
+    SecurityHeadersMiddleware,
+)
 from .runner_manager import RunnerManager
 from .schemas import (
     HubCleanupWorktreeRequest,
     HubCreateRepoRequest,
     HubCreateWorktreeRequest,
+    HubJobResponse,
     HubRemoveRepoRequest,
     RunControlRequest,
 )
@@ -81,6 +90,7 @@ class HubAppContext:
     base_path: str
     config: HubConfig
     supervisor: HubSupervisor
+    job_manager: HubJobManager
     static_dir: Path
     static_assets_context: Optional[object]
     asset_version: str
@@ -263,6 +273,7 @@ def _build_hub_context(
         base_path=normalized_base,
         config=config,
         supervisor=supervisor,
+        job_manager=HubJobManager(logger=logger),
         static_dir=static_dir,
         static_assets_context=static_context,
         asset_version=asset_version(static_dir),
@@ -274,6 +285,7 @@ def _apply_hub_context(app: FastAPI, context: HubAppContext) -> None:
     app.state.base_path = context.base_path
     app.state.logger = context.logger
     app.state.config = context.config  # Expose config for route modules
+    app.state.job_manager = context.job_manager
     app.state.static_dir = context.static_dir
     app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
@@ -393,7 +405,12 @@ def create_app(
     context = _build_app_context(repo_root, base_path)
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
     _apply_app_context(app, context)
-    app.mount("/static", StaticFiles(directory=context.static_dir), name="static")
+    app.add_middleware(GZipMiddleware, minimum_size=500)
+    app.mount(
+        "/static",
+        CacheStaticFiles(directory=context.static_dir),
+        name="static",
+    )
     # Route handlers
     app.include_router(build_repo_router(context.static_dir))
 
@@ -403,6 +420,8 @@ def create_app(
         asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
     if context.base_path:
         asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
+    asgi_app = RequestIdMiddleware(asgi_app)
+    asgi_app = SecurityHeadersMiddleware(asgi_app)
 
     return asgi_app
 
@@ -413,7 +432,12 @@ def create_hub_app(
     context = _build_hub_context(hub_root, base_path)
     app = FastAPI(redirect_slashes=False)
     _apply_hub_context(app, context)
-    app.mount("/static", StaticFiles(directory=context.static_dir), name="static")
+    app.add_middleware(GZipMiddleware, minimum_size=500)
+    app.mount(
+        "/static",
+        CacheStaticFiles(directory=context.static_dir),
+        name="static",
+    )
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
     repo_apps: dict[str, ASGIApp] = {}
@@ -652,6 +676,18 @@ def create_hub_app(
             ],
         }
 
+    @app.post("/hub/jobs/scan", response_model=HubJobResponse)
+    async def scan_repos_job():
+        def _run_scan():
+            snapshots = context.supervisor.scan()
+            _refresh_mounts(snapshots)
+            return {"status": "ok"}
+
+        job = await context.job_manager.submit(
+            "hub.scan_repos", _run_scan, request_id=get_request_id()
+        )
+        return job.to_dict()
+
     @app.post("/hub/repos")
     async def create_repo(payload: HubCreateRepoRequest):
         git_url = payload.git_url
@@ -690,6 +726,36 @@ def create_hub_app(
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
+    @app.post("/hub/jobs/repos", response_model=HubJobResponse)
+    async def create_repo_job(payload: HubCreateRepoRequest):
+        def _run_create_repo():
+            git_url = payload.git_url
+            repo_id = payload.repo_id
+            if not repo_id and not git_url:
+                raise ValueError("Missing repo id")
+            repo_path_val = payload.path
+            repo_path = Path(repo_path_val) if repo_path_val else None
+            git_init = payload.git_init
+            force = payload.force
+            if git_url:
+                snapshot = context.supervisor.clone_repo(
+                    git_url=str(git_url),
+                    repo_id=str(repo_id) if repo_id else None,
+                    repo_path=repo_path,
+                    force=force,
+                )
+            else:
+                snapshot = context.supervisor.create_repo(
+                    str(repo_id), repo_path=repo_path, git_init=git_init, force=force
+                )
+            _refresh_mounts([snapshot])
+            return _add_mount_info(snapshot.to_dict(context.config.root))
+
+        job = await context.job_manager.submit(
+            "hub.create_repo", _run_create_repo, request_id=get_request_id()
+        )
+        return job.to_dict()
+
     @app.get("/hub/repos/{repo_id}/remove-check")
     async def remove_repo_check(repo_id: str):
         safe_log(app.state.logger, logging.INFO, f"Hub remove-check {repo_id}")
@@ -724,6 +790,26 @@ def create_hub_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"status": "ok"}
 
+    @app.post("/hub/jobs/repos/{repo_id}/remove", response_model=HubJobResponse)
+    async def remove_repo_job(
+        repo_id: str, payload: Optional[HubRemoveRepoRequest] = None
+    ):
+        payload = payload or HubRemoveRepoRequest()
+
+        def _run_remove_repo():
+            context.supervisor.remove_repo(
+                repo_id,
+                force=payload.force,
+                delete_dir=payload.delete_dir,
+                delete_worktrees=payload.delete_worktrees,
+            )
+            return {"status": "ok"}
+
+        job = await context.job_manager.submit(
+            "hub.remove_repo", _run_remove_repo, request_id=get_request_id()
+        )
+        return job.to_dict()
+
     @app.post("/hub/worktrees/create")
     async def create_worktree(payload: HubCreateWorktreeRequest):
         base_repo_id = payload.base_repo_id
@@ -747,6 +833,22 @@ def create_hub_app(
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
+    @app.post("/hub/jobs/worktrees/create", response_model=HubJobResponse)
+    async def create_worktree_job(payload: HubCreateWorktreeRequest):
+        def _run_create_worktree():
+            snapshot = context.supervisor.create_worktree(
+                base_repo_id=str(payload.base_repo_id),
+                branch=str(payload.branch),
+                force=payload.force,
+            )
+            _refresh_mounts([snapshot])
+            return _add_mount_info(snapshot.to_dict(context.config.root))
+
+        job = await context.job_manager.submit(
+            "hub.create_worktree", _run_create_worktree, request_id=get_request_id()
+        )
+        return job.to_dict()
+
     @app.post("/hub/worktrees/cleanup")
     async def cleanup_worktree(payload: HubCleanupWorktreeRequest):
         worktree_repo_id = payload.worktree_repo_id
@@ -768,6 +870,28 @@ def create_hub_app(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"status": "ok"}
+
+    @app.post("/hub/jobs/worktrees/cleanup", response_model=HubJobResponse)
+    async def cleanup_worktree_job(payload: HubCleanupWorktreeRequest):
+        def _run_cleanup_worktree():
+            context.supervisor.cleanup_worktree(
+                worktree_repo_id=str(payload.worktree_repo_id),
+                delete_branch=payload.delete_branch,
+                delete_remote=payload.delete_remote,
+            )
+            return {"status": "ok"}
+
+        job = await context.job_manager.submit(
+            "hub.cleanup_worktree", _run_cleanup_worktree, request_id=get_request_id()
+        )
+        return job.to_dict()
+
+    @app.get("/hub/jobs/{job_id}", response_model=HubJobResponse)
+    async def get_hub_job(job_id: str):
+        job = await context.job_manager.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return job.to_dict()
 
     @app.post("/hub/repos/{repo_id}/run")
     async def run_repo(repo_id: str, payload: Optional[RunControlRequest] = None):
@@ -853,6 +977,8 @@ def create_hub_app(
         asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
     if context.base_path:
         asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
+    asgi_app = RequestIdMiddleware(asgi_app)
+    asgi_app = SecurityHeadersMiddleware(asgi_app)
 
     return asgi_app
 
@@ -865,3 +991,18 @@ def _resolve_auth_token(env_name: str) -> Optional[str]:
         return None
     value = value.strip()
     return value or None
+
+
+_STATIC_CACHE_CONTROL = "public, max-age=31536000, immutable"
+
+
+class CacheStaticFiles(StaticFiles):
+    def __init__(self, *args, cache_control: str = _STATIC_CACHE_CONTROL, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._cache_control = cache_control
+
+    async def get_response(self, path: str, scope):  # type: ignore[override]
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 206, 304):
+            response.headers.setdefault("Cache-Control", self._cache_control)
+        return response

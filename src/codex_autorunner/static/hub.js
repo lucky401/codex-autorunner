@@ -5,6 +5,7 @@ import {
   resolvePath,
   confirmModal,
   inputModal,
+  openModal,
 } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
@@ -33,6 +34,8 @@ const hubUsageChartRange = document.getElementById("hub-usage-chart-range");
 const hubUsageChartSegment = document.getElementById("hub-usage-chart-segment");
 const hubVersionEl = document.getElementById("hub-version");
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
+const HUB_JOB_POLL_INTERVAL_MS = 1200;
+const HUB_JOB_TIMEOUT_MS = 180000;
 
 const hubUsageChartState = {
   segment: "none",
@@ -96,6 +99,34 @@ function setButtonLoading(scanning) {
       btn.classList.remove("loading");
     }
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollHubJob(jobId, { timeoutMs = HUB_JOB_TIMEOUT_MS } = {}) {
+  const start = Date.now();
+  for (;;) {
+    const job = await api(`/hub/jobs/${jobId}`, { method: "GET" });
+    if (job.status === "succeeded") return job;
+    if (job.status === "failed") {
+      const err = job.error || "Hub job failed";
+      throw new Error(err);
+    }
+    if (Date.now() - start > timeoutMs) {
+      throw new Error("Hub job timed out");
+    }
+    await sleep(HUB_JOB_POLL_INTERVAL_MS);
+  }
+}
+
+async function startHubJob(path, { body, startedMessage } = {}) {
+  const job = await api(path, { method: "POST", body });
+  if (startedMessage) {
+    flash(startedMessage);
+  }
+  return pollHubJob(job.job_id);
 }
 
 function formatTimeCompact(isoString) {
@@ -607,22 +638,31 @@ function initHubSettings() {
   const closeBtn = document.getElementById("hub-settings-close");
   const updateBtn = document.getElementById("hub-update-btn");
   const updateTarget = document.getElementById("hub-update-target");
+  let closeModal = null;
+
+  const hideModal = () => {
+    if (closeModal) {
+      const close = closeModal;
+      closeModal = null;
+      close();
+    }
+  };
 
   if (settingsBtn && modal) {
     settingsBtn.addEventListener("click", () => {
-      modal.hidden = false;
+      const triggerEl = document.activeElement;
+      hideModal();
+      closeModal = openModal(modal, {
+        initialFocus: closeBtn || updateBtn || modal,
+        returnFocusTo: triggerEl,
+        onRequestClose: hideModal,
+      });
     });
   }
 
   if (closeBtn && modal) {
     closeBtn.addEventListener("click", () => {
-      modal.hidden = true;
-    });
-  }
-
-  if (modal) {
-    modal.addEventListener("click", (e) => {
-      if (e.target === modal) modal.hidden = true;
+      hideModal();
     });
   }
 
@@ -637,7 +677,9 @@ function buildActions(repo) {
   const actions = [];
   const missing = !repo.exists_on_disk;
   const kind = repo.kind || "base";
-  if (!missing && (repo.init_error || repo.mount_error)) {
+  if (!missing && repo.mount_error) {
+    actions.push({ key: "init", label: "Retry mount", kind: "primary" });
+  } else if (!missing && repo.init_error) {
     actions.push({
       key: "init",
       label: repo.initialized ? "Re-init" : "Init",
@@ -661,6 +703,31 @@ function buildActions(repo) {
     actions.push({ key: "remove_repo", label: "Remove", kind: "danger" });
   }
   return actions;
+}
+
+function buildMountBadge(repo) {
+  if (!repo) return "";
+  const missing = !repo.exists_on_disk;
+  let label = "";
+  let className = "pill pill-small";
+  let title = "";
+  if (missing) {
+    label = "missing";
+    className += " pill-error";
+    title = "Repo path not found on disk";
+  } else if (repo.mount_error) {
+    label = "mount error";
+    className += " pill-error";
+    title = repo.mount_error;
+  } else if (repo.mounted === true) {
+    label = "mounted";
+    className += " pill-idle";
+  } else {
+    label = "not mounted";
+    className += " pill-warn";
+  }
+  const titleAttr = title ? ` title="${title}"` : "";
+  return `<span class="${className} hub-mount-pill"${titleAttr}>${label}</span>`;
 }
 
 function inferBaseId(repo) {
@@ -726,6 +793,7 @@ function renderRepos(repos) {
       )
       .join("");
 
+    const mountBadge = buildMountBadge(repo);
     const lockBadge =
       repo.lock_status && repo.lock_status !== "unlocked"
         ? `<span class="pill pill-small pill-warn">${repo.lock_status.replace(
@@ -786,6 +854,7 @@ function renderRepos(repos) {
       <div class="hub-repo-row">
         <div class="hub-repo-left">
             <span class="pill pill-small hub-status-pill">${repo.status}</span>
+            ${mountBadge}
             ${lockBadge}
             ${initBadge}
           </div>
@@ -882,11 +951,10 @@ async function refreshRepoPrCache(repos) {
   renderRepos(hubData.repos || []);
 }
 
-async function refreshHub({ scan = false } = {}) {
+async function refreshHub() {
   setButtonLoading(true);
   try {
-    const path = scan ? "/hub/repos/scan" : "/hub/repos";
-    const data = await api(path, { method: scan ? "POST" : "GET" });
+    const data = await api("/hub/repos", { method: "GET" });
     hubData = data;
     saveSessionCache(HUB_CACHE_KEY, hubData);
     renderSummary(data.repos || []);
@@ -900,6 +968,18 @@ async function refreshHub({ scan = false } = {}) {
   }
 }
 
+async function triggerHubScan() {
+  setButtonLoading(true);
+  try {
+    await startHubJob("/hub/jobs/scan", { startedMessage: "Hub scan queued" });
+    await refreshHub();
+  } catch (err) {
+    flash(err.message || "Hub scan failed", "error");
+  } finally {
+    setButtonLoading(false);
+  }
+}
+
 async function createRepo(repoId, repoPath, gitInit, gitUrl) {
   try {
     const payload = {};
@@ -907,10 +987,16 @@ async function createRepo(repoId, repoPath, gitInit, gitUrl) {
     if (repoPath) payload.path = repoPath;
     payload.git_init = gitInit;
     if (gitUrl) payload.git_url = gitUrl;
-    await api("/hub/repos", { method: "POST", body: payload });
+    const job = await startHubJob("/hub/jobs/repos", {
+      body: payload,
+      startedMessage: "Repo creation queued",
+    });
     const label = repoId || repoPath || "repo";
     flash(`Created repo: ${label}`);
     await refreshHub();
+    if (job?.result?.mounted && job?.result?.id) {
+      window.location.href = resolvePath(`/repos/${job.result.id}/`);
+    }
     return true;
   } catch (err) {
     flash(err.message || "Failed to create repo", "error");
@@ -918,27 +1004,37 @@ async function createRepo(repoId, repoPath, gitInit, gitUrl) {
   }
 }
 
-function showCreateRepoModal() {
-  const modal = document.getElementById("create-repo-modal");
-  if (modal) {
-    modal.hidden = false;
-    const input = document.getElementById("create-repo-id");
-    if (input) {
-      input.value = "";
-      input.focus();
-    }
-    const pathInput = document.getElementById("create-repo-path");
-    if (pathInput) pathInput.value = "";
-    const urlInput = document.getElementById("create-repo-url");
-    if (urlInput) urlInput.value = "";
-    const gitCheck = document.getElementById("create-repo-git");
-    if (gitCheck) gitCheck.checked = true;
+let closeCreateRepoModal = null;
+
+function hideCreateRepoModal() {
+  if (closeCreateRepoModal) {
+    const close = closeCreateRepoModal;
+    closeCreateRepoModal = null;
+    close();
   }
 }
 
-function hideCreateRepoModal() {
+function showCreateRepoModal() {
   const modal = document.getElementById("create-repo-modal");
-  if (modal) modal.hidden = true;
+  if (!modal) return;
+  const triggerEl = document.activeElement;
+  hideCreateRepoModal();
+  const input = document.getElementById("create-repo-id");
+  closeCreateRepoModal = openModal(modal, {
+    initialFocus: input || modal,
+    returnFocusTo: triggerEl,
+    onRequestClose: hideCreateRepoModal,
+  });
+  if (input) {
+    input.value = "";
+    input.focus();
+  }
+  const pathInput = document.getElementById("create-repo-path");
+  if (pathInput) pathInput.value = "";
+  const urlInput = document.getElementById("create-repo-url");
+  if (urlInput) urlInput.value = "";
+  const gitCheck = document.getElementById("create-repo-git");
+  if (gitCheck) gitCheck.checked = true;
 }
 
 async function handleCreateRepoSubmit() {
@@ -978,11 +1074,12 @@ async function handleRepoAction(repoId, action) {
         confirmText: "Create",
       });
       if (!branch) return;
-      const created = await api("/hub/worktrees/create", {
-        method: "POST",
+      const job = await startHubJob("/hub/jobs/worktrees/create", {
         body: { base_repo_id: repoId, branch },
+        startedMessage: "Worktree creation queued",
       });
-      flash(`Created worktree: ${created.id}`);
+      const created = job?.result;
+      flash(`Created worktree: ${created?.id || branch}`);
       await refreshHub();
       if (created?.mounted) {
         window.location.href = resolvePath(`/repos/${created.id}/`);
@@ -999,9 +1096,9 @@ async function handleRepoAction(repoId, action) {
         { confirmText: "Remove", danger: true }
       );
       if (!ok) return;
-      await api("/hub/worktrees/cleanup", {
-        method: "POST",
+      await startHubJob("/hub/jobs/worktrees/cleanup", {
         body: { worktree_repo_id: repoId },
+        startedMessage: "Worktree cleanup queued",
       });
       flash(`Removed worktree: ${repoId}`);
       await refreshHub();
@@ -1064,13 +1161,13 @@ async function handleRepoAction(repoId, action) {
         );
         if (!forceOk) return;
       }
-      await api(`/hub/repos/${repoId}/remove`, {
-        method: "POST",
+      await startHubJob(`/hub/jobs/repos/${repoId}/remove`, {
         body: {
           force: needsForce,
           delete_dir: true,
           delete_worktrees: worktrees.length > 0,
         },
+        startedMessage: "Repo removal queued",
       });
       flash(`Removed repo: ${repoId}`);
       await refreshHub();
@@ -1099,9 +1196,9 @@ function attachHubHandlers() {
   const createSubmitBtn = document.getElementById("create-repo-submit");
   const createRepoId = document.getElementById("create-repo-id");
 
-  scanBtn?.addEventListener("click", () => refreshHub({ scan: true }));
-  quickScanBtn?.addEventListener("click", () => refreshHub({ scan: true }));
-  refreshBtn?.addEventListener("click", () => refreshHub({ scan: false }));
+  scanBtn?.addEventListener("click", () => triggerHubScan());
+  quickScanBtn?.addEventListener("click", () => triggerHubScan());
+  refreshBtn?.addEventListener("click", () => refreshHub());
   hubUsageRefresh?.addEventListener("click", () => loadHubUsage());
 
   newRepoBtn?.addEventListener("click", showCreateRepoModal);
@@ -1113,21 +1210,6 @@ function attachHubHandlers() {
     if (e.key === "Enter") {
       e.preventDefault();
       handleCreateRepoSubmit();
-    }
-  });
-
-  // Close modal on Escape key
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      hideCreateRepoModal();
-    }
-  });
-
-  // Close modal when clicking overlay background
-  const createRepoModal = document.getElementById("create-repo-modal");
-  createRepoModal?.addEventListener("click", (e) => {
-    if (e.target === createRepoModal) {
-      hideCreateRepoModal();
     }
   });
 

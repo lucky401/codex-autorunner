@@ -1,14 +1,32 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="theme-color" content="#0a0c12" />
-    <title>Codex Autorunner</title>
     <script>
       (() => {
+        const AUTH_TOKEN_KEY = "car_auth_token";
+        const url = new URL(window.location.href);
+        const params = url.searchParams;
+        let token = params.get("token");
+        if (token) {
+          window.__CAR_AUTH_TOKEN = token;
+          try {
+            sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+          } catch (_err) {
+            // Ignore storage errors; token can still be used for this load.
+          }
+          params.delete("token");
+          if (typeof history !== "undefined" && history.replaceState) {
+            history.replaceState(null, "", url.toString());
+          }
+        } else {
+          try {
+            token = sessionStorage.getItem(AUTH_TOKEN_KEY);
+            if (token) window.__CAR_AUTH_TOKEN = token;
+          } catch (_err) {
+            // Ignore storage errors; token may still be in memory.
+          }
+        }
+
         const normalizeBase = (base) => {
           if (!base || base === "/") return "";
           let normalized = base.startsWith("/") ? base : `/${base}`;
@@ -30,7 +48,27 @@
           if (parts.length) return normalizeBase(`/${parts[0]}`);
           return "";
         };
-        const basePrefix = detectBasePrefix(window.location.pathname || "/");
+
+        const pathname = window.location.pathname || "/";
+        const basePrefix = detectBasePrefix(pathname);
+        const repoMatch = pathname.match(/\/repos\/([^/]+)/);
+        const repoId = repoMatch && repoMatch[1] ? repoMatch[1] : null;
+
+        window.__CAR_BASE_PREFIX = basePrefix || "";
+        window.__CAR_REPO_ID = repoId;
+        window.__CAR_BASE_PATH = repoId ? `${basePrefix}/repos/${repoId}` : basePrefix;
+        window.__AUTH_TOKEN_PRESENT = Boolean(window.__CAR_AUTH_TOKEN);
+      })();
+    </script>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#0a0c12" />
+    <title>Codex Autorunner</title>
+    <script>
+      (() => {
+        const basePrefix = window.__CAR_BASE_PREFIX || "";
         const base = basePrefix || "/";
         const baseTag = document.createElement("base");
         baseTag.href = base.endsWith("/") ? base : `${base}/`;
@@ -431,6 +469,7 @@
             <span class="log-legend-item"><span class="log-legend-dot context"></span>Context</span>
           </div>
           <div class="log-container">
+            <button id="log-load-older" class="log-load-btn hidden" title="Load older logs">Load older</button>
             <pre id="log-output" class="log-viewer">(no log loaded)</pre>
             <button id="log-jump-bottom" class="log-jump-btn hidden" title="Jump to latest">↓ Latest</button>
           </div>
@@ -533,7 +572,15 @@
     
     <!-- Confirmation Modal -->
     <div id="confirm-modal" class="modal-overlay" hidden>
-      <div class="modal-dialog">
+      <div
+        class="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-modal-title"
+        aria-describedby="confirm-modal-message"
+        tabindex="-1"
+      >
+        <span id="confirm-modal-title" class="sr-only">Confirmation</span>
         <p id="confirm-modal-message"></p>
         <div class="modal-actions">
           <button id="confirm-modal-cancel" class="ghost">Cancel</button>
@@ -544,7 +591,15 @@
     
     <!-- Input Modal -->
     <div id="input-modal" class="modal-overlay" hidden>
-      <div class="modal-dialog modal-input">
+      <div
+        class="modal-dialog modal-input"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="input-modal-title"
+        aria-describedby="input-modal-message"
+        tabindex="-1"
+      >
+        <span id="input-modal-title" class="sr-only">Input</span>
         <p id="input-modal-message"></p>
         <input type="text" id="input-modal-input" autocomplete="off" spellcheck="false" />
         <div class="modal-actions">
@@ -556,11 +611,18 @@
     
     <!-- Create Repo Modal -->
     <div id="create-repo-modal" class="modal-overlay" hidden>
-      <div class="modal-dialog modal-create-repo">
+      <div
+        class="modal-dialog modal-create-repo"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-repo-modal-title"
+        aria-describedby="create-repo-modal-body"
+        tabindex="-1"
+      >
         <div class="modal-header">
-          <span class="label">Create New Repository</span>
+          <span class="label" id="create-repo-modal-title">Create New Repository</span>
         </div>
-        <div class="modal-body">
+        <div class="modal-body" id="create-repo-modal-body">
           <div class="form-group">
             <label for="create-repo-id">Repo ID <span class="required">*</span></label>
             <input type="text" id="create-repo-id" placeholder="my-project" autocomplete="off" spellcheck="false" />
@@ -592,11 +654,18 @@
 
     <!-- Hub Settings Modal -->
     <div id="hub-settings-modal" class="modal-overlay" hidden>
-      <div class="modal-dialog">
+      <div
+        class="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="hub-settings-modal-title"
+        aria-describedby="hub-settings-modal-body"
+        tabindex="-1"
+      >
         <div class="modal-header">
-          <span class="label">Hub Settings</span>
+          <span class="label" id="hub-settings-modal-title">Hub Settings</span>
         </div>
-        <div class="modal-body">
+        <div class="modal-body" id="hub-settings-modal-body">
           <p class="muted small">System-wide settings for Codex Autorunner.</p>
           <div class="form-group">
             <label>System Update</label>
@@ -617,11 +686,18 @@
 
     <!-- Repo Settings Modal -->
     <div id="repo-settings-modal" class="modal-overlay" hidden>
-      <div class="modal-dialog">
+      <div
+        class="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="repo-settings-modal-title"
+        aria-describedby="repo-settings-modal-body"
+        tabindex="-1"
+      >
         <div class="modal-header">
-          <span class="label">Repo Settings</span>
+          <span class="label" id="repo-settings-modal-title">Repo Settings</span>
         </div>
-        <div class="modal-body">
+        <div class="modal-body" id="repo-settings-modal-body">
           <p class="muted small">Settings for the current repository session.</p>
           <div class="form-group">
             <label>System Update</label>

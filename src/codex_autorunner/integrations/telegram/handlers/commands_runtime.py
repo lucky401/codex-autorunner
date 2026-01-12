@@ -17,10 +17,10 @@ from ....core.config import load_config
 from ....core.injected_context import wrap_injected_context
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
+from ....core.update import _normalize_update_target, _spawn_update_process
 from ....core.utils import canonicalize_path
 from ....integrations.github.service import GitHubService
 from ....manifest import load_manifest
-from ....core.update import _normalize_update_target, _spawn_update_process
 from ...app_server.client import (
     CodexAppServerClient,
     CodexAppServerDisconnected,
@@ -74,6 +74,7 @@ from ..constants import (
 from ..handlers import messages as message_handlers
 from ..helpers import (
     _approval_age_seconds,
+    _clear_pending_compact_seed,
     _clear_policy_overrides,
     _coerce_model_options,
     _coerce_thread_list,
@@ -81,7 +82,6 @@ from ..helpers import (
     _compose_agent_response,
     _compose_interrupt_response,
     _consume_raw_token,
-    _clear_pending_compact_seed,
     _extract_command_result,
     _extract_first_user_preview,
     _extract_rate_limits,
@@ -4374,9 +4374,7 @@ class TelegramCommandHandlers:
         record = self._router.update_topic(
             message.chat_id,
             message.thread_id,
-            lambda record: _set_pending_compact_seed(
-                record, seed_text, new_thread_id
-            ),
+            lambda record: _set_pending_compact_seed(record, seed_text, new_thread_id),
         )
         log_event(
             self._logger,

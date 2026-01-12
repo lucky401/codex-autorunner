@@ -1,26 +1,20 @@
 import asyncio
 import logging
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ..core import update as update_core
 from ..core.config import HubConfig
 from ..core.update import (
     UpdateInProgressError,
     _normalize_update_ref,
     _normalize_update_target,
-    _pid_is_running,
     _read_update_status,
     _spawn_update_process,
     _system_update_check,
-    _system_update_worker,
-    _update_lock_active,
-    _update_lock_path,
-    _update_status_path,
 )
 from ..web.schemas import (
     SystemHealthResponse,
@@ -30,6 +24,14 @@ from ..web.schemas import (
     SystemUpdateStatusResponse,
 )
 from ..web.static_assets import missing_static_assets
+
+_pid_is_running = update_core._pid_is_running
+_system_update_worker = update_core._system_update_worker
+_update_lock_active = update_core._update_lock_active
+_update_lock_path = update_core._update_lock_path
+_update_status_path = update_core._update_status_path
+shutil = update_core.shutil
+subprocess = update_core.subprocess
 
 
 def build_system_routes() -> APIRouter:
