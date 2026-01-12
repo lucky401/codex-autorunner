@@ -199,6 +199,18 @@ def _set_thread_summary(
                 record.thread_summaries.pop(key, None)
 
 
+def _set_pending_compact_seed(
+    record: "TelegramTopicRecord", seed_text: str, thread_id: Optional[str]
+) -> None:
+    record.pending_compact_seed = seed_text
+    record.pending_compact_seed_thread_id = thread_id
+
+
+def _clear_pending_compact_seed(record: "TelegramTopicRecord") -> None:
+    record.pending_compact_seed = None
+    record.pending_compact_seed_thread_id = None
+
+
 def _format_conversation_id(chat_id: int, thread_id: Optional[int]) -> str:
     return topic_key(chat_id, thread_id)
 

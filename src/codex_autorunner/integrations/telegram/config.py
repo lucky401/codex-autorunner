@@ -18,6 +18,8 @@ DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
 DEFAULT_PARSE_MODE = "HTML"
 DEFAULT_STATE_FILE = ".codex-autorunner/telegram_state.json"
 DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
+DEFAULT_APP_SERVER_MAX_HANDLES = 20
+DEFAULT_APP_SERVER_IDLE_TTL_SECONDS = 3600
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
 DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
@@ -124,6 +126,8 @@ class TelegramBotConfig:
     state_file: Path
     app_server_command_env: str
     app_server_command: list[str]
+    app_server_max_handles: Optional[int]
+    app_server_idle_ttl_seconds: Optional[int]
     poll_timeout_seconds: int
     poll_allowed_updates: list[str]
 
@@ -285,6 +289,23 @@ class TelegramBotConfig:
         if not app_server_command:
             app_server_command = list(DEFAULT_APP_SERVER_COMMAND)
 
+        app_server_raw_value = cfg.get("app_server")
+        app_server_raw: dict[str, Any] = (
+            app_server_raw_value if isinstance(app_server_raw_value, dict) else {}
+        )
+        app_server_max_handles = int(
+            app_server_raw.get("max_handles", DEFAULT_APP_SERVER_MAX_HANDLES)
+        )
+        if app_server_max_handles <= 0:
+            app_server_max_handles = None
+        app_server_idle_ttl_seconds = int(
+            app_server_raw.get(
+                "idle_ttl_seconds", DEFAULT_APP_SERVER_IDLE_TTL_SECONDS
+            )
+        )
+        if app_server_idle_ttl_seconds <= 0:
+            app_server_idle_ttl_seconds = None
+
         polling_raw_value = cfg.get("polling")
         polling_raw: dict[str, Any] = (
             polling_raw_value if isinstance(polling_raw_value, dict) else {}
@@ -318,6 +339,8 @@ class TelegramBotConfig:
             state_file=state_file,
             app_server_command_env=app_server_command_env,
             app_server_command=app_server_command,
+            app_server_max_handles=app_server_max_handles,
+            app_server_idle_ttl_seconds=app_server_idle_ttl_seconds,
             poll_timeout_seconds=poll_timeout_seconds,
             poll_allowed_updates=poll_allowed_updates,
         )

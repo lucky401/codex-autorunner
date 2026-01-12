@@ -78,6 +78,11 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         return StreamingResponse(
             state_stream(engine, manager, logger=request.app.state.logger),
             media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
         )
 
     @router.get("/api/logs")
@@ -102,7 +107,13 @@ def build_base_routes(static_dir: Path) -> APIRouter:
     async def stream_logs_endpoint(request: Request):
         engine = request.app.state.engine
         return StreamingResponse(
-            log_stream(engine.log_path), media_type="text/event-stream"
+            log_stream(engine.log_path),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
         )
 
     @router.websocket("/api/terminal")

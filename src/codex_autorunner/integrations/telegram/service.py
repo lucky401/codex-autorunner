@@ -124,6 +124,8 @@ class TelegramBotService(
             approval_handler=self._handle_approval_request,
             notification_handler=self._handle_app_server_notification,
             logger=self._logger,
+            max_handles=config.app_server_max_handles,
+            idle_ttl_seconds=config.app_server_idle_ttl_seconds,
         )
         self._bot = TelegramBotClient(config.bot_token or "", logger=self._logger)
         self._poller = TelegramUpdatePoller(
@@ -244,6 +246,7 @@ class TelegramBotService(
                         roots,
                         self._logger,
                     )
+                await self._app_server_supervisor.prune_idle()
             except Exception as exc:
                 log_event(
                     self._logger,

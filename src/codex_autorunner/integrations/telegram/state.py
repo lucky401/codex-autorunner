@@ -156,6 +156,8 @@ class TelegramTopicRecord:
     active_thread_id: Optional[str] = None
     thread_ids: list[str] = dataclasses.field(default_factory=list)
     thread_summaries: dict[str, ThreadSummary] = dataclasses.field(default_factory=dict)
+    pending_compact_seed: Optional[str] = None
+    pending_compact_seed_thread_id: Optional[str] = None
     last_update_id: Optional[int] = None
     model: Optional[str] = None
     effort: Optional[str] = None
@@ -204,6 +206,16 @@ class TelegramTopicRecord:
                 if parsed is None:
                     continue
                 thread_summaries[thread_id] = parsed
+        pending_compact_seed = payload.get("pending_compact_seed") or payload.get(
+            "pendingCompactSeed"
+        )
+        if not isinstance(pending_compact_seed, str):
+            pending_compact_seed = None
+        pending_compact_seed_thread_id = payload.get(
+            "pending_compact_seed_thread_id"
+        ) or payload.get("pendingCompactSeedThreadId")
+        if not isinstance(pending_compact_seed_thread_id, str):
+            pending_compact_seed_thread_id = None
         if not thread_ids and isinstance(active_thread_id, str):
             thread_ids = [active_thread_id]
         last_update_id = payload.get("last_update_id") or payload.get("lastUpdateId")
@@ -247,6 +259,8 @@ class TelegramTopicRecord:
             active_thread_id=active_thread_id,
             thread_ids=thread_ids,
             thread_summaries=thread_summaries,
+            pending_compact_seed=pending_compact_seed,
+            pending_compact_seed_thread_id=pending_compact_seed_thread_id,
             last_update_id=last_update_id,
             model=model,
             effort=effort,
@@ -269,6 +283,8 @@ class TelegramTopicRecord:
                 thread_id: summary.to_dict()
                 for thread_id, summary in self.thread_summaries.items()
             },
+            "pending_compact_seed": self.pending_compact_seed,
+            "pending_compact_seed_thread_id": self.pending_compact_seed_thread_id,
             "last_update_id": self.last_update_id,
             "model": self.model,
             "effort": self.effort,
@@ -646,6 +662,8 @@ class TelegramStateStore:
             record.thread_ids = []
             record.thread_summaries = {}
             record.rollout_path = None
+            record.pending_compact_seed = None
+            record.pending_compact_seed_thread_id = None
 
         return self._update_topic(key, apply)
 

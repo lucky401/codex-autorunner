@@ -627,7 +627,7 @@ def create_hub_app(
     @app.get("/hub/repos")
     async def list_repos():
         safe_log(app.state.logger, logging.INFO, "Hub list_repos")
-        snapshots = context.supervisor.list_repos()
+        snapshots = await asyncio.to_thread(context.supervisor.list_repos)
         _refresh_mounts(snapshots)
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
@@ -643,7 +643,7 @@ def create_hub_app(
     @app.post("/hub/repos/scan")
     async def scan_repos():
         safe_log(app.state.logger, logging.INFO, "Hub scan_repos")
-        snapshots = context.supervisor.scan()
+        snapshots = await asyncio.to_thread(context.supervisor.scan)
         _refresh_mounts(snapshots)
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
@@ -670,15 +670,20 @@ def create_hub_app(
         )
         try:
             if git_url:
-                snapshot = context.supervisor.clone_repo(
+                snapshot = await asyncio.to_thread(
+                    context.supervisor.clone_repo,
                     git_url=str(git_url),
                     repo_id=str(repo_id) if repo_id else None,
                     repo_path=repo_path,
                     force=force,
                 )
             else:
-                snapshot = context.supervisor.create_repo(
-                    str(repo_id), repo_path=repo_path, git_init=git_init, force=force
+                snapshot = await asyncio.to_thread(
+                    context.supervisor.create_repo,
+                    str(repo_id),
+                    repo_path=repo_path,
+                    git_init=git_init,
+                    force=force,
                 )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -689,7 +694,9 @@ def create_hub_app(
     async def remove_repo_check(repo_id: str):
         safe_log(app.state.logger, logging.INFO, f"Hub remove-check {repo_id}")
         try:
-            return context.supervisor.check_repo_removal(repo_id)
+            return await asyncio.to_thread(
+                context.supervisor.check_repo_removal, repo_id
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -706,7 +713,8 @@ def create_hub_app(
             % (repo_id, force, delete_dir, delete_worktrees),
         )
         try:
-            context.supervisor.remove_repo(
+            await asyncio.to_thread(
+                context.supervisor.remove_repo,
                 repo_id,
                 force=force,
                 delete_dir=delete_dir,
@@ -728,8 +736,11 @@ def create_hub_app(
             % (base_repo_id, branch, force),
         )
         try:
-            snapshot = context.supervisor.create_worktree(
-                base_repo_id=str(base_repo_id), branch=str(branch), force=force
+            snapshot = await asyncio.to_thread(
+                context.supervisor.create_worktree,
+                base_repo_id=str(base_repo_id),
+                branch=str(branch),
+                force=force,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -748,7 +759,8 @@ def create_hub_app(
             % (worktree_repo_id, delete_branch, delete_remote),
         )
         try:
-            context.supervisor.cleanup_worktree(
+            await asyncio.to_thread(
+                context.supervisor.cleanup_worktree,
                 worktree_repo_id=str(worktree_repo_id),
                 delete_branch=delete_branch,
                 delete_remote=delete_remote,
@@ -766,7 +778,9 @@ def create_hub_app(
             "Hub run %s once=%s" % (repo_id, once),
         )
         try:
-            snapshot = context.supervisor.run_repo(repo_id, once=once)
+            snapshot = await asyncio.to_thread(
+                context.supervisor.run_repo, repo_id, once=once
+            )
         except LockError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
@@ -778,7 +792,7 @@ def create_hub_app(
     async def stop_repo(repo_id: str):
         safe_log(app.state.logger, logging.INFO, f"Hub stop {repo_id}")
         try:
-            snapshot = context.supervisor.stop_repo(repo_id)
+            snapshot = await asyncio.to_thread(context.supervisor.stop_repo, repo_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _add_mount_info(snapshot.to_dict(context.config.root))
@@ -792,7 +806,9 @@ def create_hub_app(
             "Hub resume %s once=%s" % (repo_id, once),
         )
         try:
-            snapshot = context.supervisor.resume_repo(repo_id, once=once)
+            snapshot = await asyncio.to_thread(
+                context.supervisor.resume_repo, repo_id, once=once
+            )
         except LockError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
@@ -804,7 +820,7 @@ def create_hub_app(
     async def kill_repo(repo_id: str):
         safe_log(app.state.logger, logging.INFO, f"Hub kill {repo_id}")
         try:
-            snapshot = context.supervisor.kill_repo(repo_id)
+            snapshot = await asyncio.to_thread(context.supervisor.kill_repo, repo_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _add_mount_info(snapshot.to_dict(context.config.root))
@@ -813,7 +829,7 @@ def create_hub_app(
     async def init_repo(repo_id: str):
         safe_log(app.state.logger, logging.INFO, f"Hub init {repo_id}")
         try:
-            snapshot = context.supervisor.init_repo(repo_id)
+            snapshot = await asyncio.to_thread(context.supervisor.init_repo, repo_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _refresh_mounts([snapshot])

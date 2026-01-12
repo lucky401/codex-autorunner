@@ -141,6 +141,10 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "state_file": ".codex-autorunner/telegram_state.json",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
+        "app_server": {
+            "max_handles": 20,
+            "idle_ttl_seconds": 3600,
+        },
         "polling": {
             "timeout_seconds": 30,
             "allowed_updates": ["message", "edited_message", "callback_query"],
@@ -311,6 +315,10 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "state_file": ".codex-autorunner/telegram_state.json",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
+        "app_server": {
+            "max_handles": 20,
+            "idle_ttl_seconds": 3600,
+        },
         "polling": {
             "timeout_seconds": 30,
             "allowed_updates": ["message", "edited_message", "callback_query"],

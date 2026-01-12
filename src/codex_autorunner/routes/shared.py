@@ -16,6 +16,7 @@ BYPASS_FLAGS = {
     "--yolo",
     "--dangerously-bypass-approvals-and-sandbox",
 }
+SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 
 def _extract_bypass_flag(args: list[str]) -> tuple[str, list[str]]:
@@ -73,11 +74,17 @@ async def log_stream(log_path: Path):
         return
     with log_path.open("r", encoding="utf-8") as f:
         f.seek(0, 2)
+        last_emit_at = time.monotonic()
         while True:
             line = f.readline()
             if line:
                 yield f"data: {line.rstrip()}\n\n"
+                last_emit_at = time.monotonic()
             else:
+                now = time.monotonic()
+                if now - last_emit_at >= SSE_HEARTBEAT_INTERVAL_SECONDS:
+                    yield ": ping\n\n"
+                    last_emit_at = now
                 await asyncio.sleep(0.5)
 
 
@@ -85,6 +92,7 @@ async def state_stream(engine, manager, logger=None):
     """SSE stream generator for state updates."""
     last_payload = None
     last_error_log_at = 0.0
+    last_emit_at = time.monotonic()
     terminal_idle_timeout_seconds = engine.config.terminal_idle_timeout_seconds
     codex_model = engine.config.codex_model or extract_flag_value(
         engine.config.codex_args, "--model"
@@ -110,6 +118,12 @@ async def state_stream(engine, manager, logger=None):
             if payload != last_payload:
                 yield f"data: {json.dumps(payload)}\n\n"
                 last_payload = payload
+                last_emit_at = time.monotonic()
+            else:
+                now = time.monotonic()
+                if now - last_emit_at >= SSE_HEARTBEAT_INTERVAL_SECONDS:
+                    yield ": ping\n\n"
+                    last_emit_at = now
         except Exception:
             # Don't spam logs, but don't swallow silently either.
             now = time.time()

@@ -81,6 +81,7 @@ from ..helpers import (
     _compose_agent_response,
     _compose_interrupt_response,
     _consume_raw_token,
+    _clear_pending_compact_seed,
     _extract_command_result,
     _extract_first_user_preview,
     _extract_rate_limits,
@@ -118,6 +119,7 @@ from ..helpers import (
     _repo_root,
     _resume_thread_list_limit,
     _set_model_overrides,
+    _set_pending_compact_seed,
     _set_policy_overrides,
     _set_rollout_path,
     _set_thread_summary,
@@ -900,6 +902,21 @@ class TelegramCommandHandlers:
                         rollout_path=record.rollout_path,
                     ),
                 )
+            pending_seed = None
+            pending_seed_thread_id = record.pending_compact_seed_thread_id
+            if record.pending_compact_seed:
+                if pending_seed_thread_id is None:
+                    pending_seed = record.pending_compact_seed
+                elif thread_id and pending_seed_thread_id == thread_id:
+                    pending_seed = record.pending_compact_seed
+            if pending_seed:
+                if input_items is None:
+                    input_items = [
+                        {"type": "text", "text": pending_seed},
+                        {"type": "text", "text": prompt_text},
+                    ]
+                else:
+                    input_items = [{"type": "text", "text": pending_seed}] + input_items
             approval_policy, sandbox_policy = self._effective_policies(record)
             turn_kwargs: dict[str, Any] = {}
             if record.model:
@@ -937,6 +954,12 @@ class TelegramCommandHandlers:
                     sandbox_policy=sandbox_policy,
                     **turn_kwargs,
                 )
+                if pending_seed:
+                    self._router.update_topic(
+                        message.chat_id,
+                        message.thread_id,
+                        _clear_pending_compact_seed,
+                    )
                 turn_started_at = time.monotonic()
                 turn_key = self._turn_key(thread_id, turn_handle.turn_id)
                 runtime.current_turn_id = turn_handle.turn_id
@@ -4348,35 +4371,20 @@ class TelegramCommandHandlers:
             active_thread_id=new_thread_id,
         )
         seed_text = self._build_compact_seed_prompt(summary_text)
-        seed_outcome = await self._run_turn_and_collect_result(
-            message,
-            _RuntimeStub(),
-            text_override=seed_text,
-            record=record,
-            send_placeholder=False,
-            allow_new_thread=False,
-            send_failure_response=False,
+        record = self._router.update_topic(
+            message.chat_id,
+            message.thread_id,
+            lambda record: _set_pending_compact_seed(
+                record, seed_text, new_thread_id
+            ),
         )
-        if isinstance(seed_outcome, _TurnRunFailure):
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.compact.apply.turn_failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                failure_message=seed_outcome.failure_message,
-            )
-            return False, seed_outcome.failure_message
-        if seed_outcome.turn_id:
-            self._token_usage_by_turn.pop(seed_outcome.turn_id, None)
         log_event(
             self._logger,
             logging.INFO,
-            "telegram.compact.apply.turn_completed",
+            "telegram.compact.apply.seed_queued",
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             codex_thread_id=new_thread_id,
-            turn_id=seed_outcome.turn_id,
         )
         return True, None
 

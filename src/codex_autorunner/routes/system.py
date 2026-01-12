@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import shutil
 import subprocess
@@ -54,7 +55,7 @@ def build_system_routes() -> APIRouter:
                 },
                 status_code=500,
             )
-        missing = missing_static_assets(static_dir)
+        missing = await asyncio.to_thread(missing_static_assets, static_dir)
         if missing:
             return JSONResponse(
                 {
@@ -95,7 +96,9 @@ def build_system_routes() -> APIRouter:
                 repo_ref = configured_ref
 
         try:
-            return _system_update_check(repo_url=repo_url, repo_ref=repo_ref)
+            return await asyncio.to_thread(
+                _system_update_check, repo_url=repo_url, repo_ref=repo_ref
+            )
         except Exception as e:
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger:
@@ -137,7 +140,8 @@ def build_system_routes() -> APIRouter:
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger is None:
                 logger = logging.getLogger("codex_autorunner.system_update")
-            _spawn_update_process(
+            await asyncio.to_thread(
+                _spawn_update_process,
                 repo_url=repo_url,
                 repo_ref=_normalize_update_ref(repo_ref),
                 update_dir=update_dir,
@@ -161,7 +165,7 @@ def build_system_routes() -> APIRouter:
 
     @router.get("/system/update/status", response_model=SystemUpdateStatusResponse)
     async def system_update_status():
-        status = _read_update_status()
+        status = await asyncio.to_thread(_read_update_status)
         if status is None:
             return {"status": "unknown", "message": "No update status recorded."}
         return status

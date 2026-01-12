@@ -36,6 +36,8 @@ class WorkspaceAppServerSupervisor:
         auto_restart: bool = True,
         request_timeout: Optional[float] = None,
         default_approval_decision: str = "cancel",
+        max_handles: Optional[int] = None,
+        idle_ttl_seconds: Optional[float] = None,
     ) -> None:
         self._command = [str(arg) for arg in command]
         self._state_root = state_root
@@ -46,6 +48,8 @@ class WorkspaceAppServerSupervisor:
         self._auto_restart = auto_restart
         self._request_timeout = request_timeout
         self._default_approval_decision = default_approval_decision
+        self._max_handles = max_handles
+        self._idle_ttl_seconds = idle_ttl_seconds
         self._handles: dict[str, AppServerHandle] = {}
         self._lock = asyncio.Lock()
 
@@ -67,13 +71,31 @@ class WorkspaceAppServerSupervisor:
             except Exception:
                 continue
 
+    async def prune_idle(self) -> int:
+        handles = await self._pop_idle_handles()
+        if not handles:
+            return 0
+        closed = 0
+        for handle in handles:
+            try:
+                await handle.client.close()
+                closed += 1
+            except Exception:
+                continue
+        return closed
+
     async def _ensure_handle(
         self, workspace_id: str, workspace_root: Path
     ) -> AppServerHandle:
+        handles_to_close: list[AppServerHandle] = []
         async with self._lock:
             existing = self._handles.get(workspace_id)
             if existing is not None:
                 return existing
+            handles_to_close.extend(self._pop_idle_handles_locked())
+            evicted = self._evict_lru_handle_locked()
+            if evicted is not None:
+                handles_to_close.append(evicted)
             state_dir = self._state_root / workspace_id
             env = self._env_builder(workspace_root, workspace_id, state_dir)
             client = CodexAppServerClient(
@@ -92,9 +114,15 @@ class WorkspaceAppServerSupervisor:
                 workspace_root=workspace_root,
                 client=client,
                 start_lock=asyncio.Lock(),
+                last_used_at=time.monotonic(),
             )
             self._handles[workspace_id] = handle
-            return handle
+        for handle in handles_to_close:
+            try:
+                await handle.client.close()
+            except Exception:
+                continue
+        return handle
 
     async def _ensure_started(self, handle: AppServerHandle) -> None:
         async with handle.start_lock:
@@ -102,3 +130,30 @@ class WorkspaceAppServerSupervisor:
                 return
             await handle.client.start()
             handle.started = True
+
+    async def _pop_idle_handles(self) -> list[AppServerHandle]:
+        async with self._lock:
+            return self._pop_idle_handles_locked()
+
+    def _pop_idle_handles_locked(self) -> list[AppServerHandle]:
+        if not self._idle_ttl_seconds or self._idle_ttl_seconds <= 0:
+            return []
+        cutoff = time.monotonic() - self._idle_ttl_seconds
+        stale: list[AppServerHandle] = []
+        for handle in list(self._handles.values()):
+            if handle.last_used_at and handle.last_used_at < cutoff:
+                self._handles.pop(handle.workspace_id, None)
+                stale.append(handle)
+        return stale
+
+    def _evict_lru_handle_locked(self) -> Optional[AppServerHandle]:
+        if not self._max_handles or self._max_handles <= 0:
+            return None
+        if len(self._handles) < self._max_handles:
+            return None
+        lru_handle = min(
+            self._handles.values(),
+            key=lambda handle: handle.last_used_at or 0.0,
+        )
+        self._handles.pop(lru_handle.workspace_id, None)
+        return lru_handle
