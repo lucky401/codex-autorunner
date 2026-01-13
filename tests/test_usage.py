@@ -4,7 +4,9 @@ from typing import Optional
 
 from codex_autorunner.core.usage import (
     get_hub_usage_series_cached,
+    get_hub_usage_summary_cached,
     get_repo_usage_series_cached,
+    get_repo_usage_summary_cached,
     get_usage_series_cache,
     summarize_hub_usage,
     summarize_repo_usage,
@@ -332,3 +334,139 @@ def test_hub_usage_series_includes_unmatched(tmp_path):
     assert series["buckets"] == ["2025-12-01", "2025-12-02"]
     assert values["repo-one"] == [7, 0]
     assert values["other"] == [0, 3]
+
+
+def test_repo_usage_summary_cache_matches_baseline(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    codex_home = tmp_path / "codex"
+
+    rate_limits = {"primary": {"used_percent": 80, "window_minutes": 5}}
+    _write_session(
+        codex_home,
+        repo_root,
+        [
+            {
+                "timestamp": "2025-12-01T00:01:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "rate_limits": rate_limits,
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 10,
+                            "cached_input_tokens": 1,
+                            "output_tokens": 2,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 13,
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 10,
+                            "cached_input_tokens": 1,
+                            "output_tokens": 2,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 13,
+                        },
+                    },
+                },
+            }
+        ],
+    )
+
+    baseline = summarize_repo_usage(repo_root, codex_home=codex_home)
+    _refresh_usage_cache(codex_home)
+    cached, status = get_repo_usage_summary_cached(repo_root, codex_home=codex_home)
+
+    assert status == "ready"
+    assert cached.events == baseline.events
+    assert cached.totals.total_tokens == baseline.totals.total_tokens
+    assert cached.latest_rate_limits == baseline.latest_rate_limits
+
+
+def test_hub_usage_summary_cache_matches_baseline(tmp_path):
+    hub_repo_one = tmp_path / "hub_repo_one"
+    hub_repo_two = tmp_path / "hub_repo_two"
+    hub_repo_one.mkdir()
+    hub_repo_two.mkdir()
+    codex_home = tmp_path / "codex"
+
+    _write_session(
+        codex_home,
+        hub_repo_one,
+        [
+            {
+                "timestamp": "2025-12-01T01:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 5,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 2,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 7,
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 5,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 2,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 7,
+                        },
+                    },
+                },
+            }
+        ],
+    )
+
+    _write_session(
+        codex_home,
+        tmp_path / "other",
+        [
+            {
+                "timestamp": "2025-12-01T02:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 3,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 1,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 4,
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 3,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 1,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 4,
+                        },
+                    },
+                },
+            }
+        ],
+    )
+
+    baseline_per_repo, baseline_unmatched = summarize_hub_usage(
+        [("repo-one", hub_repo_one), ("repo-two", hub_repo_two)],
+        codex_home=codex_home,
+    )
+    _refresh_usage_cache(codex_home)
+    cached_per_repo, cached_unmatched, status = get_hub_usage_summary_cached(
+        [("repo-one", hub_repo_one), ("repo-two", hub_repo_two)],
+        codex_home=codex_home,
+    )
+
+    assert status == "ready"
+    assert (
+        cached_per_repo["repo-one"].totals.total_tokens
+        == baseline_per_repo["repo-one"].totals.total_tokens
+    )
+    assert (
+        cached_per_repo["repo-two"].totals.total_tokens
+        == baseline_per_repo["repo-two"].totals.total_tokens
+    )
+    assert cached_unmatched.events == baseline_unmatched.events

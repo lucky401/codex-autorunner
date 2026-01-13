@@ -27,8 +27,8 @@ from ..core.usage import (
     UsageError,
     default_codex_home,
     get_hub_usage_series_cached,
+    get_hub_usage_summary_cached,
     parse_iso_datetime,
-    summarize_hub_usage,
 )
 from ..housekeeping import run_housekeeping_once
 from ..manifest import load_manifest
@@ -586,7 +586,7 @@ def create_hub_app(
         repo_map = [
             (repo.id, (context.config.root / repo.path)) for repo in manifest.repos
         ]
-        per_repo, unmatched = summarize_hub_usage(
+        per_repo, unmatched, status = get_hub_usage_summary_cached(
             repo_map,
             default_codex_home(),
             since=since_dt,
@@ -598,6 +598,7 @@ def create_hub_app(
             "codex_home": str(default_codex_home()),
             "since": since,
             "until": until,
+            "status": status,
             "repos": [
                 {
                     "id": repo_id,

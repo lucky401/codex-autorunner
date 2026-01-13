@@ -333,6 +333,57 @@ def _empty_rollup_bucket() -> Dict[str, Any]:
     }
 
 
+def _empty_summary_entry() -> Dict[str, Any]:
+    return {
+        "events": 0,
+        "totals": TokenTotals().to_dict(),
+        "latest_rate_limits": None,
+        "latest_rate_limits_pos": None,
+    }
+
+
+def _rate_limits_pos_key(pos: Optional[Dict[str, Any]]) -> Optional[Tuple[str, int]]:
+    if not pos:
+        return None
+    file_val = str(pos.get("file") or "")
+    try:
+        index_val = int(pos.get("index", 0) or 0)
+    except Exception:
+        index_val = 0
+    return (file_val, index_val)
+
+
+def _is_rate_limits_newer(
+    candidate: Optional[Dict[str, Any]],
+    current: Optional[Dict[str, Any]],
+) -> bool:
+    cand_key = _rate_limits_pos_key(candidate)
+    if cand_key is None:
+        return False
+    curr_key = _rate_limits_pos_key(current)
+    if curr_key is None:
+        return True
+    if cand_key[0] == curr_key[0]:
+        return cand_key[1] >= curr_key[1]
+    return cand_key[0] > curr_key[0]
+
+
+@dataclasses.dataclass
+class _SummaryAccumulator:
+    totals: TokenTotals = dataclasses.field(default_factory=TokenTotals)
+    events: int = 0
+    latest_rate_limits: Optional[Dict[str, Any]] = None
+    latest_rate_limits_pos: Optional[Dict[str, Any]] = None
+
+    def add_entry(self, entry: Dict[str, Any]) -> None:
+        self.totals.add(_coerce_totals(entry.get("totals")))
+        self.events += int(entry.get("events", 0) or 0)
+        pos = entry.get("latest_rate_limits_pos")
+        if pos and _is_rate_limits_newer(pos, self.latest_rate_limits_pos):
+            self.latest_rate_limits = entry.get("latest_rate_limits")
+            self.latest_rate_limits_pos = pos
+
+
 class UsageSeriesCache:
     def __init__(self, codex_home: Path, cache_path: Path):
         self.codex_home = codex_home
@@ -346,29 +397,35 @@ class UsageSeriesCache:
             return self._cache
         if not self.cache_path.exists():
             self._cache = {
-                "version": 2,
+                "version": 3,
                 "files": {},
                 "file_rollups": {},
+                "file_summaries": {},
                 "rollups": {"by_cwd": {}},
+                "summary": {"by_cwd": {}},
             }
             return self._cache
         try:
             payload = cast(
                 Dict[str, Any], json.loads(self.cache_path.read_text(encoding="utf-8"))
             )
-            if payload.get("version") != 2:
+            if payload.get("version") != 3:
                 raise ValueError("Unsupported cache version")
             payload.setdefault("files", {})
             payload.setdefault("file_rollups", {})
+            payload.setdefault("file_summaries", {})
             payload.setdefault("rollups", {}).setdefault("by_cwd", {})
+            payload.setdefault("summary", {}).setdefault("by_cwd", {})
             self._cache = payload
             return payload
         except Exception:
             self._cache = {
-                "version": 2,
+                "version": 3,
                 "files": {},
                 "file_rollups": {},
+                "file_summaries": {},
                 "rollups": {"by_cwd": {}},
+                "summary": {"by_cwd": {}},
             }
             return self._cache
 
@@ -461,15 +518,53 @@ class UsageSeriesCache:
             )
         return series, status
 
+    def get_repo_summary(
+        self,
+        repo_root: Path,
+        *,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+    ) -> Tuple[UsageSummary, str]:
+        status = self.request_update()
+        with self._lock:
+            payload = self._load_cache()
+            summary = self._build_repo_summary(
+                payload, repo_root, since=since, until=until
+            )
+        return summary, status
+
+    def get_hub_summary(
+        self,
+        repo_map: List[Tuple[str, Path]],
+        *,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+    ) -> Tuple[Dict[str, UsageSummary], UsageSummary, str]:
+        status = self.request_update()
+        with self._lock:
+            payload = self._load_cache()
+            per_repo, unmatched = self._build_hub_summary(
+                payload, repo_map, since=since, until=until
+            )
+        return per_repo, unmatched, status
+
     def _update_cache(self, payload: Dict[str, Any]) -> None:
         try:
             files = cast(Dict[str, Any], payload.setdefault("files", {}))
             file_rollups = cast(Dict[str, Any], payload.setdefault("file_rollups", {}))
+            file_summaries = cast(
+                Dict[str, Any], payload.setdefault("file_summaries", {})
+            )
             rollups = cast(
                 Dict[str, Any],
                 payload.setdefault("rollups", {}).setdefault("by_cwd", {}),
             )
+            summary_rollups = cast(
+                Dict[str, Any],
+                payload.setdefault("summary", {}).setdefault("by_cwd", {}),
+            )
             rebuild_rollups = False
+            rebuild_summary = False
             existing_paths = {
                 str(path) for path in _iter_session_files(self.codex_home)
             }
@@ -477,7 +572,9 @@ class UsageSeriesCache:
                 if path_key not in existing_paths:
                     files.pop(path_key, None)
                     file_rollups.pop(path_key, None)
+                    file_summaries.pop(path_key, None)
                     rebuild_rollups = True
+                    rebuild_summary = True
 
             for session_path in _iter_session_files(self.codex_home):
                 path_key = str(session_path)
@@ -491,16 +588,26 @@ class UsageSeriesCache:
                     offset = 0
                     file_state = {}
                     file_rollups.pop(path_key, None)
+                    file_summaries.pop(path_key, None)
                     rebuild_rollups = True
+                    rebuild_summary = True
                 if size == offset:
                     continue
                 updated_state = self._ingest_session_file(
-                    session_path, offset, file_state, rollups, file_rollups
+                    session_path,
+                    offset,
+                    file_state,
+                    rollups,
+                    file_rollups,
+                    summary_rollups,
+                    file_summaries,
                 )
                 files[path_key] = updated_state
             if rebuild_rollups:
                 payload["rollups"]["by_cwd"] = self._rebuild_rollups(file_rollups)
-            payload["version"] = 2
+            if rebuild_summary:
+                payload["summary"]["by_cwd"] = self._rebuild_summary(file_summaries)
+            payload["version"] = 3
             self._save_cache(payload)
             with self._lock:
                 self._cache = payload
@@ -515,11 +622,14 @@ class UsageSeriesCache:
         state: Dict[str, Any],
         rollups: Dict[str, Any],
         file_rollups: Dict[str, Any],
+        summary_rollups: Dict[str, Any],
+        file_summaries: Dict[str, Any],
     ) -> Dict[str, Any]:
         cwd = state.get("cwd")
         model = state.get("model")
         last_totals_raw = state.get("last_totals")
         last_totals = _coerce_totals(last_totals_raw) if last_totals_raw else None
+        event_index = int(state.get("event_index", 0) or 0)
 
         try:
             with session_path.open("rb") as handle:
@@ -548,6 +658,9 @@ class UsageSeriesCache:
 
         path_key = str(session_path)
         file_entry = file_rollups.setdefault(path_key, {}).setdefault("by_cwd", {})
+        file_summary_entry = file_summaries.setdefault(path_key, {}).setdefault(
+            "by_cwd", {}
+        )
 
         for line in lines:
             try:
@@ -569,16 +682,9 @@ class UsageSeriesCache:
             info = payload.get("info") or {}
             total_usage = info.get("total_token_usage")
             last_usage = info.get("last_token_usage")
-            if not total_usage and not last_usage:
+            rate_limits = payload.get("rate_limits")
+            if not total_usage and not last_usage and not rate_limits:
                 continue
-
-            totals = _coerce_totals(total_usage or last_usage)
-            delta = (
-                _coerce_totals(last_usage)
-                if last_usage
-                else totals.diff(last_totals or TokenTotals())
-            )
-            last_totals = totals
 
             timestamp_raw = record.get("timestamp")
             if not timestamp_raw:
@@ -591,32 +697,54 @@ class UsageSeriesCache:
             cwd_key = cwd or "__unknown__"
             model_key = model or "unknown"
 
-            for bucket_name in ("hour", "day", "week"):
-                bucket_start = _bucket_start(timestamp, bucket_name)
-                bucket_label = _bucket_label(bucket_start, bucket_name)
-                self._apply_rollup_delta(
-                    rollups,
-                    cwd_key,
-                    bucket_name,
-                    bucket_label,
-                    model_key,
-                    delta,
-                    token_fields,
+            if total_usage or last_usage:
+                totals = _coerce_totals(total_usage or last_usage)
+                delta = (
+                    _coerce_totals(last_usage)
+                    if last_usage
+                    else totals.diff(last_totals or TokenTotals())
                 )
-                self._apply_rollup_delta(
-                    file_entry,
-                    cwd_key,
-                    bucket_name,
-                    bucket_label,
-                    model_key,
-                    delta,
-                    token_fields,
-                )
+                last_totals = totals
+                for bucket_name in ("hour", "day", "week"):
+                    bucket_start = _bucket_start(timestamp, bucket_name)
+                    bucket_label = _bucket_label(bucket_start, bucket_name)
+                    self._apply_rollup_delta(
+                        rollups,
+                        cwd_key,
+                        bucket_name,
+                        bucket_label,
+                        model_key,
+                        delta,
+                        token_fields,
+                    )
+                    self._apply_rollup_delta(
+                        file_entry,
+                        cwd_key,
+                        bucket_name,
+                        bucket_label,
+                        model_key,
+                        delta,
+                        token_fields,
+                    )
+            else:
+                delta = TokenTotals()
+
+            event_index += 1
+            pos = {"file": path_key, "index": event_index}
+            self._apply_summary_delta(
+                summary_rollups,
+                file_summary_entry,
+                cwd_key,
+                delta,
+                rate_limits,
+                pos,
+            )
 
         state["offset"] = new_offset
         state["cwd"] = cwd
         state["model"] = model
         state["last_totals"] = last_totals.to_dict() if last_totals else None
+        state["event_index"] = event_index
         return state
 
     def _apply_rollup_delta(
@@ -649,6 +777,29 @@ class UsageSeriesCache:
                 continue
             token_types[label] = int(token_types.get(label, 0)) + value
             model_token[label] = int(model_token.get(label, 0)) + value
+
+    def _apply_summary_delta(
+        self,
+        summary_rollups: Dict[str, Any],
+        file_summary_entry: Dict[str, Any],
+        cwd_key: str,
+        delta: TokenTotals,
+        rate_limits: Optional[Dict[str, Any]],
+        pos: Dict[str, Any],
+    ) -> None:
+        summary_entry = summary_rollups.setdefault(cwd_key, _empty_summary_entry())
+        file_entry = file_summary_entry.setdefault(cwd_key, _empty_summary_entry())
+
+        for entry in (summary_entry, file_entry):
+            totals = _coerce_totals(entry.get("totals"))
+            totals.add(delta)
+            entry["totals"] = totals.to_dict()
+            entry["events"] = int(entry.get("events", 0) or 0) + 1
+            if rate_limits is not None and _is_rate_limits_newer(
+                pos, entry.get("latest_rate_limits_pos")
+            ):
+                entry["latest_rate_limits"] = rate_limits
+                entry["latest_rate_limits_pos"] = pos
 
     def _rebuild_rollups(self, file_rollups: Dict[str, Any]) -> Dict[str, Any]:
         merged: Dict[str, Any] = {}
@@ -688,6 +839,27 @@ class UsageSeriesCache:
                                 model_token[token_key] = int(
                                     model_token.get(token_key, 0)
                                 ) + int(total)
+        return merged
+
+    def _rebuild_summary(self, file_summaries: Dict[str, Any]) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {}
+        for path_key in sorted(file_summaries.keys()):
+            file_entry = file_summaries.get(path_key, {})
+            cwd_map = file_entry.get("by_cwd", {})
+            for cwd_key, entry in (cwd_map or {}).items():
+                target = merged.setdefault(cwd_key, _empty_summary_entry())
+                target_totals = _coerce_totals(target.get("totals"))
+                target_totals.add(_coerce_totals(entry.get("totals")))
+                target["totals"] = target_totals.to_dict()
+                target["events"] = int(target.get("events", 0) or 0) + int(
+                    entry.get("events", 0) or 0
+                )
+                pos = entry.get("latest_rate_limits_pos")
+                if pos and _is_rate_limits_newer(
+                    pos, target.get("latest_rate_limits_pos")
+                ):
+                    target["latest_rate_limits"] = entry.get("latest_rate_limits")
+                    target["latest_rate_limits_pos"] = pos
         return merged
 
     def _buckets_for_range(
@@ -735,6 +907,95 @@ class UsageSeriesCache:
             )
         series.sort(key=lambda item: int(item["total"]), reverse=True)
         return series
+
+    def _build_repo_summary(
+        self,
+        payload: Dict[str, Any],
+        repo_root: Path,
+        *,
+        since: Optional[datetime],
+        until: Optional[datetime],
+    ) -> UsageSummary:
+        if since or until:
+            return summarize_repo_usage(
+                repo_root,
+                codex_home=self.codex_home,
+                since=since,
+                until=until,
+            )
+        repo_root = repo_root.resolve()
+        rollups = cast(Dict[str, Any], payload.get("summary", {}).get("by_cwd", {}))
+        acc = _SummaryAccumulator()
+        for cwd, entry in rollups.items():
+            try:
+                cwd_path = Path(cwd)
+            except Exception:
+                continue
+            if cwd_path != repo_root and repo_root not in cwd_path.parents:
+                continue
+            acc.add_entry(entry)
+        return UsageSummary(
+            totals=acc.totals,
+            events=acc.events,
+            latest_rate_limits=acc.latest_rate_limits,
+        )
+
+    def _build_hub_summary(
+        self,
+        payload: Dict[str, Any],
+        repo_map: List[Tuple[str, Path]],
+        *,
+        since: Optional[datetime],
+        until: Optional[datetime],
+    ) -> Tuple[Dict[str, UsageSummary], UsageSummary]:
+        if since or until:
+            return summarize_hub_usage(
+                repo_map,
+                codex_home=self.codex_home,
+                since=since,
+                until=until,
+            )
+        repo_map = [(repo_id, path.resolve()) for repo_id, path in repo_map]
+
+        def _match_repo(cwd: Optional[Path]) -> Optional[str]:
+            if not cwd:
+                return None
+            for repo_id, repo_path in repo_map:
+                if cwd == repo_path or repo_path in cwd.parents:
+                    return repo_id
+            return None
+
+        rollups = cast(Dict[str, Any], payload.get("summary", {}).get("by_cwd", {}))
+        per_repo: Dict[str, _SummaryAccumulator] = {
+            repo_id: _SummaryAccumulator() for repo_id, _ in repo_map
+        }
+        unmatched = _SummaryAccumulator()
+
+        for cwd, entry in rollups.items():
+            try:
+                cwd_path = Path(cwd)
+            except Exception:
+                cwd_path = None
+            repo_id = _match_repo(cwd_path)
+            if repo_id is None:
+                unmatched.add_entry(entry)
+            else:
+                per_repo[repo_id].add_entry(entry)
+
+        per_repo_summary = {
+            repo_id: UsageSummary(
+                totals=acc.totals,
+                events=acc.events,
+                latest_rate_limits=acc.latest_rate_limits,
+            )
+            for repo_id, acc in per_repo.items()
+        }
+        unmatched_summary = UsageSummary(
+            totals=unmatched.totals,
+            events=unmatched.events,
+            latest_rate_limits=unmatched.latest_rate_limits,
+        )
+        return per_repo_summary, unmatched_summary
 
     def _build_repo_series(
         self,
@@ -920,6 +1181,18 @@ def get_repo_usage_series_cached(
     )
 
 
+def get_repo_usage_summary_cached(
+    repo_root: Path,
+    codex_home: Optional[Path] = None,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> Tuple[UsageSummary, str]:
+    codex_root = (codex_home or default_codex_home()).expanduser()
+    cache = get_usage_series_cache(codex_root)
+    return cache.get_repo_summary(repo_root, since=since, until=until)
+
+
 def get_hub_usage_series_cached(
     repo_map: List[Tuple[str, Path]],
     codex_home: Optional[Path] = None,
@@ -934,3 +1207,15 @@ def get_hub_usage_series_cached(
     return cache.get_hub_series(
         repo_map, since=since, until=until, bucket=bucket, segment=segment
     )
+
+
+def get_hub_usage_summary_cached(
+    repo_map: List[Tuple[str, Path]],
+    codex_home: Optional[Path] = None,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> Tuple[Dict[str, UsageSummary], UsageSummary, str]:
+    codex_root = (codex_home or default_codex_home()).expanduser()
+    cache = get_usage_series_cache(codex_root)
+    return cache.get_hub_summary(repo_map, since=since, until=until)

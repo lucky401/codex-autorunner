@@ -43,6 +43,7 @@ const hubUsageChartState = {
   windowDays: 30,
 };
 let hubUsageSeriesRetryTimer = null;
+let hubUsageSummaryRetryTimer = null;
 
 function saveSessionCache(key, value) {
   try {
@@ -223,18 +224,72 @@ function renderHubUsage(data) {
   }
 }
 
-async function loadHubUsage() {
-  if (hubUsageRefresh) hubUsageRefresh.disabled = true;
+function scheduleHubUsageSummaryRetry() {
+  clearHubUsageSummaryRetry();
+  hubUsageSummaryRetryTimer = setTimeout(() => {
+    loadHubUsage();
+  }, 1500);
+}
+
+function clearHubUsageSummaryRetry() {
+  if (hubUsageSummaryRetryTimer) {
+    clearTimeout(hubUsageSummaryRetryTimer);
+    hubUsageSummaryRetryTimer = null;
+  }
+}
+
+function handleHubUsagePayload(data, { cachedUsage, allowRetry }) {
+  const hasSummary = data && Array.isArray(data.repos);
+  if (data?.status === "loading") {
+    if (hasSummary) {
+      renderHubUsage(data);
+    } else if (cachedUsage) {
+      renderHubUsage(cachedUsage);
+    } else {
+      renderHubUsage(data);
+    }
+    if (allowRetry) scheduleHubUsageSummaryRetry();
+    return hasSummary;
+  }
+  if (hasSummary) {
+    renderHubUsage(data);
+    clearHubUsageSummaryRetry();
+    return true;
+  }
+  if (cachedUsage) {
+    renderHubUsage(cachedUsage);
+  } else {
+    renderHubUsage(null);
+  }
+  return false;
+}
+
+async function loadHubUsage({ silent = false, allowRetry = true } = {}) {
+  if (!silent && hubUsageRefresh) hubUsageRefresh.disabled = true;
   try {
     const data = await api("/hub/usage");
-    renderHubUsage(data);
+    const cachedUsage = loadSessionCache(HUB_USAGE_CACHE_KEY, HUB_CACHE_TTL_MS);
+    const shouldCache = handleHubUsagePayload(data, {
+      cachedUsage,
+      allowRetry,
+    });
     loadHubUsageSeries();
-    saveSessionCache(HUB_USAGE_CACHE_KEY, data);
+    if (shouldCache) {
+      saveSessionCache(HUB_USAGE_CACHE_KEY, data);
+    }
   } catch (err) {
-    flash(err.message || "Failed to load usage", "error");
-    renderHubUsage(null);
+    const cachedUsage = loadSessionCache(HUB_USAGE_CACHE_KEY, HUB_CACHE_TTL_MS);
+    if (cachedUsage) {
+      renderHubUsage(cachedUsage);
+    } else {
+      renderHubUsage(null);
+    }
+    if (!silent) {
+      flash(err.message || "Failed to load usage", "error");
+    }
+    clearHubUsageSummaryRetry();
   } finally {
-    if (hubUsageRefresh) hubUsageRefresh.disabled = false;
+    if (!silent && hubUsageRefresh) hubUsageRefresh.disabled = false;
   }
 }
 
@@ -960,7 +1015,7 @@ async function refreshHub() {
     renderSummary(data.repos || []);
     renderRepos(data.repos || []);
     refreshRepoPrCache(data.repos || []).catch(() => {});
-    await loadHubUsage();
+    loadHubUsage().catch(() => {});
   } catch (err) {
     flash(err.message || "Hub request failed", "error");
   } finally {
@@ -1288,14 +1343,7 @@ async function silentRefreshHub() {
     saveSessionCache(HUB_CACHE_KEY, hubData);
     renderSummary(data.repos || []);
     renderRepos(data.repos || []);
-    // Also refresh usage silently
-    try {
-      const usageData = await api("/hub/usage");
-      renderHubUsage(usageData);
-      saveSessionCache(HUB_USAGE_CACHE_KEY, usageData);
-    } catch (err) {
-      // Silently ignore usage errors
-    }
+    await loadHubUsage({ silent: true, allowRetry: false });
   } catch (err) {
     // Silently fail for background refresh
     console.error("Auto-refresh hub failed:", err);

@@ -25,8 +25,8 @@ from ..core.usage import (
     UsageError,
     default_codex_home,
     get_repo_usage_series_cached,
+    get_repo_usage_summary_cached,
     parse_iso_datetime,
-    summarize_repo_usage,
 )
 from ..core.utils import atomic_write
 from ..spec_ingest import (
@@ -221,7 +221,7 @@ def build_docs_routes() -> APIRouter:
             until_dt = parse_iso_datetime(until)
         except UsageError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        summary = summarize_repo_usage(
+        summary, status = get_repo_usage_summary_cached(
             engine.repo_root,
             default_codex_home(),
             since=since_dt,
@@ -233,6 +233,7 @@ def build_docs_routes() -> APIRouter:
             "codex_home": str(default_codex_home()),
             "since": since,
             "until": until,
+            "status": status,
             **summary.to_dict(),
         }
 

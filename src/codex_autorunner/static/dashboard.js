@@ -22,6 +22,7 @@ const usageChartState = {
   windowDays: 30,
 };
 let usageSeriesRetryTimer = null;
+let usageSummaryRetryTimer = null;
 
 function renderState(state) {
   if (!state) return;
@@ -473,15 +474,49 @@ function clearUsageSeriesRetry() {
   }
 }
 
+function scheduleUsageSummaryRetry() {
+  clearUsageSummaryRetry();
+  usageSummaryRetryTimer = setTimeout(() => {
+    loadUsage();
+  }, 1500);
+}
+
+function clearUsageSummaryRetry() {
+  if (usageSummaryRetryTimer) {
+    clearTimeout(usageSummaryRetryTimer);
+    usageSummaryRetryTimer = null;
+  }
+}
+
 async function loadUsage() {
   setUsageLoading(true);
   try {
     const data = await api("/api/usage");
-    renderUsage(data);
+    const cachedUsage = loadFromCache("usage");
+    const hasSummary = data && data.totals && typeof data.events === "number";
+    if (data?.status === "loading") {
+      if (hasSummary) {
+        renderUsage(data);
+      } else if (cachedUsage) {
+        renderUsage(cachedUsage);
+      } else {
+        renderUsage(data);
+      }
+      scheduleUsageSummaryRetry();
+    } else {
+      renderUsage(data);
+      clearUsageSummaryRetry();
+    }
     loadUsageSeries();
   } catch (err) {
-    renderUsage(null);
+    const cachedUsage = loadFromCache("usage");
+    if (cachedUsage) {
+      renderUsage(cachedUsage);
+    } else {
+      renderUsage(null);
+    }
     flash(err.message || "Failed to load usage", "error");
+    clearUsageSummaryRetry();
   } finally {
     setUsageLoading(false);
   }

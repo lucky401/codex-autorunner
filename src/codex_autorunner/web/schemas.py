@@ -198,6 +198,7 @@ class RepoUsageResponse(ResponseModel):
     codex_home: str
     since: Optional[str]
     until: Optional[str]
+    status: str
     events: int
     totals: TokenTotalsResponse
     latest_rate_limits: Optional[Dict[str, Any]]
