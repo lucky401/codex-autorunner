@@ -20,6 +20,9 @@ const HUB_CACHE_TTL_MS = 30000;
 const HUB_CACHE_KEY = `car:hub:${HUB_BASE || "/"}`;
 const HUB_USAGE_CACHE_KEY = `car:hub-usage:${HUB_BASE || "/"}`;
 const PR_CACHE_TTL_MS = 120000;
+const PR_FAILURE_TTL_MS = 15000;
+const PR_FETCH_CONCURRENCY = 3;
+const PR_PREFETCH_MARGIN = "200px";
 
 const repoListEl = document.getElementById("hub-repo-list");
 const lastScanEl = document.getElementById("hub-last-scan");
@@ -44,6 +47,10 @@ const hubUsageChartState = {
 };
 let hubUsageSeriesRetryTimer = null;
 let hubUsageSummaryRetryTimer = null;
+const repoPrPending = new Set();
+let repoPrQueue = [];
+let repoPrActive = 0;
+let repoPrObserver = null;
 
 function saveSessionCache(key, value) {
   try {
@@ -794,8 +801,75 @@ function inferBaseId(repo) {
   return null;
 }
 
+function initRepoPrObserver() {
+  if (!("IntersectionObserver" in window)) return null;
+  if (repoPrObserver) return repoPrObserver;
+  repoPrObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const target = entry.target;
+        const repoId = target?.dataset?.repoId;
+        if (repoId) {
+          const repo = (hubData.repos || []).find((item) => item.id === repoId);
+          if (repo) scheduleRepoPrFetch(repo);
+        }
+        if (target) repoPrObserver.unobserve(target);
+      });
+    },
+    { rootMargin: PR_PREFETCH_MARGIN }
+  );
+  return repoPrObserver;
+}
+
+function scheduleRepoPrFetch(repo) {
+  if (!repo || repo.mounted !== true) return;
+  const cached = repoPrCache.get(repo.id);
+  if (
+    cached &&
+    typeof cached.fetchedAt === "number" &&
+    Date.now() - cached.fetchedAt <
+      (cached.failed ? PR_FAILURE_TTL_MS : PR_CACHE_TTL_MS)
+  ) {
+    return;
+  }
+  if (repoPrFetches.has(repo.id) || repoPrPending.has(repo.id)) return;
+  repoPrPending.add(repo.id);
+  repoPrQueue.push(repo);
+  pumpRepoPrQueue();
+}
+
+function pumpRepoPrQueue() {
+  while (repoPrActive < PR_FETCH_CONCURRENCY && repoPrQueue.length) {
+    const repo = repoPrQueue.shift();
+    if (!repo || repoPrFetches.has(repo.id)) continue;
+    repoPrPending.delete(repo.id);
+    repoPrActive += 1;
+    repoPrFetches.add(repo.id);
+    api(`/repos/${repo.id}/api/github/pr`, { method: "GET" })
+      .then((pr) => {
+        repoPrCache.set(repo.id, { data: pr, fetchedAt: Date.now() });
+      })
+      .catch(() => {
+        // Best-effort: ignore GitHub errors so hub stays fast.
+        repoPrCache.set(repo.id, {
+          data: null,
+          fetchedAt: Date.now(),
+          failed: true,
+        });
+      })
+      .finally(() => {
+        repoPrFetches.delete(repo.id);
+        repoPrActive -= 1;
+        pumpRepoPrQueue();
+        renderRepos(hubData.repos || []);
+      });
+  }
+}
+
 function renderRepos(repos) {
   if (!repoListEl) return;
+  if (repoPrObserver) repoPrObserver.disconnect();
   repoListEl.innerHTML = "";
   if (!repos.length) {
     repoListEl.innerHTML =
@@ -934,6 +1008,15 @@ function renderRepos(repos) {
     }
 
     repoListEl.appendChild(card);
+
+    if (repo.mounted === true) {
+      const observer = initRepoPrObserver();
+      if (observer) {
+        observer.observe(card);
+      } else {
+        scheduleRepoPrFetch(repo);
+      }
+    }
   };
 
   orderedGroups.forEach((group) => {
@@ -979,31 +1062,19 @@ function renderRepos(repos) {
 async function refreshRepoPrCache(repos) {
   const mounted = (repos || []).filter((r) => r && r.mounted === true);
   if (!mounted.length) return;
-  const tasks = mounted.map(async (repo) => {
-    const cached = repoPrCache.get(repo.id);
-    if (
-      cached &&
-      typeof cached.fetchedAt === "number" &&
-      Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS
-    ) {
-      return;
-    }
-    if (repoPrFetches.has(repo.id)) return;
-    repoPrFetches.add(repo.id);
-    try {
-      const pr = await api(`/repos/${repo.id}/api/github/pr`, {
-        method: "GET",
-      });
-      repoPrCache.set(repo.id, { data: pr, fetchedAt: Date.now() });
-    } catch (err) {
-      // Best-effort: ignore GitHub errors so hub stays fast.
-    } finally {
-      repoPrFetches.delete(repo.id);
-    }
-  });
-  await Promise.allSettled(tasks);
-  // Re-render to show pills without blocking initial load.
-  renderRepos(hubData.repos || []);
+  const observer = initRepoPrObserver();
+  if (observer && repoListEl) {
+    mounted.forEach((repo) => {
+      const card = repoListEl.querySelector(`[data-repo-id="${repo.id}"]`);
+      if (card) {
+        observer.observe(card);
+      } else {
+        scheduleRepoPrFetch(repo);
+      }
+    });
+    return;
+  }
+  mounted.forEach((repo) => scheduleRepoPrFetch(repo));
 }
 
 async function refreshHub() {

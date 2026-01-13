@@ -3,11 +3,69 @@ GitHub integration routes.
 """
 
 import asyncio
+import time
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 
 from ..integrations.github.service import GitHubError, GitHubService
 from ..web.schemas import GithubContextRequest, GithubIssueRequest, GithubPrSyncRequest
+
+_GITHUB_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
+_GITHUB_CACHE_LOCK = asyncio.Lock()
+_GITHUB_STATUS_TTL_SECONDS = 20.0
+_GITHUB_PR_TTL_SECONDS = 60.0
+
+
+async def _get_cached_status_payload(
+    request: Request,
+    *,
+    kind: str,
+    ttl_seconds: float,
+) -> dict:
+    repo_root = request.app.state.engine.repo_root.resolve()
+    key = (str(repo_root), kind)
+    now = time.monotonic()
+    task: Optional[asyncio.Task] = None
+
+    async with _GITHUB_CACHE_LOCK:
+        entry = _GITHUB_CACHE.get(key) or {}
+        value = entry.get("value")
+        expires_at = float(entry.get("expires_at", 0) or 0)
+        task = entry.get("task")
+
+        if value is not None and expires_at > now:
+            return value
+        if task is None:
+            task = asyncio.create_task(
+                asyncio.to_thread(_github(request).status_payload)
+            )
+            _GITHUB_CACHE[key] = {
+                "value": value,
+                "expires_at": expires_at,
+                "task": task,
+            }
+
+    if task is None:
+        task = asyncio.create_task(asyncio.to_thread(_github(request).status_payload))
+        async with _GITHUB_CACHE_LOCK:
+            _GITHUB_CACHE[key] = {"task": task}
+
+    try:
+        value = await task
+    except Exception:
+        async with _GITHUB_CACHE_LOCK:
+            current = _GITHUB_CACHE.get(key) or {}
+            if current.get("task") is task:
+                _GITHUB_CACHE.pop(key, None)
+        raise
+
+    async with _GITHUB_CACHE_LOCK:
+        _GITHUB_CACHE[key] = {
+            "value": value,
+            "expires_at": now + ttl_seconds,
+        }
+    return value
 
 
 def _github(request) -> GitHubService:
@@ -23,7 +81,11 @@ def build_github_routes() -> APIRouter:
     @router.get("/api/github/status")
     async def github_status(request: Request):
         try:
-            return await asyncio.to_thread(_github(request).status_payload)
+            return await _get_cached_status_payload(
+                request,
+                kind="status",
+                ttl_seconds=_GITHUB_STATUS_TTL_SECONDS,
+            )
         except GitHubError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
@@ -31,9 +93,12 @@ def build_github_routes() -> APIRouter:
 
     @router.get("/api/github/pr")
     async def github_pr(request: Request):
-        svc = _github(request)
         try:
-            status = await asyncio.to_thread(svc.status_payload)
+            status = await _get_cached_status_payload(
+                request,
+                kind="pr",
+                ttl_seconds=_GITHUB_PR_TTL_SECONDS,
+            )
             return {
                 "status": "ok",
                 "git": status.get("git"),
