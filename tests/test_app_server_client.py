@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.integrations.app_server import client as app_server_client
 from codex_autorunner.integrations.app_server.client import CodexAppServerClient
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
@@ -208,5 +209,18 @@ async def test_response_without_trailing_newline(tmp_path: Path) -> None:
     try:
         result = await client.request("fixture/echo_no_newline", {"value": "final"})
         assert result["value"] == "final"
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_oversize_line_drops_and_preserves_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_server_client, "_MAX_MESSAGE_BYTES", 128)
+    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        result = await client.request("fixture/oversize_drop", {"value": "ok"})
+        assert result["value"] == "ok"
     finally:
         await client.close()

@@ -346,6 +346,25 @@ class FixtureServer:
                 }
             )
             return
+        if method == "fixture/oversize_drop":
+            oversized_payload = {
+                "method": "fixture/oversized",
+                "params": {
+                    "threadId": "thread-oversize",
+                    "turnId": "turn-oversize",
+                    "blob": "x" * 2048,
+                },
+            }
+            response_payload = {
+                "id": req_id,
+                "result": {"value": params.get("value")},
+            }
+            oversized_line = json.dumps(oversized_payload, separators=(",", ":"))
+            response_line = json.dumps(response_payload, separators=(",", ":"))
+            with self._lock:
+                sys.stdout.write(f"{oversized_line}\n{response_line}\n")
+                sys.stdout.flush()
+            return
         if method == "fixture/echo_no_newline":
             payload = {
                 "id": req_id,

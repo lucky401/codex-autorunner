@@ -42,6 +42,7 @@ from .constants import (
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
     DEFAULT_WORKSPACE_STATE_ROOT,
     MODEL_PENDING_TTL_SECONDS,
+    OVERSIZE_WARNING_TTL_SECONDS,
     PENDING_APPROVAL_TTL_SECONDS,
     REASONING_BUFFER_TTL_SECONDS,
     SELECTION_STATE_TTL_SECONDS,
@@ -151,6 +152,7 @@ class TelegramBotService(
         self._reasoning_buffers: dict[str, str] = {}
         self._turn_preview_text: dict[TurnKey, str] = {}
         self._turn_preview_updated_at: dict[TurnKey, float] = {}
+        self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
@@ -660,6 +662,8 @@ class TelegramBotService(
             elif cache_name == "turn_preview":
                 self._turn_preview_text.pop(key, None)
                 self._turn_preview_updated_at.pop(key, None)
+            elif cache_name == "oversize_warnings":
+                self._oversize_warnings.discard(key)
             elif cache_name == "coalesced_buffers":
                 self._coalesced_buffers.pop(key, None)
                 self._coalesce_locks.pop(key, None)
@@ -694,6 +698,9 @@ class TelegramBotService(
                 "reasoning_buffers", REASONING_BUFFER_TTL_SECONDS
             )
             self._evict_expired_cache_entries("turn_preview", TURN_PREVIEW_TTL_SECONDS)
+            self._evict_expired_cache_entries(
+                "oversize_warnings", OVERSIZE_WARNING_TTL_SECONDS
+            )
             self._evict_expired_cache_entries(
                 "coalesced_buffers", COALESCE_BUFFER_TTL_SECONDS
             )

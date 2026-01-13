@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Optional
 
+from ...core.logging_utils import log_event
 from .constants import (
     STREAM_PREVIEW_PREFIX,
+    TELEGRAM_MAX_MESSAGE_LENGTH,
     THINKING_PREVIEW_MAX_LEN,
     THINKING_PREVIEW_MIN_EDIT_INTERVAL_SECONDS,
     TOKEN_USAGE_CACHE_LIMIT,
@@ -23,6 +26,60 @@ class TelegramNotificationHandlers:
         method = message.get("method")
         params_raw = message.get("params")
         params: dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
+        if method == "car/app_server/oversizedMessageDropped":
+            turn_id = _coerce_id(params.get("turnId"))
+            thread_id = params.get("threadId")
+            turn_key = (
+                self._resolve_turn_key(turn_id, thread_id=thread_id)
+                if turn_id
+                else None
+            )
+            if turn_key is None and len(self._turn_contexts) == 1:
+                turn_key = next(iter(self._turn_contexts.keys()))
+            if turn_key is None:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.oversize.context_missing",
+                    inferred_turn_id=turn_id,
+                    inferred_thread_id=thread_id,
+                )
+                return
+            if turn_key in self._oversize_warnings:
+                return
+            ctx = self._turn_contexts.get(turn_key)
+            if ctx is None:
+                return
+            self._oversize_warnings.add(turn_key)
+            self._touch_cache_timestamp("oversize_warnings", turn_key)
+            byte_limit = params.get("byteLimit")
+            limit_mb = None
+            if isinstance(byte_limit, int) and byte_limit > 0:
+                limit_mb = max(1, byte_limit // (1024 * 1024))
+            limit_text = f"{limit_mb}MB" if limit_mb else "the size limit"
+            aborted = bool(params.get("aborted"))
+            if aborted:
+                warning = (
+                    f"Warning: Codex output exceeded {limit_text} and kept growing, "
+                    "so CAR restarted the app-server to recover. Avoid huge stdout "
+                    "(use head/tail, filters, or redirect to a file)."
+                )
+            else:
+                warning = (
+                    f"Warning: Codex output exceeded {limit_text} and was dropped to "
+                    "keep the session alive. Avoid huge stdout (use head/tail, "
+                    "filters, or redirect to a file)."
+                )
+            if len(warning) > TELEGRAM_MAX_MESSAGE_LENGTH:
+                warning = warning[: TELEGRAM_MAX_MESSAGE_LENGTH - 3].rstrip() + "..."
+            await self._send_message_with_outbox(
+                ctx.chat_id,
+                warning,
+                thread_id=ctx.thread_id,
+                reply_to=ctx.reply_to_message_id,
+                placeholder_id=ctx.placeholder_message_id,
+            )
+            return
         if method == "thread/tokenUsage/updated":
             thread_id = params.get("threadId")
             turn_id = _coerce_id(params.get("turnId"))

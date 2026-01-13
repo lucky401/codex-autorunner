@@ -21,6 +21,8 @@ APPROVAL_METHODS = {
 }
 _READ_CHUNK_SIZE = 64 * 1024
 _MAX_MESSAGE_BYTES = 50 * 1024 * 1024
+_OVERSIZE_PREVIEW_BYTES = 4096
+_MAX_OVERSIZE_DRAIN_BYTES = 100 * 1024 * 1024
 
 _RESTART_BACKOFF_INITIAL_SECONDS = 0.5
 _RESTART_BACKOFF_MAX_SECONDS = 30.0
@@ -485,12 +487,51 @@ class CodexAppServerClient:
         assert self._process is not None
         assert self._process.stdout is not None
         buffer = bytearray()
+        dropping_oversize = False
+        oversize_preview = bytearray()
+        oversize_bytes_dropped = 0
         try:
             while True:
                 chunk = await self._process.stdout.read(_READ_CHUNK_SIZE)
                 if not chunk:
                     break
-                buffer.extend(chunk)
+                if dropping_oversize:
+                    newline_index = chunk.find(b"\n")
+                    if newline_index == -1:
+                        if len(oversize_preview) < _OVERSIZE_PREVIEW_BYTES:
+                            remaining = _OVERSIZE_PREVIEW_BYTES - len(oversize_preview)
+                            oversize_preview.extend(chunk[:remaining])
+                        oversize_bytes_dropped += len(chunk)
+                        if oversize_bytes_dropped >= _MAX_OVERSIZE_DRAIN_BYTES:
+                            await self._emit_oversize_warning(
+                                bytes_dropped=oversize_bytes_dropped,
+                                preview=oversize_preview,
+                                aborted=True,
+                                drain_limit=_MAX_OVERSIZE_DRAIN_BYTES,
+                            )
+                            raise ValueError(
+                                "App-server message exceeded oversize drain limit "
+                                f"({_MAX_OVERSIZE_DRAIN_BYTES} bytes)"
+                            )
+                        continue
+                    before = chunk[: newline_index + 1]
+                    after = chunk[newline_index + 1 :]
+                    if len(oversize_preview) < _OVERSIZE_PREVIEW_BYTES:
+                        remaining = _OVERSIZE_PREVIEW_BYTES - len(oversize_preview)
+                        oversize_preview.extend(before[:remaining])
+                    oversize_bytes_dropped += len(before)
+                    await self._emit_oversize_warning(
+                        bytes_dropped=oversize_bytes_dropped,
+                        preview=oversize_preview,
+                    )
+                    dropping_oversize = False
+                    oversize_preview = bytearray()
+                    oversize_bytes_dropped = 0
+                    if not after:
+                        continue
+                    buffer.extend(after)
+                else:
+                    buffer.extend(chunk)
                 while True:
                     newline_index = buffer.find(b"\n")
                     if newline_index == -1:
@@ -498,16 +539,27 @@ class CodexAppServerClient:
                     line = buffer[:newline_index]
                     del buffer[: newline_index + 1]
                     await self._handle_payload_line(line)
-                if len(buffer) > _MAX_MESSAGE_BYTES:
-                    raise ValueError(
-                        f"App-server message exceeded {_MAX_MESSAGE_BYTES} bytes without newline"
+                if not dropping_oversize and len(buffer) > _MAX_MESSAGE_BYTES:
+                    oversize_preview = bytearray(buffer[:_OVERSIZE_PREVIEW_BYTES])
+                    oversize_bytes_dropped = len(buffer)
+                    buffer.clear()
+                    dropping_oversize = True
+            if dropping_oversize:
+                if oversize_bytes_dropped:
+                    await self._emit_oversize_warning(
+                        bytes_dropped=oversize_bytes_dropped,
+                        preview=oversize_preview,
+                        truncated=True,
                     )
-            if buffer:
+            elif buffer:
                 if len(buffer) > _MAX_MESSAGE_BYTES:
-                    raise ValueError(
-                        f"App-server message exceeded {_MAX_MESSAGE_BYTES} bytes without newline"
+                    await self._emit_oversize_warning(
+                        bytes_dropped=len(buffer),
+                        preview=buffer[:_OVERSIZE_PREVIEW_BYTES],
+                        truncated=True,
                     )
-                await self._handle_payload_line(buffer)
+                else:
+                    await self._handle_payload_line(buffer)
         except Exception as exc:
             log_event(self._logger, logging.WARNING, "app_server.read.failed", exc=exc)
         finally:
@@ -526,6 +578,70 @@ class CodexAppServerClient:
         if not isinstance(message, dict):
             return
         await self._handle_message(message)
+
+    async def _emit_oversize_warning(
+        self,
+        *,
+        bytes_dropped: int,
+        preview: bytes,
+        truncated: bool = False,
+        aborted: bool = False,
+        drain_limit: Optional[int] = None,
+    ) -> None:
+        metadata = _infer_metadata_from_preview(preview)
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "app_server.read.oversize_dropped",
+            bytes_dropped=bytes_dropped,
+            preview_bytes=len(preview),
+            preview_excerpt=_preview_excerpt(metadata.get("preview") or ""),
+            inferred_method=metadata.get("method"),
+            inferred_thread_id=metadata.get("thread_id"),
+            inferred_turn_id=metadata.get("turn_id"),
+            truncated=truncated,
+            aborted=aborted,
+            drain_limit=drain_limit,
+        )
+        if self._notification_handler is None:
+            return
+        params: Dict[str, Any] = {
+            "byteLimit": _MAX_MESSAGE_BYTES,
+            "bytesDropped": bytes_dropped,
+        }
+        inferred_method = metadata.get("method")
+        inferred_thread_id = metadata.get("thread_id")
+        inferred_turn_id = metadata.get("turn_id")
+        if inferred_method:
+            params["inferredMethod"] = inferred_method
+        if inferred_thread_id:
+            params["threadId"] = inferred_thread_id
+        if inferred_turn_id:
+            params["turnId"] = inferred_turn_id
+        if truncated:
+            params["truncated"] = True
+        if aborted:
+            params["aborted"] = True
+        if drain_limit is not None:
+            params["drainLimit"] = drain_limit
+        try:
+            await _maybe_await(
+                self._notification_handler(
+                    {
+                        "method": "car/app_server/oversizedMessageDropped",
+                        "params": params,
+                    }
+                )
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.notification_handler.failed",
+                method="car/app_server/oversizedMessageDropped",
+                handled=False,
+                exc=exc,
+            )
 
     async def _drain_stderr(self) -> None:
         if not self._process or not self._process.stderr:
@@ -1052,6 +1168,46 @@ async def _maybe_await(value: Any) -> Any:
     if asyncio.iscoroutine(value):
         return await value
     return value
+
+
+def _first_regex_group(text: str, pattern: str) -> Optional[str]:
+    try:
+        match = re.search(pattern, text)
+    except re.error:
+        return None
+    if not match:
+        return None
+    value = match.group(1)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _infer_metadata_from_preview(preview: bytes) -> Dict[str, Optional[str]]:
+    try:
+        text = preview.decode("utf-8", errors="ignore")
+    except Exception:
+        return {"preview": "", "method": None, "thread_id": None, "turn_id": None}
+    method = _first_regex_group(text, r'"method"\s*:\s*"([^"]+)"')
+    thread_id = _first_regex_group(text, r'"threadId"\s*:\s*"([^"]+)"')
+    if not thread_id:
+        thread_id = _first_regex_group(text, r'"thread_id"\s*:\s*"([^"]+)"')
+    turn_id = _first_regex_group(text, r'"turnId"\s*:\s*"([^"]+)"')
+    if not turn_id:
+        turn_id = _first_regex_group(text, r'"turn_id"\s*:\s*"([^"]+)"')
+    return {
+        "preview": text,
+        "method": method,
+        "thread_id": thread_id,
+        "turn_id": turn_id,
+    }
+
+
+def _preview_excerpt(text: str, limit: int = 256) -> str:
+    normalized = " ".join(text.split()).strip()
+    if not normalized:
+        return ""
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[:limit].rstrip()}..."
 
 
 def _extract_turn_id(payload: Any) -> Optional[str]:
