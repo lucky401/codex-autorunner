@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence
 
+from ...core.logging_utils import log_event
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import ApprovalHandler, CodexAppServerClient, NotificationHandler
 
@@ -67,6 +68,15 @@ class WorkspaceAppServerSupervisor:
             self._handles = {}
         for handle in handles:
             try:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "app_server.handle.closing",
+                    reason="close_all",
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    last_used_at=handle.last_used_at,
+                )
                 await handle.client.close()
             except Exception:
                 continue
@@ -78,6 +88,16 @@ class WorkspaceAppServerSupervisor:
         closed = 0
         for handle in handles:
             try:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "app_server.handle.pruned",
+                    reason="idle_ttl",
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    idle_ttl_seconds=self._idle_ttl_seconds,
+                    last_used_at=handle.last_used_at,
+                )
                 await handle.client.close()
                 closed += 1
             except Exception:
@@ -88,6 +108,7 @@ class WorkspaceAppServerSupervisor:
         self, workspace_id: str, workspace_root: Path
     ) -> AppServerHandle:
         handles_to_close: list[AppServerHandle] = []
+        evicted_id: Optional[str] = None
         async with self._lock:
             existing = self._handles.get(workspace_id)
             if existing is not None:
@@ -95,6 +116,7 @@ class WorkspaceAppServerSupervisor:
             handles_to_close.extend(self._pop_idle_handles_locked())
             evicted = self._evict_lru_handle_locked()
             if evicted is not None:
+                evicted_id = evicted.workspace_id
                 handles_to_close.append(evicted)
             state_dir = self._state_root / workspace_id
             env = self._env_builder(workspace_root, workspace_id, state_dir)
@@ -119,6 +141,20 @@ class WorkspaceAppServerSupervisor:
             self._handles[workspace_id] = handle
         for handle in handles_to_close:
             try:
+                reason = (
+                    "max_handles" if handle.workspace_id == evicted_id else "idle_ttl"
+                )
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "app_server.handle.closing",
+                    reason=reason,
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    idle_ttl_seconds=self._idle_ttl_seconds,
+                    max_handles=self._max_handles,
+                    last_used_at=handle.last_used_at,
+                )
                 await handle.client.close()
             except Exception:
                 continue
@@ -154,6 +190,17 @@ class WorkspaceAppServerSupervisor:
         lru_handle = min(
             self._handles.values(),
             key=lambda handle: handle.last_used_at or 0.0,
+        )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "app_server.handle.evicted",
+            reason="max_handles",
+            workspace_id=lru_handle.workspace_id,
+            workspace_root=str(lru_handle.workspace_root),
+            max_handles=self._max_handles,
+            handle_count=len(self._handles),
+            last_used_at=lru_handle.last_used_at,
         )
         self._handles.pop(lru_handle.workspace_id, None)
         return lru_handle

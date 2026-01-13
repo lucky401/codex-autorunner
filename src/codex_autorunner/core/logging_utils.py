@@ -114,6 +114,11 @@ def log_event(
         pass
 
 
+def sanitize_log_value(value: Any) -> Any:
+    """Expose the standard log sanitization for ad-hoc values."""
+    return _sanitize_value(value)
+
+
 def _sanitize_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
     sanitized: dict[str, Any] = {}
     for key, value in fields.items():

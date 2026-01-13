@@ -3,12 +3,13 @@ import json
 import logging
 import random
 import re
+from collections import deque
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Union, cast
 
-from ...core.logging_utils import log_event
+from ...core.logging_utils import log_event, sanitize_log_value
 
 ApprovalDecision = Union[str, Dict[str, Any]]
 ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
@@ -135,6 +136,7 @@ class CodexAppServerClient:
         self._include_client_version = True
         self._restart_task: Optional[asyncio.Task] = None
         self._restart_backoff_seconds = _RESTART_BACKOFF_INITIAL_SECONDS
+        self._stderr_tail: deque[str] = deque(maxlen=5)
 
     async def start(self) -> None:
         await self._ensure_process()
@@ -653,11 +655,17 @@ class CodexAppServerClient:
                     break
                 text = line.decode("utf-8", errors="ignore").strip()
                 if text:
+                    sanitized = sanitize_log_value(text)
+                    if isinstance(sanitized, str):
+                        self._stderr_tail.append(sanitized)
+                    else:
+                        self._stderr_tail.append(str(sanitized))
                     log_event(
                         self._logger,
                         logging.DEBUG,
                         "app_server.stderr",
                         line_len=len(text),
+                        tail_size=len(self._stderr_tail),
                     )
         except Exception:
             return
@@ -1037,6 +1045,13 @@ class CodexAppServerClient:
             auto_restart=self._auto_restart,
             returncode=returncode,
             pid=pid,
+            pending_requests=len(self._pending),
+            pending_turns=len(self._pending_turns),
+            active_turns=len(self._turns),
+            initializing=self._initializing,
+            initialized=self._initialized,
+            closed=self._closed,
+            stderr_tail=list(self._stderr_tail),
         )
         if not self._closed:
             self._fail_pending(CodexAppServerDisconnected("App-server disconnected"))
