@@ -426,6 +426,7 @@ def create_app(
     )
     allowed_origins = context.engine.config.server_allowed_origins
     auth_token = _resolve_auth_token(context.engine.config.server_auth_token_env)
+    app.state.auth_token = auth_token
     asgi_app: ASGIApp = app
     if auth_token:
         asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
@@ -989,6 +990,7 @@ def create_hub_app(
     )
     allowed_origins = context.config.server_allowed_origins
     auth_token = _resolve_auth_token(context.config.server_auth_token_env)
+    app.state.auth_token = auth_token
     asgi_app: ASGIApp = app
     if auth_token:
         asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)

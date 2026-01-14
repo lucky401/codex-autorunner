@@ -39,8 +39,17 @@ def _choose_image_extension(
 def build_terminal_image_routes() -> APIRouter:
     router = APIRouter()
 
+    def _allow_abs_paths(request: Request, include_abs_paths: bool) -> bool:
+        if not include_abs_paths:
+            return False
+        return bool(getattr(request.app.state, "auth_token", None))
+
     @router.post("/api/terminal/image")
-    async def upload_terminal_image(request: Request, file: UploadFile = File(...)):
+    async def upload_terminal_image(
+        request: Request,
+        file: UploadFile = File(...),
+        include_abs_paths: bool = False,
+    ):
         if not file:
             raise HTTPException(status_code=400, detail="missing image")
 
@@ -83,12 +92,14 @@ def build_terminal_image_routes() -> APIRouter:
             raise HTTPException(status_code=500, detail="failed to save image") from exc
 
         rel_path = path.relative_to(repo_root).as_posix()
-        return {
+        payload = {
             "status": "ok",
             "path": rel_path,
             "filename": name,
-            "abs_path": str(path),
         }
+        if _allow_abs_paths(request, include_abs_paths):
+            payload["abs_path"] = str(path)
+        return payload
 
     return router
 

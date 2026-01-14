@@ -3010,7 +3010,7 @@ export class TerminalManager {
         method: "POST",
         body: formData,
       });
-      const imagePath = response?.abs_path || response?.path;
+      const imagePath = response?.path || response?.abs_path;
       if (!imagePath) {
         throw new Error("Upload returned no path");
       }

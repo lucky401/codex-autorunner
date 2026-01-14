@@ -78,8 +78,8 @@ def test_hub_terminal_sessions_stay_isolated(
 
     repo_root = hub_root / repos_root
     repo_root.mkdir(parents=True, exist_ok=True)
-    alpha = _create_repo(repo_root, "alpha")
-    beta = _create_repo(repo_root, "beta")
+    _create_repo(repo_root, "alpha")
+    _create_repo(repo_root, "beta")
 
     app = create_hub_app(hub_root)
     monkeypatch.setattr("codex_autorunner.routes.base.PTYSession", FakePTYSession)
@@ -109,5 +109,5 @@ def test_hub_terminal_sessions_stay_isolated(
         beta_sessions = client.get("/repos/beta/api/sessions").json()["sessions"]
         assert alpha_sessions[0]["session_id"] == alpha_session
         assert beta_sessions[0]["session_id"] == beta_session
-        assert alpha_sessions[0]["repo_path"] == str(alpha.resolve())
-        assert beta_sessions[0]["repo_path"] == str(beta.resolve())
+        assert alpha_sessions[0]["repo_path"] == "."
+        assert beta_sessions[0]["repo_path"] == "."

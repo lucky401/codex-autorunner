@@ -253,6 +253,9 @@ def sessions(
     engine = _require_repo_config(repo)
     config = engine.config
     url = _build_server_url(config, "/api/sessions")
+    auth_token = _resolve_auth_token(config.server_auth_token_env)
+    if auth_token:
+        url = f"{url}?include_abs_paths=1"
     payload = None
     source = "server"
     try:
@@ -287,7 +290,7 @@ def sessions(
         if not isinstance(entry, dict):
             continue
         session_id = entry.get("session_id") or "unknown"
-        repo_path = entry.get("repo_path") or "unknown"
+        repo_path = entry.get("abs_repo_path") or entry.get("repo_path") or "unknown"
         status = entry.get("status") or "unknown"
         last_seen = entry.get("last_seen_at") or "unknown"
         alive = entry.get("alive")

@@ -143,6 +143,7 @@ class RunResetResponse(ResponseModel):
 class SessionItemResponse(ResponseModel):
     session_id: str
     repo_path: Optional[str]
+    abs_repo_path: Optional[str] = None
     created_at: Optional[str]
     last_seen_at: Optional[str]
     status: Optional[str]
@@ -152,6 +153,7 @@ class SessionItemResponse(ResponseModel):
 class SessionsResponse(ResponseModel):
     sessions: List[SessionItemResponse]
     repo_to_session: Dict[str, str]
+    abs_repo_to_session: Optional[Dict[str, str]] = None
 
 
 class SessionStopResponse(ResponseModel):

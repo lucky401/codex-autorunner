@@ -20,8 +20,14 @@ This guide explains how to debug terminal replay/scrollback issues in CAR.
 
 - Session registry (hub):
   - `GET /car/repos/<repo>/api/sessions`
+  - Add `?include_abs_paths=1` to include `abs_repo_path` and
+    `abs_repo_to_session` when server auth is enabled.
 - Example (local hub):
   - `http://127.0.0.1:4517/car/repos/codex-autorunner/api/sessions`
+
+- Terminal image upload:
+  - `POST /api/terminal/image`
+  - Add `?include_abs_paths=1` to include `abs_path` when server auth is enabled.
 
 ## Client debug signals
 
