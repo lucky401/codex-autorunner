@@ -115,7 +115,26 @@ def build_base_routes(static_dir: Path) -> APIRouter:
 
     @router.websocket("/api/terminal")
     async def terminal(ws: WebSocket):
-        await ws.accept()
+        selected_protocol = None
+        protocol_header = ws.headers.get("sec-websocket-protocol")
+        if protocol_header:
+            for entry in protocol_header.split(","):
+                candidate = entry.strip()
+                if not candidate:
+                    continue
+                if candidate == "car-token":
+                    selected_protocol = candidate
+                    break
+                if candidate.startswith("car-token-b64."):
+                    selected_protocol = candidate
+                    break
+                if candidate.startswith("car-token."):
+                    selected_protocol = candidate
+                    break
+        if selected_protocol:
+            await ws.accept(subprotocol=selected_protocol)
+        else:
+            await ws.accept()
         app = ws.scope.get("app")
         if app is None:
             await ws.close()

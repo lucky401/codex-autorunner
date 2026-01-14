@@ -145,7 +145,7 @@ experience inside Telegram with user-in-the-loop approvals.
 If you set `server.auth_token_env`, the API requires `Authorization: Bearer <token>` on every request.
 - Set the config: `server.auth_token_env: CAR_SERVER_TOKEN`.
 - Export the token before starting the server: `export CAR_SERVER_TOKEN="..."`.
-- Browser UI: visit `http://host:port/?token=...` once. The UI stores it in `sessionStorage` and removes it from the URL; websocket connections will include `token=...` automatically.
+- Browser UI: visit `http://host:port/?token=...` once. The UI stores it in `sessionStorage` and removes it from the URL; WebSocket connections send the token via `Sec-WebSocket-Protocol: car-token-b64.<base64url(token)>`.
 - CLI: requests automatically attach the token from `server.auth_token_env`; if the env var is missing, CLI commands will error.
 
 ## Git hooks

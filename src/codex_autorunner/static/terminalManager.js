@@ -1,4 +1,19 @@
-import { api, flash, buildWsUrl, isMobileViewport } from "./utils.js";
+import { api, flash, buildWsUrl, getAuthToken, isMobileViewport } from "./utils.js";
+
+function base64UrlEncode(value) {
+  if (!value) return null;
+  try {
+    const bytes = new TextEncoder().encode(value);
+    let binary = "";
+    bytes.forEach((b) => {
+      binary += String.fromCharCode(b);
+    });
+    const base64 = btoa(binary);
+    return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  } catch (_err) {
+    return null;
+  }
+}
 import { CONSTANTS } from "./constants.js";
 import { initVoiceInput } from "./voice.js";
 import { publish, subscribe } from "./bus.js";
@@ -2135,7 +2150,10 @@ export class TerminalManager {
       CONSTANTS.API.TERMINAL_ENDPOINT,
       queryString ? `?${queryString}` : ""
     );
-    this.socket = new WebSocket(wsUrl);
+    const token = getAuthToken();
+    const encodedToken = token ? base64UrlEncode(token) : null;
+    const protocols = encodedToken ? [`car-token-b64.${encodedToken}`] : undefined;
+    this.socket = protocols ? new WebSocket(wsUrl, protocols) : new WebSocket(wsUrl);
     this.socket.binaryType = "arraybuffer";
 
     this.socket.onopen = () => {

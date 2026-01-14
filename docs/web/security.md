@@ -18,8 +18,8 @@ CAR supports a bearer token enforced by middleware when configured:
 - Set `server.auth_token_env` in `.codex-autorunner/config.yml`.
 - Export the token in the environment before starting the server.
 - All non-public endpoints require `Authorization: Bearer <token>`.
-- WebSockets accept the token via query string `?token=...` because browsers
-  cannot always set headers on WS handshakes.
+- WebSockets accept the token via `Sec-WebSocket-Protocol: car-token-b64.<base64url(token)>`.
+  The legacy `?token=...` query string is still accepted for migration.
 
 When `server.auth_token_env` is set, the web UI can be accessed by visiting:
 

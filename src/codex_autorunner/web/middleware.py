@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import logging
 import time
 import uuid
@@ -203,6 +204,38 @@ class AuthTokenMiddleware:
         token_values = parsed.get("token") or []
         return token_values[0] if token_values else None
 
+    def _extract_ws_protocol_token(self, scope) -> str | None:
+        if scope.get("type") != "websocket":
+            return None
+        headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
+        raw = headers.get(b"sec-websocket-protocol")
+        if not raw:
+            return None
+        try:
+            value = raw.decode("latin-1")
+        except UnicodeDecodeError:
+            return None
+        for entry in value.split(","):
+            candidate = entry.strip()
+            if candidate.startswith("car-token-b64."):
+                token = candidate[len("car-token-b64.") :].strip()
+                if not token:
+                    continue
+                padding = "=" * (-len(token) % 4)
+                try:
+                    decoded = base64.urlsafe_b64decode(f"{token}{padding}")
+                except Exception:
+                    continue
+                try:
+                    return decoded.decode("utf-8").strip() or None
+                except UnicodeDecodeError:
+                    continue
+            if candidate.startswith("car-token."):
+                token = candidate[len("car-token.") :].strip()
+                if token:
+                    return token
+        return None
+
     async def _reject_http(self, scope, receive, send) -> None:
         response = Response(
             content="Unauthorized",
@@ -220,7 +253,9 @@ class AuthTokenMiddleware:
 
         token = self._extract_header_token(scope)
         if scope.get("type") == "websocket" and token is None:
-            token = self._extract_query_token(scope)
+            token = self._extract_ws_protocol_token(scope) or self._extract_query_token(
+                scope
+            )
 
         if token != self.token:
             if scope.get("type") == "websocket":

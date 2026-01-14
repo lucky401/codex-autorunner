@@ -84,10 +84,6 @@ export function buildWsUrl(path, query = "") {
   const normalized = resolved.startsWith("/") ? resolved : `/${resolved}`;
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   const params = new URLSearchParams(query.startsWith("?") ? query.slice(1) : query);
-  const token = getAuthToken();
-  if (token && !params.has("token")) {
-    params.set("token", token);
-  }
   const suffix = params.toString();
   return `${proto}://${window.location.host}${normalized}${suffix ? `?${suffix}` : ""}`;
 }
