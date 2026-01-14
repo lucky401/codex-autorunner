@@ -184,7 +184,8 @@ async def handle_message_inner(
         if command.name != "review":
             handlers._review_commit_options.pop(key, None)
             handlers._review_commit_subjects.pop(key, None)
-            handlers._pending_review_custom.pop(key, None)
+            pending_review_custom = handlers._pending_review_custom.pop(key, None)
+            await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
     else:
         handlers._resume_options.pop(key, None)
         handlers._bind_options.pop(key, None)
@@ -192,7 +193,8 @@ async def handle_message_inner(
         handlers._model_pending.pop(key, None)
         handlers._review_commit_options.pop(key, None)
         handlers._review_commit_subjects.pop(key, None)
-        handlers._pending_review_custom.pop(key, None)
+        pending_review_custom = handlers._pending_review_custom.pop(key, None)
+        await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
     if command:
         spec = handlers._command_specs.get(command.name)
         if spec and spec.allow_during_turn:

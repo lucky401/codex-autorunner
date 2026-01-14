@@ -46,6 +46,23 @@ from ..types import ModelPickerState, ReviewCommitSelectionState, SelectionState
 
 
 class TelegramSelectionHandlers:
+    async def _dismiss_review_custom_prompt(
+        self,
+        message: TelegramMessage,
+        pending: Optional[dict[str, Any]],
+    ) -> None:
+        if not pending:
+            return
+        message_id = pending.get("message_id")
+        prompt_text = pending.get("prompt_text")
+        if isinstance(message_id, int) and isinstance(prompt_text, str):
+            await self._edit_message_text(
+                message.chat_id,
+                message_id,
+                prompt_text,
+                reply_markup=None,
+            )
+
     def _handle_pending_resume(self, key: str, text: str) -> bool:
         if not text.isdigit():
             return False
@@ -146,6 +163,7 @@ class TelegramSelectionHandlers:
         if not instructions.strip():
             return False
         self._pending_review_custom.pop(key, None)
+        await self._dismiss_review_custom_prompt(message, pending)
         record = await self._require_bound_record(message)
         if not record:
             return True

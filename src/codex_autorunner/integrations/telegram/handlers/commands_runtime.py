@@ -3664,8 +3664,9 @@ class TelegramCommandHandlers:
                 if instructions.startswith((" ", "\t")):
                     instructions = instructions[1:]
                 if not instructions.strip():
-                    self._pending_review_custom[key] = {"delivery": delivery}
-                    self._touch_cache_timestamp("pending_review_custom", key)
+                    prompt_text = (
+                        "Reply with review instructions (next message will be used)."
+                    )
                     cancel_keyboard = build_inline_keyboard(
                         [
                             [
@@ -3676,13 +3677,26 @@ class TelegramCommandHandlers:
                             ]
                         ]
                     )
-                    await self._send_message(
+                    payload_text, parse_mode = self._prepare_message(prompt_text)
+                    response = await self._bot.send_message(
                         message.chat_id,
-                        "Reply with review instructions (next message will be used).",
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
+                        payload_text,
+                        message_thread_id=message.thread_id,
+                        reply_to_message_id=message.message_id,
                         reply_markup=cancel_keyboard,
+                        parse_mode=parse_mode,
                     )
+                    prompt_message_id = (
+                        response.get("message_id")
+                        if isinstance(response, dict)
+                        else None
+                    )
+                    self._pending_review_custom[key] = {
+                        "delivery": delivery,
+                        "message_id": prompt_message_id,
+                        "prompt_text": prompt_text,
+                    }
+                    self._touch_cache_timestamp("pending_review_custom", key)
                     return
                 target = {"type": "custom", "instructions": instructions}
             else:
