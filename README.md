@@ -178,3 +178,6 @@ If you set `server.auth_token_env`, the API requires `Authorization: Bearer <tok
 ## Snapshot (repo briefing)
 - Web UI: open the Snapshot tab. If no snapshot exists, you’ll see “Generate snapshot”; otherwise you’ll see “Update snapshot (incremental)” and “Regenerate snapshot (from scratch)”, plus “Copy to clipboard”.
 - CLI: `codex-autorunner snapshot` (or `car snapshot`) writes `.codex-autorunner/SNAPSHOT.md` and `.codex-autorunner/snapshot_state.json`.
+
+## Star history
+[![Star History Chart](https://api.star-history.com/svg?repos=Git-on-my-level/codex-autorunner&type=Date)](https://star-history.com/#Git-on-my-level/codex-autorunner&Date)
