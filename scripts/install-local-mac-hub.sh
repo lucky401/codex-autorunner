@@ -8,7 +8,7 @@ set -euo pipefail
 #
 # Overrides:
 #   WORKSPACE              Hub root (default: ~/car-workspace)
-#   HOST                   Hub bind host (default: 0.0.0.0)
+#   HOST                   Hub bind host (default: 127.0.0.1)
 #   PORT                   Hub bind port (default: 4173)
 #   LABEL                  launchd label (default: com.codex.autorunner)
 #   PLIST_PATH             launchd plist path (default: ~/Library/LaunchAgents/${LABEL}.plist)
@@ -18,7 +18,7 @@ set -euo pipefail
 #   TELEGRAM_LOG           telegram stdout/stderr log path (default: ${WORKSPACE}/.codex-autorunner/codex-autorunner-telegram.log)
 
 WORKSPACE="${WORKSPACE:-$HOME/car-workspace}"
-HOST="${HOST:-0.0.0.0}"
+HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-4173}"
 LABEL="${LABEL:-com.codex.autorunner}"
 PLIST_PATH="${PLIST_PATH:-$HOME/Library/LaunchAgents/${LABEL}.plist}"
@@ -29,6 +29,65 @@ TELEGRAM_LOG="${TELEGRAM_LOG:-${WORKSPACE}/.codex-autorunner/codex-autorunner-te
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
+
+is_loopback_host() {
+  case "$1" in
+    localhost|127.*|::1)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+generate_token() {
+  local python_bin="${CURRENT_VENV_LINK}/bin/python"
+  if [[ -x "${python_bin}" ]]; then
+    "${python_bin}" - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+    return 0
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+    return 0
+  fi
+  LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 64
+}
+
+set_env_var() {
+  local env_path="$1"
+  local key="$2"
+  local value="$3"
+  if [[ -f "${env_path}" ]]; then
+    awk -v key="${key}" -v value="${value}" '
+      BEGIN {updated=0}
+      $0 ~ ("^" key "=") {
+        if (!updated) {
+          print key "=" value
+          updated=1
+        }
+        next
+      }
+      {print}
+      END {
+        if (!updated) {
+          print key "=" value
+        }
+      }
+    ' "${env_path}" > "${env_path}.tmp"
+    mv "${env_path}.tmp" "${env_path}"
+  else
+    printf "%s=%s\n" "${key}" "${value}" > "${env_path}"
+  fi
+}
 
 if ! command -v pipx >/dev/null 2>&1; then
   echo "pipx is required; install via 'python3 -m pip install --user pipx' and re-run." >&2
@@ -48,6 +107,56 @@ fi
 echo "Ensuring hub workspace at ${WORKSPACE}..."
 mkdir -p "${WORKSPACE}"
 codex-autorunner init --mode hub --path "${WORKSPACE}"
+
+CONFIG_PATH="${WORKSPACE}/.codex-autorunner/config.yml"
+ENV_PATH="${WORKSPACE}/.codex-autorunner/.env"
+AUTH_TOKEN_ENV_NAME="CAR_SERVER_TOKEN"
+AUTH_TOKEN=""
+
+if ! is_loopback_host "${HOST}"; then
+  mkdir -p "$(dirname "${ENV_PATH}")"
+  if [[ -f "${ENV_PATH}" ]]; then
+    AUTH_TOKEN="$(awk -F= -v key="${AUTH_TOKEN_ENV_NAME}" '$1 == key {print $2}' "${ENV_PATH}" | tail -n 1)"
+  fi
+  if [[ -z "${AUTH_TOKEN}" ]]; then
+    AUTH_TOKEN="$(generate_token)"
+    set_env_var "${ENV_PATH}" "${AUTH_TOKEN_ENV_NAME}" "${AUTH_TOKEN}"
+  fi
+fi
+
+if [[ -x "${CURRENT_VENV_LINK}/bin/python" ]]; then
+  "${CURRENT_VENV_LINK}/bin/python" - "${CONFIG_PATH}" "${HOST}" "${PORT}" "${AUTH_TOKEN_ENV_NAME}" "${AUTH_TOKEN}" <<'PY'
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+import yaml
+
+config_path = Path(sys.argv[1])
+host = sys.argv[2]
+port = int(sys.argv[3])
+auth_env_name = sys.argv[4]
+auth_token = sys.argv[5]
+
+data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+server = data.setdefault("server", {})
+server["host"] = host
+server["port"] = port
+if auth_token:
+    if not server.get("auth_token_env"):
+        server["auth_token_env"] = auth_env_name
+    if not server.get("allowed_hosts"):
+        server["allowed_hosts"] = ["*"]
+
+config_path.write_text(
+    yaml.safe_dump(data, sort_keys=False),
+    encoding="utf-8",
+)
+PY
+else
+  echo "Warning: ${CURRENT_VENV_LINK}/bin/python not found; skipping config update." >&2
+fi
 
 echo "Writing launchd plist to ${PLIST_PATH}..."
 mkdir -p "$(dirname "${PLIST_PATH}")"
@@ -138,4 +247,7 @@ EOF
   launchctl load -w "${TELEGRAM_PLIST_PATH}"
 fi
 
+if [[ -n "${AUTH_TOKEN}" ]]; then
+  echo "Auth token stored in ${ENV_PATH}; keep it private."
+fi
 echo "Done. Visit http://${HOST}:${PORT} once the service is up."
