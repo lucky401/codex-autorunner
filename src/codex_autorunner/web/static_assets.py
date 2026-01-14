@@ -17,6 +17,8 @@ _ASSET_VERSION_TOKEN = "__CAR_ASSET_VERSION__"
 _REQUIRED_STATIC_ASSETS = (
     "index.html",
     "styles.css",
+    "bootstrap.js",
+    "loader.js",
     "app.js",
     "vendor/xterm.js",
     "vendor/xterm-addon-fit.js",
@@ -92,11 +94,12 @@ def render_index_html(static_dir: Path, version: Optional[str]) -> str:
 
 
 def security_headers() -> dict[str, str]:
+    # CSP: scripts are all local with no inline JS; runtime UI uses inline styles.
     return {
         "Content-Security-Policy": (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; "
             "font-src 'self' data:; "
             "connect-src 'self' ws: wss:; "

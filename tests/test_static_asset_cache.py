@@ -15,6 +15,10 @@ def _write_required_assets(static_dir: Path) -> None:
     (static_dir / "index.html").write_text(
         "<html>__CAR_ASSET_VERSION__</html>", encoding="utf-8"
     )
+    (static_dir / "bootstrap.js").write_text(
+        "console.log('bootstrap');", encoding="utf-8"
+    )
+    (static_dir / "loader.js").write_text("console.log('loader');", encoding="utf-8")
     (static_dir / "styles.css").write_text("body { }", encoding="utf-8")
     (static_dir / "app.js").write_text("console.log('app');", encoding="utf-8")
     vendor_dir = static_dir / "vendor"
