@@ -80,6 +80,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "host": "127.0.0.1",
         "port": 4173,
         "base_path": "",
+        "access_log": False,
         "auth_token_env": "",
         "allowed_hosts": [],
         "allowed_origins": [],
@@ -347,6 +348,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "host": "127.0.0.1",
         "port": 4173,
         "base_path": "",
+        "access_log": False,
         "auth_token_env": "",
         "allowed_hosts": [],
         "allowed_origins": [],
@@ -488,6 +490,7 @@ class RepoConfig:
     server_host: str
     server_port: int
     server_base_path: str
+    server_access_log: bool
     server_auth_token_env: str
     server_allowed_hosts: List[str]
     server_allowed_origins: List[str]
@@ -519,6 +522,7 @@ class HubConfig:
     server_host: str
     server_port: int
     server_base_path: str
+    server_access_log: bool
     server_auth_token_env: str
     server_allowed_hosts: List[str]
     server_allowed_origins: List[str]
@@ -768,6 +772,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
+        server_access_log=bool(cfg["server"].get("access_log", False)),
         server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
         server_allowed_hosts=list(cfg["server"].get("allowed_hosts") or []),
         server_allowed_origins=list(cfg["server"].get("allowed_origins") or []),
@@ -832,6 +837,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         server_host=str(cfg["server"]["host"]),
         server_port=int(cfg["server"]["port"]),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
+        server_access_log=bool(cfg["server"].get("access_log", False)),
         server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
         server_allowed_hosts=list(cfg["server"].get("allowed_hosts") or []),
         server_allowed_origins=list(cfg["server"].get("allowed_origins") or []),
@@ -985,6 +991,8 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("server.port must be an integer")
     if "base_path" in server and not isinstance(server.get("base_path", ""), str):
         raise ConfigError("server.base_path must be a string if provided")
+    if "access_log" in server and not isinstance(server.get("access_log", False), bool):
+        raise ConfigError("server.access_log must be boolean if provided")
     if "auth_token_env" in server and not isinstance(
         server.get("auth_token_env", ""), str
     ):
@@ -1160,6 +1168,8 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("server.port must be an integer")
     if "base_path" in server and not isinstance(server.get("base_path", ""), str):
         raise ConfigError("server.base_path must be a string if provided")
+    if "access_log" in server and not isinstance(server.get("access_log", False), bool):
+        raise ConfigError("server.access_log must be boolean if provided")
     if "auth_token_env" in server and not isinstance(
         server.get("auth_token_env", ""), str
     ):

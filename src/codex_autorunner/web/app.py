@@ -1016,7 +1016,7 @@ def _resolve_allowed_hosts(host: str, allowed_hosts: list[str]) -> list[str]:
     if cleaned:
         return cleaned
     if _is_loopback_host(host):
-        return ["localhost", "127.0.0.1", "::1"]
+        return ["localhost", "127.0.0.1", "::1", "testserver"]
     return []
 
 

@@ -74,6 +74,8 @@ repo:
     port: 4173
     # Optional base path for reverse proxies ("" or "/car").
     base_path: ""
+    # Disable uvicorn access logs by default to avoid logging query params.
+    access_log: false
     # Optional env var containing the bearer token required for /api and websocket access.
     auth_token_env: ""
     # Allowed Host header values; empty uses loopback defaults when bound to loopback.
@@ -261,6 +263,7 @@ hub:
     host: 127.0.0.1
     port: 4173
     base_path: ""
+    access_log: false
     # Optional env var containing the bearer token required for /api and websocket access.
     auth_token_env: ""
     # Allowed Host header values; empty uses loopback defaults when bound to loopback.

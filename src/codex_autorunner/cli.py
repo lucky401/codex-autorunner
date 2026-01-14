@@ -692,6 +692,7 @@ def serve(
             host=bind_host,
             port=bind_port,
             root_path="",
+            access_log=config.server_access_log,
         )
         return
     engine = _require_repo_config(repo)
@@ -705,7 +706,13 @@ def serve(
     bind_port = port or engine.config.server_port
     _enforce_bind_auth(bind_host, engine.config.server_auth_token_env)
     typer.echo(f"Serving repo on http://{bind_host}:{bind_port}{normalized_base or ''}")
-    uvicorn.run(app_instance, host=bind_host, port=bind_port, root_path="")
+    uvicorn.run(
+        app_instance,
+        host=bind_host,
+        port=bind_port,
+        root_path="",
+        access_log=engine.config.server_access_log,
+    )
 
 
 @hub_app.command("create")
@@ -759,6 +766,7 @@ def hub_serve(
         host=bind_host,
         port=bind_port,
         root_path="",
+        access_log=config.server_access_log,
     )
 
 
