@@ -107,6 +107,21 @@ class SpecIngestService:
                 self._lock = asyncio.Lock()
         return self._lock
 
+    def _ingest_busy(self) -> bool:
+        lock = self._ensure_lock()
+        if lock.locked():
+            return True
+        file_lock = FileLock(self._lock_path)
+        try:
+            file_lock.acquire(blocking=False)
+        except FileLockBusy:
+            return True
+        except FileLockError:
+            return True
+        finally:
+            file_lock.release()
+        return False
+
     @asynccontextmanager
     async def ingest_lock(self):
         if not self._thread_lock.acquire(blocking=False):
@@ -129,6 +144,8 @@ class SpecIngestService:
             file_lock.release()
             lock.release()
             self._thread_lock.release()
+            with self._active_turn_lock:
+                self._pending_interrupt = False
 
     @contextmanager
     def _patch_lock(self):
@@ -206,8 +223,9 @@ class SpecIngestService:
     async def interrupt(self) -> Dict[str, str]:
         active = self._get_active_turn()
         if active is None:
+            pending = self._ingest_busy()
             with self._active_turn_lock:
-                self._pending_interrupt = True
+                self._pending_interrupt = pending
             return self._assemble_response(
                 {},
                 status="interrupted",

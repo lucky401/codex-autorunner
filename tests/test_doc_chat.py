@@ -344,6 +344,32 @@ def test_chat_validation_failure_does_not_write(
     ) == existing
 
 
+def test_chat_apply_rejects_stale_draft(repo: Path) -> None:
+    engine = Engine(repo)
+    service = DocChatService(engine)
+    target_path = engine.config.doc_path("todo")
+    before = target_path.read_text(encoding="utf-8")
+    after = "- [ ] draft update\n"
+    rel_path = str(target_path.relative_to(engine.repo_root))
+    patch_text = _make_patch(rel_path, before, after)
+    draft = DocChatDraftState(
+        content=after,
+        patch=patch_text,
+        agent_message="drafted",
+        created_at="2024-01-01T00:00:00Z",
+        base_hash=service._hash_content(before),
+    )
+    service._save_drafts({"todo": draft})
+    target_path.write_text(before + "\nextra edit\n", encoding="utf-8")
+
+    client = _client(repo)
+    res = client.post("/api/docs/todo/chat/apply")
+    assert res.status_code == 409, res.text
+
+    pending = client.get("/api/docs/todo/chat/pending")
+    assert pending.status_code == 200, pending.text
+
+
 def test_prompt_includes_all_docs_and_recent_run(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ):

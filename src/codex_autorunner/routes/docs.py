@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from ..core.doc_chat import (
     DocChatBusyError,
+    DocChatConflictError,
     DocChatError,
     DocChatValidationError,
     _normalize_kind,
@@ -180,6 +181,8 @@ def build_docs_routes() -> APIRouter:
                 pending = doc_chat.pending_patch(key)
                 content = doc_chat.apply_saved_patch(key)
         except DocChatBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except DocChatConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except DocChatError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc

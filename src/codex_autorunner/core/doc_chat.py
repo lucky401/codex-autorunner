@@ -70,6 +70,10 @@ class DocChatBusyError(DocChatError):
     """Raised when a doc chat is already running for the target doc."""
 
 
+class DocChatConflictError(DocChatError):
+    """Raised when a doc draft conflicts with newer edits."""
+
+
 def _normalize_kind(kind: str) -> str:
     key = (kind or "").lower()
     if key not in ALLOWED_DOC_KINDS:
@@ -583,6 +587,11 @@ class DocChatService:
             raise DocChatError("No pending patch")
         config = self._repo_config()
         target_path = config.doc_path(key)
+        current = target_path.read_text(encoding="utf-8")
+        if draft.base_hash and self._hash_content(current) != draft.base_hash:
+            raise DocChatConflictError(
+                "Doc changed since draft created; reload before applying."
+            )
         atomic_write(target_path, draft.content)
         drafts.pop(key, None)
         self._save_drafts(drafts)
