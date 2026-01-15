@@ -262,6 +262,18 @@
             <button class="chip" data-doc="snapshot">SNAPSHOT</button>
             <span class="muted" id="doc-status"></span>
           </div>
+          <div id="doc-thread-registry-banner" class="doc-banner hidden">
+            <div class="doc-banner-text">
+              <div class="doc-banner-title">
+                Conversation state reset due to corrupted registry.
+              </div>
+              <div id="doc-thread-registry-detail" class="doc-banner-detail muted small"></div>
+            </div>
+            <div class="doc-banner-actions">
+              <button id="doc-thread-registry-reset" class="ghost sm">Reset conversations</button>
+              <button id="doc-thread-registry-download" class="ghost sm">Download backup</button>
+            </div>
+          </div>
           <div id="spec-issue-import" class="spec-issue-import hidden">
             <button id="spec-issue-import-toggle" class="ghost sm">Import Issue → SPEC</button>
             <div id="spec-issue-input-row" class="spec-issue-input-row hidden">

@@ -1418,6 +1418,46 @@ button.icon-btn {
   margin-bottom: 8px;
 }
 
+.doc-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  background: rgba(108, 245, 216, 0.08);
+}
+
+.doc-banner.hidden {
+  display: none;
+}
+
+.doc-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.doc-banner-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.doc-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.doc-banner-detail {
+  word-break: break-word;
+}
+
 .spec-issue-import {
   display: flex;
   gap: 8px;

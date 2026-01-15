@@ -191,11 +191,17 @@ class AppServerThreadsResponse(ResponseModel):
     doc_chat: Dict[str, Optional[str]]
     spec_ingest: Optional[str] = None
     autorunner: Optional[str] = None
+    corruption: Optional[Dict[str, Any]] = None
 
 
 class AppServerThreadResetResponse(ResponseModel):
     status: str
     key: str
+    cleared: bool
+
+
+class AppServerThreadResetAllResponse(ResponseModel):
+    status: str
     cleared: bool
 
 

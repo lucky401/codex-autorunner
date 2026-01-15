@@ -108,15 +108,14 @@ def build_docs_routes() -> APIRouter:
         kind: str, request: Request, payload: Optional[DocChatPayload] = None
     ):
         doc_chat = request.app.state.doc_chat
+        repo_blocked = doc_chat.repo_blocked_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         try:
             payload_dict = payload.model_dump(exclude_none=True) if payload else None
             doc_req = doc_chat.parse_request(kind, payload_dict)
         except DocChatValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        repo_blocked = doc_chat.repo_blocked_reason()
-        if repo_blocked:
-            raise HTTPException(status_code=409, detail=repo_blocked)
 
         if doc_chat.doc_busy(doc_req.kind):
             raise HTTPException(
@@ -167,6 +166,9 @@ def build_docs_routes() -> APIRouter:
     async def discard_chat_patch(kind: str, request: Request):
         doc_chat = request.app.state.doc_chat
         key = _normalize_kind(kind)
+        repo_blocked = doc_chat.repo_blocked_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         try:
             async with doc_chat.doc_lock(key):
                 content = doc_chat.discard_patch(key)
@@ -178,6 +180,9 @@ def build_docs_routes() -> APIRouter:
     async def pending_chat_patch(kind: str, request: Request):
         doc_chat = request.app.state.doc_chat
         key = _normalize_kind(kind)
+        repo_blocked = doc_chat.repo_blocked_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         pending = doc_chat.pending_patch(key)
         if not pending:
             raise HTTPException(status_code=404, detail="No pending patch")
@@ -187,6 +192,10 @@ def build_docs_routes() -> APIRouter:
     async def ingest_spec(
         request: Request, payload: Optional[IngestSpecRequest] = None
     ):
+        engine = request.app.state.engine
+        repo_blocked = engine.repo_busy_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         spec_ingest = request.app.state.spec_ingest
         force = False
         spec_override: Optional[Path] = None
@@ -206,14 +215,27 @@ def build_docs_routes() -> APIRouter:
 
     @router.get("/api/ingest-spec/pending", response_model=IngestSpecResponse)
     def ingest_spec_pending(request: Request):
+        engine = request.app.state.engine
+        repo_blocked = engine.repo_busy_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         spec_ingest = request.app.state.spec_ingest
-        pending = spec_ingest.pending_patch()
-        if not pending:
-            raise HTTPException(status_code=404, detail="No pending spec ingest patch")
-        return pending
+        try:
+            pending = spec_ingest.pending_patch()
+            if not pending:
+                raise HTTPException(
+                    status_code=404, detail="No pending spec ingest patch"
+                )
+            return pending
+        except SpecIngestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/api/ingest-spec/apply", response_model=IngestSpecResponse)
     def ingest_spec_apply(request: Request):
+        engine = request.app.state.engine
+        repo_blocked = engine.repo_busy_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         spec_ingest = request.app.state.spec_ingest
         try:
             return spec_ingest.apply_patch()
@@ -222,6 +244,10 @@ def build_docs_routes() -> APIRouter:
 
     @router.post("/api/ingest-spec/discard", response_model=IngestSpecResponse)
     def ingest_spec_discard(request: Request):
+        engine = request.app.state.engine
+        repo_blocked = engine.repo_busy_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         spec_ingest = request.app.state.spec_ingest
         try:
             return spec_ingest.discard_patch()

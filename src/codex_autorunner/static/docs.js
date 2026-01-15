@@ -113,6 +113,13 @@ const specIngestUI = {
   patchReload: document.getElementById("spec-ingest-patch-reload"),
 };
 
+const threadRegistryUI = {
+  banner: document.getElementById("doc-thread-registry-banner"),
+  detail: document.getElementById("doc-thread-registry-detail"),
+  reset: document.getElementById("doc-thread-registry-reset"),
+  download: document.getElementById("doc-thread-registry-download"),
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Chat State Management
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1315,6 +1322,48 @@ function initDocVoice() {
   });
 }
 
+function renderThreadRegistryBanner(notice) {
+  if (!threadRegistryUI.banner) return;
+  const active = notice && notice.status === "corrupt";
+  threadRegistryUI.banner.classList.toggle("hidden", !active);
+  if (!active) return;
+  const backupPath =
+    notice && typeof notice.backup_path === "string" ? notice.backup_path : "";
+  if (threadRegistryUI.detail) {
+    threadRegistryUI.detail.textContent = backupPath
+      ? `Backup: ${backupPath}`
+      : "Backup unavailable";
+    threadRegistryUI.detail.title = backupPath || "";
+  }
+  if (threadRegistryUI.download) {
+    threadRegistryUI.download.classList.toggle("hidden", !backupPath);
+  }
+}
+
+async function loadThreadRegistryStatus() {
+  if (!threadRegistryUI.banner) return;
+  try {
+    const data = await api("/api/app-server/threads");
+    renderThreadRegistryBanner(data?.corruption);
+  } catch (err) {
+    console.error("Failed to load thread registry status", err);
+  }
+}
+
+async function resetThreadRegistry() {
+  try {
+    await api("/api/app-server/threads/reset-all", { method: "POST" });
+    renderThreadRegistryBanner(null);
+    flash("Conversations reset");
+  } catch (err) {
+    flash(err.message || "Failed to reset conversations", "error");
+  }
+}
+
+function downloadThreadRegistryBackup() {
+  window.location.href = resolvePath("/api/app-server/threads/backup");
+}
+
 export function initDocs() {
   const urlDoc = getDocFromUrl();
   if (urlDoc) {
@@ -1364,6 +1413,15 @@ export function initDocs() {
   }
   if (docActionsUI.paste) {
     docActionsUI.paste.addEventListener("click", pasteSpecFromClipboard);
+  }
+  if (threadRegistryUI.reset) {
+    threadRegistryUI.reset.addEventListener("click", resetThreadRegistry);
+  }
+  if (threadRegistryUI.download) {
+    threadRegistryUI.download.addEventListener(
+      "click",
+      downloadThreadRegistryBackup
+    );
   }
   const docContent = getDocTextarea();
   if (docContent) {
@@ -1455,6 +1513,7 @@ export function initDocs() {
   }
   
   initDocVoice();
+  loadThreadRegistryStatus();
   reloadPatch(activeDoc, true);
   reloadSpecIngestPatch(true);
 

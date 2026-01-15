@@ -5,6 +5,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator, Dict, Optional, Tuple
 
 from ..integrations.app_server.client import CodexAppServerError
@@ -17,7 +18,7 @@ from .app_server_threads import (
 )
 from .config import RepoConfig
 from .engine import Engine, timestamp
-from .locks import process_alive, read_lock_info
+from .locks import FileLock, FileLockBusy, FileLockError
 from .patch_utils import (
     PatchError,
     apply_patch_file,
@@ -89,6 +90,7 @@ class DocChatService:
             self.engine.repo_root / ".codex-autorunner" / DOC_CHAT_PATCH_NAME
         )
         self.last_agent_message: Optional[str] = None
+        self._lock_root = self.engine.repo_root / ".codex-autorunner" / "locks"
         self._app_server_supervisor = app_server_supervisor
         self._app_server_threads = app_server_threads or AppServerThreadRegistry(
             default_app_server_threads_path(self.engine.repo_root)
@@ -108,22 +110,21 @@ class DocChatService:
         return DocChatRequest(kind=key, message=message, stream=stream)
 
     def repo_blocked_reason(self) -> Optional[str]:
-        lock_path = self.engine.lock_path
-        if lock_path.exists():
-            info = read_lock_info(lock_path)
-            pid = info.pid
-            if pid and process_alive(pid):
-                host = f" on {info.host}" if info.host else ""
-                return f"Autorunner is running (pid={pid}{host}); try again later."
-            return "Autorunner lock present; clear or resume before using doc chat."
-
-        state = load_state(self.engine.state_path)
-        if state.status == "running":
-            return "Autorunner is currently running; try again later."
-        return None
+        return self.engine.repo_busy_reason()
 
     def doc_busy(self, kind: str) -> bool:
-        return self._lock_for(kind).locked()
+        if self._lock_for(kind).locked():
+            return True
+        lock = FileLock(self._doc_lock_path(kind))
+        try:
+            lock.acquire(blocking=False)
+        except FileLockBusy:
+            return True
+        except FileLockError:
+            return True
+        finally:
+            lock.release()
+        return False
 
     @asynccontextmanager
     async def doc_lock(self, kind: str):
@@ -131,9 +132,17 @@ class DocChatService:
         if lock.locked():
             raise DocChatBusyError(f"Doc chat already running for {kind}")
         await lock.acquire()
+        file_lock = FileLock(self._doc_lock_path(kind))
         try:
+            try:
+                file_lock.acquire(blocking=False)
+            except FileLockBusy as exc:
+                raise DocChatBusyError(f"Doc chat already running for {kind}") from exc
+            except FileLockError as exc:
+                raise DocChatError(str(exc)) from exc
             yield
         finally:
+            file_lock.release()
             lock.release()
 
     def _lock_for(self, kind: str) -> asyncio.Lock:
@@ -143,6 +152,10 @@ class DocChatService:
             lock = asyncio.Lock()
             self._locks[key] = lock
         return lock
+
+    def _doc_lock_path(self, kind: str) -> Path:
+        key = _normalize_kind(kind)
+        return self._lock_root / f"doc_chat.{key}.lock"
 
     def _chat_id(self) -> str:
         return uuid.uuid4().hex[:8]

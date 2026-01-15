@@ -1,9 +1,11 @@
+import errno
 import json
 import os
 import socket
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import IO, Iterator, Optional
 
 from .utils import atomic_write
 
@@ -21,6 +23,90 @@ def process_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX default
+    msvcrt = None  # type: ignore[assignment]
+
+
+class FileLockError(Exception):
+    """Raised when a file lock fails unexpectedly."""
+
+
+class FileLockBusy(FileLockError):
+    """Raised when a file lock is already held by another process."""
+
+
+class FileLock:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._file: Optional[IO[str]] = None
+
+    def acquire(self, *, blocking: bool = True) -> None:
+        if self._file is not None:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = self.path.open("a+", encoding="utf-8")
+        try:
+            if fcntl is not None:
+                flags = fcntl.LOCK_EX
+                if not blocking:
+                    flags |= fcntl.LOCK_NB
+                fcntl.flock(lock_file.fileno(), flags)
+            elif msvcrt is not None:
+                lock_file.seek(0)
+                if not blocking and not hasattr(msvcrt, "LK_NBLCK"):
+                    raise FileLockBusy("File lock already held")
+                mode = msvcrt.LK_LOCK
+                if not blocking:
+                    mode = msvcrt.LK_NBLCK
+                msvcrt.locking(lock_file.fileno(), mode, 1)
+            self._file = lock_file
+        except OSError as exc:
+            lock_file.close()
+            if not blocking and exc.errno in (errno.EACCES, errno.EAGAIN):
+                raise FileLockBusy("File lock already held") from exc
+            if not blocking and msvcrt is not None:
+                raise FileLockBusy("File lock already held") from exc
+            raise FileLockError(f"Failed to acquire lock: {exc}") from exc
+
+    def release(self) -> None:
+        lock_file = self._file
+        if lock_file is None:
+            return
+        try:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            elif msvcrt is not None:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        finally:
+            lock_file.close()
+            self._file = None
+
+    def __enter__(self) -> "FileLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.release()
+
+
+@contextmanager
+def file_lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
+    lock = FileLock(path)
+    lock.acquire(blocking=blocking)
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def read_lock_info(lock_path: Path) -> LockInfo:
