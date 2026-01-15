@@ -82,6 +82,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "state_root": "~/.codex-autorunner/workspaces",
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
+        "turn_timeout_seconds": 7200,
         "request_timeout": None,
         "prompts": {
             "doc_chat": {
@@ -376,6 +377,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "state_root": "~/.codex-autorunner/workspaces",
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
+        "turn_timeout_seconds": 7200,
         "request_timeout": None,
         "prompts": {
             "doc_chat": {
@@ -557,6 +559,7 @@ class AppServerConfig:
     state_root: Path
     max_handles: Optional[int]
     idle_ttl_seconds: Optional[int]
+    turn_timeout_seconds: Optional[float]
     request_timeout: Optional[float]
     prompts: AppServerPromptsConfig
 
@@ -805,6 +808,14 @@ def _parse_app_server_config(
     idle_ttl_seconds = int(idle_ttl_raw) if idle_ttl_raw is not None else None
     if idle_ttl_seconds is not None and idle_ttl_seconds <= 0:
         idle_ttl_seconds = None
+    turn_timeout_raw = cfg.get(
+        "turn_timeout_seconds", defaults.get("turn_timeout_seconds")
+    )
+    turn_timeout_seconds = (
+        float(turn_timeout_raw) if turn_timeout_raw is not None else None
+    )
+    if turn_timeout_seconds is not None and turn_timeout_seconds <= 0:
+        turn_timeout_seconds = None
     request_timeout_raw = cfg.get("request_timeout", defaults.get("request_timeout"))
     request_timeout = (
         float(request_timeout_raw) if request_timeout_raw is not None else None
@@ -818,6 +829,7 @@ def _parse_app_server_config(
         state_root=state_root,
         max_handles=max_handles,
         idle_ttl_seconds=idle_ttl_seconds,
+        turn_timeout_seconds=turn_timeout_seconds,
         request_timeout=request_timeout,
         prompts=prompts,
     )
@@ -1137,6 +1149,14 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
         if key in app_server_cfg and app_server_cfg.get(key) is not None:
             if not isinstance(app_server_cfg.get(key), int):
                 raise ConfigError(f"app_server.{key} must be an integer or null")
+    if (
+        "turn_timeout_seconds" in app_server_cfg
+        and app_server_cfg.get("turn_timeout_seconds") is not None
+    ):
+        if not isinstance(app_server_cfg.get("turn_timeout_seconds"), (int, float)):
+            raise ConfigError(
+                "app_server.turn_timeout_seconds must be a number or null"
+            )
     if (
         "request_timeout" in app_server_cfg
         and app_server_cfg.get("request_timeout") is not None
