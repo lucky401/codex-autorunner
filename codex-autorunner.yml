@@ -191,6 +191,9 @@ repo:
     app_server_command:
       - codex
       - app-server
+    app_server:
+      # Close idle app-server handles after this many seconds; null/<=0 disables pruning.
+      idle_ttl_seconds: 28800
     polling:
       timeout_seconds: 30
       allowed_updates:
@@ -316,6 +319,9 @@ hub:
     app_server_command:
       - codex
       - app-server
+    app_server:
+      # Close idle app-server handles after this many seconds; null/<=0 disables pruning.
+      idle_ttl_seconds: 28800
     polling:
       timeout_seconds: 30
       allowed_updates:
