@@ -15,6 +15,7 @@ from codex_autorunner.core.doc_chat import (
     DocChatDraftState,
     DocChatRequest,
     DocChatService,
+    DocChatValidationError,
 )
 from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.locks import FileLock
@@ -130,6 +131,17 @@ def test_chat_rejects_invalid_payload(repo: Path):
     res = client.post("/api/docs/todo/chat", json=None)
     assert res.status_code == 400
     assert res.json()["detail"] == "invalid payload"
+
+
+def test_parse_request_enforces_kind_targets(repo: Path) -> None:
+    engine = Engine(repo)
+    service = DocChatService(engine)
+
+    req = service.parse_request({"message": "hi", "targets": ["todo"]}, kind="todo")
+    assert req.targets == ("todo",)
+
+    with pytest.raises(DocChatValidationError):
+        service.parse_request({"message": "hi", "targets": ["spec"]}, kind="todo")
 
 
 def test_chat_repo_lock_conflict(repo: Path):

@@ -263,8 +263,14 @@ class DocChatService:
                 targets = (_normalize_kind(raw_targets),)
             except DocChatValidationError:
                 targets = None
-        if targets is None and kind:
-            targets = (_normalize_kind(kind),)
+        if kind:
+            normalized_kind = _normalize_kind(kind)
+            if targets is None:
+                targets = (normalized_kind,)
+            else:
+                if any(target != normalized_kind for target in targets):
+                    raise DocChatValidationError("target must match doc kind")
+                targets = (normalized_kind,)
         return DocChatRequest(message=message, stream=stream, targets=targets)
 
     def repo_blocked_reason(self) -> Optional[str]:
