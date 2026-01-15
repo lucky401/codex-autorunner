@@ -674,6 +674,41 @@ if isinstance(server, dict):
 PY
 }
 
+_config_server_port() {
+  local root
+  root="$1"
+  "${HELPER_PYTHON}" - "$root" <<'PY'
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except Exception:
+    sys.exit(0)
+
+root = Path(sys.argv[1]).expanduser()
+config_path = root / ".codex-autorunner" / "config.yml"
+if not config_path.exists():
+    sys.exit(0)
+
+try:
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+except Exception:
+    sys.exit(0)
+
+if not isinstance(data, dict):
+    sys.exit(0)
+
+server = data.get("server")
+if isinstance(server, dict):
+    port = server.get("port")
+    if isinstance(port, int) and port > 0:
+        sys.stdout.write(str(port))
+    elif isinstance(port, str) and port.strip().isdigit():
+        sys.stdout.write(port.strip())
+PY
+}
+
 _detect_base_path() {
   local base hub_root
   base="$(_plist_arg_value base-path)"
@@ -739,8 +774,14 @@ _should_check_telegram() {
 }
 
 _health_check_once() {
-  local port url static_url
+  local port url static_url hub_root
   port="$(_plist_arg_value port)"
+  if [[ -z "${port}" ]]; then
+    hub_root="$(_plist_arg_value path)"
+    if [[ -n "${hub_root}" ]]; then
+      port="$(_config_server_port "${hub_root}")"
+    fi
+  fi
   if [[ -z "${port}" ]]; then
     port="4173"
   fi

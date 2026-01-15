@@ -325,7 +325,7 @@ hub:
 
   server:
     host: 127.0.0.1
-    port: 4173
+    port: 4517
     base_path: ""
     access_log: false
     # Optional env var containing the bearer token required for /api and websocket access.
