@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import dataclasses
 import json
@@ -11,20 +12,24 @@ import traceback
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import IO, Iterator, Optional
+from typing import IO, Any, Iterator, Optional
 
 import yaml
 
+from ..integrations.app_server.client import CodexAppServerError
+from ..integrations.app_server.env import build_app_server_env
+from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
 from ..web.static_assets import missing_static_assets, resolve_static_dir
 from .about_car import ensure_about_car_file
-from .codex_runner import run_codex_streaming
+from .app_server_prompts import build_autorunner_prompt
+from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
 from .config import ConfigError, HubConfig, RepoConfig, _is_loopback_host, load_config
 from .docs import DocsManager
 from .locks import process_alive, read_lock_info, write_lock_info
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
-from .prompt import build_final_summary_prompt, build_prompt
+from .prompt import build_final_summary_prompt
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import (
     atomic_write,
@@ -43,6 +48,9 @@ def timestamp() -> str:
 
 SUMMARY_FINALIZED_MARKER = "CAR:SUMMARY_FINALIZED"
 SUMMARY_FINALIZED_MARKER_PREFIX = f"<!-- {SUMMARY_FINALIZED_MARKER}"
+AUTORUNNER_APP_SERVER_MESSAGE = (
+    "Continue working through TODO items from top to bottom."
+)
 
 
 class Engine:
@@ -61,6 +69,9 @@ class Engine:
         self.stop_path = self.repo_root / ".codex-autorunner" / "stop"
         self._active_global_handler: Optional[RotatingFileHandler] = None
         self._active_run_log: Optional[IO[str]] = None
+        self._app_server_threads = AppServerThreadRegistry(
+            default_app_server_threads_path(self.repo_root)
+        )
         # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
         try:
             ensure_about_car_file(self.config)
@@ -177,7 +188,7 @@ class Engine:
         self._update_state("running", run_id, None, started=True)
         with self._run_log_context(run_id):
             self._write_run_marker(run_id, "start")
-            exit_code = self.run_codex_cli(prompt, run_id)
+            exit_code = self.run_codex_app_server(prompt, run_id)
             self._write_run_marker(run_id, "end", exit_code=exit_code)
 
         self._update_state(
@@ -506,16 +517,114 @@ class Engine:
         except Exception:
             return None
 
-    def run_codex_cli(self, prompt: str, run_id: int) -> int:
-        def _log_stdout(line: str) -> None:
-            self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
-
-        return run_codex_streaming(
+    def _build_app_server_prompt(self, prev_output: Optional[str]) -> str:
+        return build_autorunner_prompt(
             self.config,
-            self.repo_root,
-            prompt,
-            on_stdout_line=_log_stdout,
+            message=AUTORUNNER_APP_SERVER_MESSAGE,
+            prev_run_summary=prev_output,
         )
+
+    def run_codex_app_server(self, prompt: str, run_id: int) -> int:
+        try:
+            return asyncio.run(self._run_codex_app_server_async(prompt, run_id))
+        except RuntimeError as exc:
+            if "asyncio.run" in str(exc):
+                self.log_line(
+                    run_id,
+                    "error: app-server backend cannot run inside an active event loop",
+                )
+                return 1
+            raise
+
+    async def _run_codex_app_server_async(self, prompt: str, run_id: int) -> int:
+        config = self.config
+        if not config.app_server.command:
+            self.log_line(
+                run_id,
+                "error: app-server backend requires app_server.command to be configured",
+            )
+            return 1
+        logger = logging.getLogger("codex_autorunner.app_server")
+
+        def _env_builder(
+            workspace_root: Path, _workspace_id: str, state_dir: Path
+        ) -> dict[str, str]:
+            state_dir.mkdir(parents=True, exist_ok=True)
+            return build_app_server_env(
+                config.app_server.command,
+                workspace_root,
+                state_dir,
+                logger=logger,
+                event_prefix="autorunner",
+            )
+
+        supervisor = WorkspaceAppServerSupervisor(
+            config.app_server.command,
+            state_root=config.app_server.state_root,
+            env_builder=_env_builder,
+            logger=logger,
+            max_handles=config.app_server.max_handles,
+            idle_ttl_seconds=config.app_server.idle_ttl_seconds,
+            request_timeout=config.app_server.request_timeout,
+        )
+        try:
+            client = await supervisor.get_client(self.repo_root)
+            thread_id = self._app_server_threads.get_thread_id("autorunner")
+            if thread_id:
+                try:
+                    resume_result = await client.thread_resume(thread_id)
+                    resumed = resume_result.get("id")
+                    if isinstance(resumed, str) and resumed:
+                        thread_id = resumed
+                        self._app_server_threads.set_thread_id("autorunner", thread_id)
+                except CodexAppServerError:
+                    self._app_server_threads.reset_thread("autorunner")
+                    thread_id = None
+            if not thread_id:
+                thread = await client.thread_start(str(self.repo_root))
+                thread_id = thread.get("id")
+                if not isinstance(thread_id, str) or not thread_id:
+                    self.log_line(
+                        run_id, "error: app-server did not return a thread id"
+                    )
+                    return 1
+                self._app_server_threads.set_thread_id("autorunner", thread_id)
+            turn_kwargs: dict[str, Any] = {}
+            if config.codex_model:
+                turn_kwargs["model"] = str(config.codex_model)
+            if config.codex_reasoning:
+                turn_kwargs["effort"] = str(config.codex_reasoning)
+            handle = await client.turn_start(
+                thread_id,
+                prompt,
+                approval_policy="never",
+                sandbox_policy="dangerFullAccess",
+                **turn_kwargs,
+            )
+            turn_result = await handle.wait()
+            self._log_app_server_output(run_id, turn_result.agent_messages)
+            if turn_result.errors:
+                for error in turn_result.errors:
+                    self.log_line(run_id, f"error: {error}")
+                return 1
+            return 0
+        except CodexAppServerError as exc:
+            self.log_line(run_id, f"error: {exc}")
+            return 1
+        except Exception as exc:  # pragma: no cover - defensive
+            self.log_line(run_id, f"error: app-server failed: {exc}")
+            return 1
+        finally:
+            await supervisor.close_all()
+
+    def _log_app_server_output(self, run_id: int, messages: list[str]) -> None:
+        if not messages:
+            return
+        for message in messages:
+            text = str(message)
+            lines = text.splitlines() or [""]
+            for line in lines:
+                self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
 
     def maybe_git_commit(self, run_id: int) -> None:
         msg = self.config.git_commit_message_template.replace(
@@ -580,7 +689,7 @@ class Engine:
                     break
 
                 prev_output = self.extract_prev_output(run_id - 1)
-                prompt = build_prompt(self.config, self.docs, prev_output)
+                prompt = self._build_app_server_prompt(prev_output)
 
                 exit_code = self._execute_run_step(prompt, run_id)
                 last_exit_code = exit_code

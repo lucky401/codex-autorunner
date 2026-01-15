@@ -103,12 +103,6 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             },
         },
     },
-    "doc_chat": {
-        "backend": "app_server",
-    },
-    "spec_ingest": {
-        "backend": "app_server",
-    },
     "server": {
         "host": "127.0.0.1",
         "port": 4173,
@@ -587,8 +581,6 @@ class RepoConfig:
     git_auto_commit: bool
     git_commit_message_template: str
     app_server: AppServerConfig
-    doc_chat_backend: str
-    spec_ingest_backend: str
     server_host: str
     server_port: int
     server_base_path: str
@@ -969,10 +961,6 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     server_log_cfg = cast(
         Dict[str, Any], server_log_cfg if isinstance(server_log_cfg, dict) else {}
     )
-    doc_chat_raw = cfg.get("doc_chat")
-    doc_chat_cfg = doc_chat_raw if isinstance(doc_chat_raw, dict) else {}
-    spec_ingest_raw = cfg.get("spec_ingest")
-    spec_ingest_cfg = spec_ingest_raw if isinstance(spec_ingest_raw, dict) else {}
     return RepoConfig(
         raw=cfg,
         root=root,
@@ -995,14 +983,6 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
             cfg.get("app_server"),
             root,
             DEFAULT_REPO_CONFIG["app_server"],
-        ),
-        doc_chat_backend=str(
-            doc_chat_cfg.get("backend", DEFAULT_REPO_CONFIG["doc_chat"]["backend"])
-        ),
-        spec_ingest_backend=str(
-            spec_ingest_cfg.get(
-                "backend", DEFAULT_REPO_CONFIG["spec_ingest"]["backend"]
-            )
         ),
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
@@ -1305,24 +1285,6 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("server.auth_token_env must be a string if provided")
     _validate_server_security(server)
     _validate_app_server_config(cfg)
-    doc_chat_cfg = cfg.get("doc_chat")
-    if doc_chat_cfg is not None:
-        if not isinstance(doc_chat_cfg, dict):
-            raise ConfigError("doc_chat section must be a mapping if provided")
-        backend = doc_chat_cfg.get("backend")
-        if backend is not None and not isinstance(backend, str):
-            raise ConfigError("doc_chat.backend must be a string if provided")
-        if backend and backend not in ("cli", "app_server"):
-            raise ConfigError("doc_chat.backend must be 'cli' or 'app_server'")
-    spec_ingest_cfg = cfg.get("spec_ingest")
-    if spec_ingest_cfg is not None:
-        if not isinstance(spec_ingest_cfg, dict):
-            raise ConfigError("spec_ingest section must be a mapping if provided")
-        backend = spec_ingest_cfg.get("backend")
-        if backend is not None and not isinstance(backend, str):
-            raise ConfigError("spec_ingest.backend must be a string if provided")
-        if backend and backend not in ("cli", "app_server"):
-            raise ConfigError("spec_ingest.backend must be 'cli' or 'app_server'")
     notifications_cfg = cfg.get("notifications")
     if notifications_cfg is not None:
         if not isinstance(notifications_cfg, dict):

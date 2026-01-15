@@ -1,6 +1,5 @@
 import asyncio
 import re
-import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Optional
@@ -12,7 +11,6 @@ from .core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
 )
-from .core.codex_runner import build_codex_command
 from .core.engine import Engine
 from .core.patch_utils import (
     PatchError,
@@ -21,7 +19,6 @@ from .core.patch_utils import (
     normalize_patch_text,
     preview_patch,
 )
-from .core.prompts import SPEC_INGEST_PROMPT
 from .core.utils import atomic_write
 from .integrations.app_server.client import CodexAppServerError
 from .integrations.app_server.supervisor import WorkspaceAppServerSupervisor
@@ -34,73 +31,6 @@ class SpecIngestError(Exception):
     """Raised when ingesting a SPEC fails."""
 
 
-def _extract_section(text: str, tag: str) -> Optional[str]:
-    pattern = re.compile(rf"<{tag}>\s*(.*?)\s*</{tag}>", re.DOTALL | re.IGNORECASE)
-    match = pattern.search(text)
-    if not match:
-        return None
-    return match.group(1).strip()
-
-
-def build_spec_ingest_prompt(spec: str, todo: str, progress: str, opinions: str) -> str:
-    return SPEC_INGEST_PROMPT.format(
-        spec=spec.strip(),
-        todo=todo.strip(),
-        progress=progress.strip(),
-        opinions=opinions.strip(),
-    )
-
-
-def parse_spec_ingest_output(text: str) -> Dict[str, str]:
-    todo = _extract_section(text, "TODO")
-    progress = _extract_section(text, "PROGRESS")
-    opinions = _extract_section(text, "OPINIONS")
-    if not todo or not progress or not opinions:
-        raise SpecIngestError(
-            "Failed to parse ingest output; missing TODO/PROGRESS/OPINIONS sections"
-        )
-    return {"todo": todo, "progress": progress, "opinions": opinions}
-
-
-def generate_docs_from_spec(
-    engine: Engine, spec_path: Optional[Path] = None
-) -> Dict[str, str]:
-    path = spec_path or engine.config.doc_path("spec")
-    if not path.exists():
-        raise SpecIngestError(f"SPEC not found at {path}")
-    spec_text = path.read_text(encoding="utf-8")
-    if not spec_text.strip():
-        raise SpecIngestError(f"SPEC at {path} is empty")
-
-    prompt = build_spec_ingest_prompt(
-        spec_text,
-        engine.docs.read_doc("todo"),
-        engine.docs.read_doc("progress"),
-        engine.docs.read_doc("opinions"),
-    )
-    cmd = build_codex_command(engine.config, prompt)
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(engine.repo_root),
-        )
-    except FileNotFoundError as exc:
-        raise SpecIngestError(
-            f"Codex binary not found: {engine.config.codex_binary}"
-        ) from exc
-
-    if result.returncode != 0:
-        stderr = result.stderr.strip() if result.stderr else ""
-        stdout_tail = (result.stdout or "").strip()[-400:]
-        raise SpecIngestError(
-            f"Codex ingest failed (code {result.returncode}). {stderr or stdout_tail}"
-        )
-
-    return parse_spec_ingest_output(result.stdout or "")
-
-
 def ensure_can_overwrite(engine: Engine, force: bool) -> None:
     if force:
         return
@@ -110,16 +40,6 @@ def ensure_can_overwrite(engine: Engine, force: bool) -> None:
             raise SpecIngestError(
                 "TODO/PROGRESS/OPINIONS already contain content; rerun with --force to overwrite"
             )
-
-
-def write_ingested_docs(
-    engine: Engine, docs: Dict[str, str], force: bool = False
-) -> None:
-    ensure_can_overwrite(engine, force)
-    for key, content in docs.items():
-        target = engine.config.doc_path(key)
-        text = content if content.endswith("\n") else content + "\n"
-        atomic_write(target, text)
 
 
 def clear_work_docs(engine: Engine) -> Dict[str, str]:
@@ -141,13 +61,8 @@ class SpecIngestService:
         *,
         app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None,
         app_server_threads: Optional[AppServerThreadRegistry] = None,
-        backend: Optional[str] = None,
     ) -> None:
         self.engine = engine
-        raw_backend = (
-            backend or getattr(engine.config, "spec_ingest_backend", None) or "cli"
-        )
-        self._backend = str(raw_backend).strip().lower()
         self._app_server_supervisor = app_server_supervisor
         self._app_server_threads = app_server_threads or AppServerThreadRegistry(
             default_app_server_threads_path(self.engine.repo_root)
@@ -157,9 +72,6 @@ class SpecIngestService:
         )
         self.last_agent_message: Optional[str] = None
         self._lock: Optional[asyncio.Lock] = None
-
-    def _using_app_server(self) -> bool:
-        return self._backend == "app_server"
 
     def _ensure_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -269,20 +181,6 @@ class SpecIngestService:
             }
         )
 
-    async def _execute_cli(
-        self,
-        *,
-        force: bool,
-        spec_path: Optional[Path] = None,
-    ) -> Dict[str, str]:
-        def _run() -> Dict[str, str]:
-            docs = generate_docs_from_spec(self.engine, spec_path=spec_path)
-            write_ingested_docs(self.engine, docs, force=force)
-            return docs
-
-        docs = await asyncio.to_thread(_run)
-        return self._assemble_response(docs)
-
     async def _execute_app_server(
         self,
         *,
@@ -362,11 +260,9 @@ class SpecIngestService:
         message: Optional[str] = None,
     ) -> Dict[str, str]:
         async with self.ingest_lock():
-            if self._using_app_server():
-                return await self._execute_app_server(
-                    force=force, spec_path=spec_path, message=message
-                )
-            return await self._execute_cli(force=force, spec_path=spec_path)
+            return await self._execute_app_server(
+                force=force, spec_path=spec_path, message=message
+            )
 
 
 class SpecIngestPatchParser:

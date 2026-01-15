@@ -114,14 +114,6 @@ repo:
         todo_excerpt_max_chars: 4000
         prev_run_max_chars: 3000
 
-  doc_chat:
-    # Backend used for doc chat (app_server|cli).
-    backend: app_server
-
-  spec_ingest:
-    # Backend used for SPEC ingest (app_server|cli).
-    backend: app_server
-
   server:
     # Bind host/port for the local UI/API. Use 0.0.0.0 only if you intend to expose it.
     host: 127.0.0.1
