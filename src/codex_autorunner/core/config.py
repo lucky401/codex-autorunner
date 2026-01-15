@@ -1,6 +1,7 @@
 import dataclasses
 import ipaddress
 import json
+import shlex
 from os import PathLike
 from pathlib import Path
 from typing import IO, Any, Dict, List, Optional, Union, cast
@@ -75,6 +76,13 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "sync_commit_mode": "auto",  # none|auto|always
         # Bounds the agentic sync step in GitHubService.sync_pr (seconds).
         "sync_agent_timeout_seconds": 1800,
+    },
+    "app_server": {
+        "command": ["codex", "app-server"],
+        "state_root": "~/.codex-autorunner/workspaces",
+        "max_handles": 20,
+        "idle_ttl_seconds": 3600,
+        "request_timeout": None,
     },
     "server": {
         "host": "127.0.0.1",
@@ -344,6 +352,13 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "backup_count": 3,
         },
     },
+    "app_server": {
+        "command": ["codex", "app-server"],
+        "state_root": "~/.codex-autorunner/workspaces",
+        "max_handles": 20,
+        "idle_ttl_seconds": 3600,
+        "request_timeout": None,
+    },
     "server": {
         "host": "127.0.0.1",
         "port": 4173,
@@ -469,6 +484,15 @@ class StaticAssetsConfig:
 
 
 @dataclasses.dataclass
+class AppServerConfig:
+    command: List[str]
+    state_root: Path
+    max_handles: Optional[int]
+    idle_ttl_seconds: Optional[int]
+    request_timeout: Optional[float]
+
+
+@dataclasses.dataclass
 class RepoConfig:
     raw: Dict[str, Any]
     root: Path
@@ -487,6 +511,7 @@ class RepoConfig:
     runner_max_wallclock_seconds: Optional[int]
     git_auto_commit: bool
     git_commit_message_template: str
+    app_server: AppServerConfig
     server_host: str
     server_port: int
     server_base_path: str
@@ -519,6 +544,7 @@ class HubConfig:
     auto_init_missing: bool
     update_repo_url: str
     update_repo_ref: str
+    app_server: AppServerConfig
     server_host: str
     server_port: int
     server_base_path: str
@@ -611,6 +637,48 @@ def _normalize_base_path(path: Optional[str]) -> str:
         normalized = "/" + normalized
     normalized = normalized.rstrip("/")
     return normalized or ""
+
+
+def _parse_command(raw: Any) -> List[str]:
+    if isinstance(raw, list):
+        return [str(item) for item in raw if item]
+    if isinstance(raw, str):
+        return [part for part in shlex.split(raw) if part]
+    return []
+
+
+def _parse_app_server_config(
+    cfg: Optional[Dict[str, Any]],
+    root: Path,
+    defaults: Dict[str, Any],
+) -> AppServerConfig:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    command = _parse_command(cfg.get("command", defaults.get("command")))
+    state_root_raw = cfg.get("state_root", defaults.get("state_root"))
+    state_root = Path(str(state_root_raw)).expanduser()
+    if not state_root.is_absolute():
+        state_root = root / state_root
+    max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
+    max_handles = int(max_handles_raw) if max_handles_raw is not None else None
+    if max_handles is not None and max_handles <= 0:
+        max_handles = None
+    idle_ttl_raw = cfg.get("idle_ttl_seconds", defaults.get("idle_ttl_seconds"))
+    idle_ttl_seconds = int(idle_ttl_raw) if idle_ttl_raw is not None else None
+    if idle_ttl_seconds is not None and idle_ttl_seconds <= 0:
+        idle_ttl_seconds = None
+    request_timeout_raw = cfg.get("request_timeout", defaults.get("request_timeout"))
+    request_timeout = (
+        float(request_timeout_raw) if request_timeout_raw is not None else None
+    )
+    if request_timeout is not None and request_timeout <= 0:
+        request_timeout = None
+    return AppServerConfig(
+        command=command,
+        state_root=state_root,
+        max_handles=max_handles,
+        idle_ttl_seconds=idle_ttl_seconds,
+        request_timeout=request_timeout,
+    )
 
 
 def _parse_static_assets_config(
@@ -769,6 +837,11 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         runner_max_wallclock_seconds=cfg["runner"].get("max_wallclock_seconds"),
         git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
         git_commit_message_template=str(cfg["git"].get("commit_message_template")),
+        app_server=_parse_app_server_config(
+            cfg.get("app_server"),
+            root,
+            DEFAULT_REPO_CONFIG["app_server"],
+        ),
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
@@ -834,6 +907,11 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         auto_init_missing=bool(hub_cfg["auto_init_missing"]),
         update_repo_url=str(hub_cfg.get("update_repo_url", "")),
         update_repo_ref=str(hub_cfg.get("update_repo_ref", "main")),
+        app_server=_parse_app_server_config(
+            cfg.get("app_server"),
+            root,
+            DEFAULT_HUB_CONFIG["app_server"],
+        ),
         server_host=str(cfg["server"]["host"]),
         server_port=int(cfg["server"]["port"]),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
@@ -898,6 +976,31 @@ def _validate_server_security(server: Dict[str, Any]) -> None:
         raise ConfigError(
             "server.allowed_hosts must be set when binding to a non-loopback host"
         )
+
+
+def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
+    app_server_cfg = cfg.get("app_server")
+    if app_server_cfg is None:
+        return
+    if not isinstance(app_server_cfg, dict):
+        raise ConfigError("app_server section must be a mapping if provided")
+    command = app_server_cfg.get("command")
+    if command is not None and not isinstance(command, (list, str)):
+        raise ConfigError("app_server.command must be a list or string if provided")
+    if "state_root" in app_server_cfg and not isinstance(
+        app_server_cfg.get("state_root", ""), str
+    ):
+        raise ConfigError("app_server.state_root must be a string path")
+    for key in ("max_handles", "idle_ttl_seconds"):
+        if key in app_server_cfg and app_server_cfg.get(key) is not None:
+            if not isinstance(app_server_cfg.get(key), int):
+                raise ConfigError(f"app_server.{key} must be an integer or null")
+    if (
+        "request_timeout" in app_server_cfg
+        and app_server_cfg.get("request_timeout") is not None
+    ):
+        if not isinstance(app_server_cfg.get("request_timeout"), (int, float)):
+            raise ConfigError("app_server.request_timeout must be a number or null")
 
 
 def _validate_repo_config(cfg: Dict[str, Any]) -> None:
@@ -998,6 +1101,7 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
     ):
         raise ConfigError("server.auth_token_env must be a string if provided")
     _validate_server_security(server)
+    _validate_app_server_config(cfg)
     notifications_cfg = cfg.get("notifications")
     if notifications_cfg is not None:
         if not isinstance(notifications_cfg, dict):
@@ -1175,6 +1279,7 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
     ):
         raise ConfigError("server.auth_token_env must be a string if provided")
     _validate_server_security(server)
+    _validate_app_server_config(cfg)
     server_log_cfg = cfg.get("server_log")
     if server_log_cfg is not None and not isinstance(server_log_cfg, dict):
         raise ConfigError("server_log section must be a mapping or null")

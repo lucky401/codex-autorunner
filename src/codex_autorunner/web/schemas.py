@@ -69,6 +69,12 @@ class IngestSpecRequest(Payload):
     spec_path: Optional[str] = None
 
 
+class AppServerThreadResetRequest(Payload):
+    key: str = Field(
+        validation_alias=AliasChoices("key", "feature", "feature_key", "featureKey")
+    )
+
+
 class GithubIssueRequest(Payload):
     issue: str
 
@@ -167,6 +173,18 @@ class DocsResponse(ResponseModel):
     opinions: str
     spec: str
     summary: str
+
+
+class AppServerThreadsResponse(ResponseModel):
+    doc_chat: Dict[str, Optional[str]]
+    spec_ingest: Optional[str] = None
+    autorunner: Optional[str] = None
+
+
+class AppServerThreadResetResponse(ResponseModel):
+    status: str
+    key: str
+    cleared: bool
 
 
 class DocWriteResponse(ResponseModel):
