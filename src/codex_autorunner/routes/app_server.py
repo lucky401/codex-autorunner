@@ -5,7 +5,7 @@ App-server support routes (thread registry).
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from ..core.app_server_threads import normalize_feature_key
 from ..core.utils import is_within
@@ -19,6 +19,20 @@ from ..web.schemas import (
 
 def build_app_server_routes() -> APIRouter:
     router = APIRouter()
+
+    @router.get("/api/app-server/turns/{turn_id}/events")
+    async def stream_app_server_turn_events(
+        turn_id: str, request: Request, thread_id: str
+    ):
+        events = getattr(request.app.state, "app_server_events", None)
+        if events is None:
+            raise HTTPException(status_code=404, detail="App-server events unavailable")
+        if not thread_id:
+            raise HTTPException(status_code=400, detail="thread_id is required")
+        return StreamingResponse(
+            events.stream(thread_id, turn_id),
+            media_type="text/event-stream",
+        )
 
     @router.get("/api/app-server/threads", response_model=AppServerThreadsResponse)
     def app_server_threads(request: Request):

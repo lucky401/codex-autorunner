@@ -309,20 +309,22 @@
             <div id="doc-patch-main" class="doc-patch-main hidden">
               <div class="doc-patch-header">
                 <div class="doc-patch-info">
-                  <div class="muted small">Pending patch</div>
+                  <div class="muted small">Pending draft</div>
                   <div id="doc-patch-summary" class="doc-patch-summary"></div>
+                  <div id="doc-patch-meta" class="doc-patch-meta"></div>
                   <div class="doc-patch-legend">
                     <span class="doc-patch-legend-item doc-patch-legend-add">Added</span>
                     <span class="doc-patch-legend-item doc-patch-legend-del">Removed</span>
                   </div>
                 </div>
                 <div class="doc-patch-actions">
-                  <button id="doc-patch-apply" class="primary sm">Apply Patch</button>
+                  <button id="doc-patch-apply" class="primary sm">Apply Draft</button>
+                  <button id="doc-patch-preview" class="ghost sm" aria-pressed="false">Preview draft</button>
                   <button id="doc-patch-reload" class="ghost sm">Reload</button>
                   <button id="doc-patch-discard" class="danger sm">Discard</button>
                 </div>
               </div>
-              <div id="doc-patch-body" class="doc-patch-body">(no patch)</div>
+              <div id="doc-patch-body" class="doc-patch-body">(no draft)</div>
             </div>
             <textarea id="doc-content" spellcheck="false"></textarea>
             <div class="doc-actions" id="doc-actions-standard">
@@ -354,7 +356,7 @@
                   <textarea
                     id="doc-chat-input"
                     rows="1"
-                    placeholder="Chat with this doc..."
+                    placeholder="Chat about the work docs..."
                     spellcheck="false"
                     enterkeyhint="enter"
                   ></textarea>
@@ -373,6 +375,14 @@
               <div id="doc-chat-response-wrapper" class="doc-chat-response-wrapper hidden">
                 <div id="doc-chat-response" class="doc-chat-response"></div>
                 <div id="doc-chat-error" class="doc-chat-error hidden"></div>
+              </div>
+              <div id="doc-chat-events" class="doc-chat-events hidden">
+                <div class="doc-chat-events-header">
+                  <span>Live updates</span>
+                  <span class="doc-chat-events-count" id="doc-chat-events-count">0</span>
+                  <button id="doc-chat-events-toggle" class="ghost sm hidden">Show more</button>
+                </div>
+                <div class="doc-chat-events-list" id="doc-chat-events-list"></div>
               </div>
               <details class="doc-chat-history-details" id="doc-chat-history-details">
                 <summary class="doc-chat-history-toggle">

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .core.app_server_events import AppServerEventBuffer
 from .core.app_server_prompts import (
     build_spec_ingest_prompt as build_app_server_spec_ingest_prompt,
 )
@@ -76,12 +77,14 @@ class SpecIngestService:
         *,
         app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None,
         app_server_threads: Optional[AppServerThreadRegistry] = None,
+        app_server_events: Optional[AppServerEventBuffer] = None,
     ) -> None:
         self.engine = engine
         self._app_server_supervisor = app_server_supervisor
         self._app_server_threads = app_server_threads or AppServerThreadRegistry(
             default_app_server_threads_path(self.engine.repo_root)
         )
+        self._app_server_events = app_server_events
         self.patch_path = (
             self.engine.repo_root / ".codex-autorunner" / SPEC_INGEST_PATCH_NAME
         )
@@ -348,6 +351,13 @@ class SpecIngestService:
             sandbox_policy="readOnly",
         )
         active = self._register_active_turn(client, handle.turn_id, handle.thread_id)
+        if self._app_server_events is not None:
+            try:
+                await self._app_server_events.register_turn(
+                    handle.thread_id, handle.turn_id
+                )
+            except Exception:
+                pass
         turn_task = asyncio.create_task(handle.wait(timeout=None))
         timeout_task = asyncio.create_task(asyncio.sleep(SPEC_INGEST_TIMEOUT_SECONDS))
         interrupt_task = asyncio.create_task(active.interrupt_event.wait())

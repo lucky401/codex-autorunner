@@ -62,6 +62,8 @@ class SnapshotRequest(Payload):
 class DocChatPayload(Payload):
     message: Optional[str] = None
     stream: bool = False
+    targets: Optional[List[str]] = None
+    target: Optional[str] = None
 
 
 class IngestSpecRequest(Payload):

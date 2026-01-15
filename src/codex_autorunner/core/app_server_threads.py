@@ -14,7 +14,8 @@ APP_SERVER_THREADS_CORRUPT_SUFFIX = ".corrupt"
 APP_SERVER_THREADS_NOTICE_SUFFIX = ".corrupt.json"
 DOC_CHAT_KINDS = ("todo", "progress", "opinions", "spec", "summary")
 DOC_CHAT_PREFIX = "doc_chat."
-DOC_CHAT_KEYS = {f"{DOC_CHAT_PREFIX}{kind}" for kind in DOC_CHAT_KINDS}
+DOC_CHAT_KEY = "doc_chat"
+DOC_CHAT_KEYS = {DOC_CHAT_KEY} | {f"{DOC_CHAT_PREFIX}{kind}" for kind in DOC_CHAT_KINDS}
 FEATURE_KEYS = DOC_CHAT_KEYS | {"spec_ingest", "autorunner"}
 
 
@@ -72,9 +73,11 @@ class AppServerThreadRegistry:
 
     def feature_map(self) -> dict[str, object]:
         threads = self.load()
+        doc_chat_thread = threads.get(DOC_CHAT_KEY)
         payload: dict[str, object] = {
             "doc_chat": {
-                kind: threads.get(f"{DOC_CHAT_PREFIX}{kind}") for kind in DOC_CHAT_KINDS
+                kind: doc_chat_thread or threads.get(f"{DOC_CHAT_PREFIX}{kind}")
+                for kind in DOC_CHAT_KINDS
             },
             "spec_ingest": threads.get("spec_ingest"),
             "autorunner": threads.get("autorunner"),
