@@ -42,8 +42,12 @@ setup: venv-dev npm-install hooks
 
 npm-install: node_modules/.installed
 
-node_modules/.installed: package.json package-lock.json
-	npm install
+node_modules/.installed: package.json $(wildcard package-lock.json)
+	@if [ -f package-lock.json ]; then \
+		npm ci; \
+	else \
+		npm install; \
+	fi
 	@touch node_modules/.installed
 
 hooks:
