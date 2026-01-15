@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import DEFAULT_CONFIG
 from codex_autorunner.core.doc_chat import (
+    DocChatConflictError,
     DocChatDraftState,
     DocChatRequest,
     DocChatService,
@@ -449,6 +450,31 @@ def test_doc_chat_apply_allows_stacked_drafts(repo: Path) -> None:
 
     applied = service.apply_saved_patch("todo")
     assert "- [ ] followup" in applied
+
+
+def test_doc_chat_apply_detects_mid_run_edits(repo: Path) -> None:
+    engine = Engine(repo)
+    service = DocChatService(engine)
+    target_path = engine.config.doc_path("todo")
+    before = target_path.read_text(encoding="utf-8")
+    rel_path = str(target_path.relative_to(engine.repo_root))
+    after = before + "- [ ] new task\n"
+    patch_text = _make_patch(rel_path, before, after)
+    docs = service._doc_bases({})
+
+    target_path.write_text(before + "- [ ] unrelated edit\n", encoding="utf-8")
+
+    updated, _kinds, _payloads = service._apply_patch_to_drafts(
+        patch_text_raw=patch_text,
+        drafts={},
+        docs=docs,
+        agent_message="drafted",
+        allowed_kinds=("todo",),
+    )
+    service._save_drafts(updated)
+
+    with pytest.raises(DocChatConflictError):
+        service.apply_saved_patch("todo")
 
 
 def test_prompt_includes_all_docs_and_recent_run(

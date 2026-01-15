@@ -478,16 +478,18 @@ class DocChatService:
             patch_for_doc = self._build_patch(target, before, after)
             if not patch_for_doc.strip():
                 continue
+            base_hash = self._hash_content(before)
             existing = drafts.get(kind)
-            try:
-                disk_hash = self._hash_content(
-                    config.doc_path(kind).read_text(encoding="utf-8")
-                )
-            except OSError:
-                disk_hash = self._hash_content(before)
-            base_hash = disk_hash
-            if existing and existing.base_hash:
-                base_hash = existing.base_hash
+            if existing and docs.get(kind, {}).get("source") == "draft":
+                if existing.base_hash:
+                    base_hash = existing.base_hash
+                else:
+                    try:
+                        base_hash = self._hash_content(
+                            config.doc_path(kind).read_text(encoding="utf-8")
+                        )
+                    except OSError:
+                        base_hash = self._hash_content(before)
             updated[kind] = DocChatDraftState(
                 content=after,
                 patch=patch_for_doc,
