@@ -442,6 +442,7 @@ class DocChatService:
         agent_message: str,
         allowed_kinds: Optional[tuple[str, ...]] = None,
     ) -> tuple[dict[str, DocChatDraftState], list[str], dict[str, dict]]:
+        config = self._repo_config()
         targets = self._doc_targets()
         if allowed_kinds:
             targets = {
@@ -471,12 +472,18 @@ class DocChatService:
             patch_for_doc = self._build_patch(target, before, after)
             if not patch_for_doc.strip():
                 continue
+            base_hash = self._hash_content(before)
+            existing = drafts.get(kind)
+            if existing and docs.get(kind, {}).get("source") == "draft":
+                base_hash = existing.base_hash or self._hash_content(
+                    config.doc_path(kind).read_text(encoding="utf-8")
+                )
             updated[kind] = DocChatDraftState(
                 content=after,
                 patch=patch_for_doc,
                 agent_message=agent_message,
                 created_at=created_at,
-                base_hash=self._hash_content(before),
+                base_hash=base_hash,
             )
             updated_kinds.append(kind)
             payloads[kind] = updated[kind].to_dict()

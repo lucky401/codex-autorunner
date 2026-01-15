@@ -370,6 +370,36 @@ def test_chat_apply_rejects_stale_draft(repo: Path) -> None:
     assert pending.status_code == 200, pending.text
 
 
+def test_doc_chat_preserves_base_hash_on_draft_updates(repo: Path) -> None:
+    engine = Engine(repo)
+    service = DocChatService(engine)
+    target_path = engine.config.doc_path("todo")
+    before = target_path.read_text(encoding="utf-8")
+    rel_path = str(target_path.relative_to(engine.repo_root))
+    draft_content = before + "- [ ] draft task\n"
+    base_hash = service._hash_content(before)
+    draft = DocChatDraftState(
+        content=draft_content,
+        patch=_make_patch(rel_path, before, draft_content),
+        agent_message="drafted",
+        created_at="2024-01-01T00:00:00Z",
+        base_hash=base_hash,
+    )
+    drafts = {"todo": draft}
+    docs = service._doc_bases(drafts)
+    updated_content = draft_content + "- [ ] followup\n"
+    patch_text = _make_patch(rel_path, draft_content, updated_content)
+    updated, _kinds, _payloads = service._apply_patch_to_drafts(
+        patch_text_raw=patch_text,
+        drafts=drafts,
+        docs=docs,
+        agent_message="refined",
+        allowed_kinds=("todo",),
+    )
+
+    assert updated["todo"].base_hash == base_hash
+
+
 def test_prompt_includes_all_docs_and_recent_run(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
