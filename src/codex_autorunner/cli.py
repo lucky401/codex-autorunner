@@ -744,6 +744,36 @@ def hub_create(
     typer.echo(f"Created repo {snapshot.id} at {snapshot.path}")
 
 
+@hub_app.command("clone")
+def hub_clone(
+    git_url: str = typer.Option(
+        ..., "--git-url", help="Git URL or local path to clone"
+    ),
+    repo_id: Optional[str] = typer.Option(
+        None, "--id", help="Repo id to register (defaults from git URL)"
+    ),
+    repo_path: Optional[Path] = typer.Option(
+        None,
+        "--repo-path",
+        help="Custom repo path relative to hub repos_root",
+    ),
+    path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+    force: bool = typer.Option(False, "--force", help="Allow existing directory"),
+):
+    """Clone a git repo under the hub and initialize codex-autorunner files."""
+    config = _require_hub_config(path)
+    supervisor = HubSupervisor(config)
+    try:
+        snapshot = supervisor.clone_repo(
+            git_url=git_url, repo_id=repo_id, repo_path=repo_path, force=force
+        )
+    except Exception as exc:
+        _raise_exit(str(exc), cause=exc)
+    typer.echo(
+        f"Cloned repo {snapshot.id} at {snapshot.path} (status={snapshot.status.value})"
+    )
+
+
 @hub_app.command("serve")
 def hub_serve(
     path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),

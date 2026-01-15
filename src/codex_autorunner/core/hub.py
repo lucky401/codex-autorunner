@@ -371,6 +371,8 @@ class HubSupervisor:
         if target.exists() and not force:
             raise ValueError(f"Repo path already exists: {target}")
 
+        target.parent.mkdir(parents=True, exist_ok=True)
+
         proc = subprocess.run(
             ["git", "clone", git_url, str(target)],
             check=False,
