@@ -26,6 +26,7 @@ set -euo pipefail
 #   HEALTH_INTERVAL_SECONDS poll interval (default: 0.5)
 #   HEALTH_PATH            request path (default: derived from base_path)
 #   HEALTH_STATIC_PATH     static asset path (default: derived from base_path)
+#   HEALTH_HOST            Host header value for health checks (default: first allowed host)
 #   HEALTH_CHECK_STATIC    static asset check (auto|true|false; default: auto)
 #   HEALTH_CHECK_TELEGRAM  telegram launchd check (auto|true|false; default: auto)
 #   HEALTH_CONNECT_TIMEOUT_SECONDS connection timeout for each health request (default: 2)
@@ -57,6 +58,7 @@ HEALTH_CONNECT_TIMEOUT_SECONDS="${HEALTH_CONNECT_TIMEOUT_SECONDS:-2}"
 HEALTH_REQUEST_TIMEOUT_SECONDS="${HEALTH_REQUEST_TIMEOUT_SECONDS:-5}"
 HEALTH_PATH="${HEALTH_PATH:-}"
 HEALTH_STATIC_PATH="${HEALTH_STATIC_PATH:-}"
+HEALTH_HOST="${HEALTH_HOST:-}"
 HEALTH_CHECK_STATIC="${HEALTH_CHECK_STATIC:-auto}"
 HEALTH_CHECK_TELEGRAM="${HEALTH_CHECK_TELEGRAM:-auto}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
@@ -674,6 +676,45 @@ if isinstance(server, dict):
 PY
 }
 
+_config_allowed_hosts() {
+  local root
+  root="$1"
+  "${HELPER_PYTHON}" - "$root" <<'PY'
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except Exception:
+    sys.exit(0)
+
+root = Path(sys.argv[1]).expanduser()
+config_path = root / ".codex-autorunner" / "config.yml"
+if not config_path.exists():
+    sys.exit(0)
+
+try:
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+except Exception:
+    sys.exit(0)
+
+if not isinstance(data, dict):
+    sys.exit(0)
+
+server = data.get("server")
+if not isinstance(server, dict):
+    sys.exit(0)
+
+allowed = server.get("allowed_hosts") or []
+if not isinstance(allowed, list):
+    sys.exit(0)
+
+for entry in allowed:
+    if isinstance(entry, str) and entry.strip():
+        print(entry.strip())
+PY
+}
+
 _detect_base_path() {
   local base hub_root
   base="$(_plist_arg_value base-path)"
@@ -690,6 +731,20 @@ _detect_base_path() {
   _normalize_base_path "${base}"
 }
 
+_detect_health_host() {
+  local hub_root entry
+  hub_root="$(_plist_arg_value path)"
+  if [[ -z "${hub_root}" ]]; then
+    return 0
+  fi
+  while IFS= read -r entry; do
+    if [[ -n "${entry}" && "${entry}" != "*" ]]; then
+      printf '%s' "${entry}"
+      return 0
+    fi
+  done < <(_config_allowed_hosts "${hub_root}")
+}
+
 if [[ -z "${HEALTH_PATH}" ]]; then
   base_path="$(_detect_base_path)"
   if [[ -n "${base_path}" ]]; then
@@ -703,6 +758,10 @@ if [[ -z "${HEALTH_PATH}" ]]; then
       HEALTH_STATIC_PATH="/static/app.js"
     fi
   fi
+fi
+
+if [[ -z "${HEALTH_HOST}" ]]; then
+  HEALTH_HOST="$(_detect_health_host)"
 fi
 
 if [[ "${HEALTH_PATH:0:1}" != "/" ]]; then
@@ -740,19 +799,26 @@ _should_check_telegram() {
 
 _health_check_once() {
   local port url static_url
+  local -a host_args
   port="$(_plist_arg_value port)"
   if [[ -z "${port}" ]]; then
     port="4173"
   fi
   # Always use loopback; hub may bind 0.0.0.0. HEALTH_PATH is absolute.
   url="http://127.0.0.1:${port}${HEALTH_PATH}"
+  host_args=()
+  if [[ -n "${HEALTH_HOST}" ]]; then
+    host_args=(-H "Host: ${HEALTH_HOST}")
+  fi
   curl -fsS --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
     --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
+    "${host_args[@]}" \
     "${url}" >/dev/null 2>&1
   if _should_check_static; then
     static_url="http://127.0.0.1:${port}${HEALTH_STATIC_PATH}"
     curl -fsS --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
       --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
+      "${host_args[@]}" \
       "${static_url}" >/dev/null 2>&1
   fi
 }

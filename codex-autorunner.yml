@@ -127,6 +127,8 @@ repo:
     # Optional env var containing the bearer token required for /api and websocket access.
     auth_token_env: ""
     # Allowed Host header values; empty uses loopback defaults when bound to loopback.
+    # Note: if you set this to only non-loopback hosts, health checks must send
+    # a matching Host header (safe refresh uses the first allowed host or HEALTH_HOST).
     allowed_hosts: []
     # Allowed Origin values for unsafe requests; empty enforces same-origin only.
     allowed_origins: []
