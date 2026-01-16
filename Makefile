@@ -1,9 +1,11 @@
 VENV ?= .venv
-export PATH := $(CURDIR)/$(VENV)/bin:$(PATH)
-
-PYTHON ?= python3
 VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/pip
+
+# Prefer venv python if it exists
+PYTHON := $(shell if [ -x $(VENV_PYTHON) ]; then echo $(VENV_PYTHON); else echo python3; fi)
+
+export PATH := $(CURDIR)/$(VENV)/bin:$(PATH)
 HOST ?= 127.0.0.1
 PORT ?= 4173
 HUB_HOST ?= 127.0.0.1
