@@ -1880,7 +1880,10 @@ class TelegramCommandHandlers:
             else:
                 prompt_parts.append("\n".join(f"- {c.strip()}" for c in captions))
         else:
-            prompt_parts.append("Media received.")
+            if saved_image_paths:
+                prompt_parts.append(self._config.media.image_prompt)
+            else:
+                prompt_parts.append("Media received.")
         if saved_file_info:
             file_summary = ["\nFiles:"]
             for name, path, size in saved_file_info:
