@@ -82,7 +82,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "state_root": "~/.codex-autorunner/workspaces",
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
-        "turn_timeout_seconds": 7200,
+        "turn_timeout_seconds": 28800,
         "request_timeout": None,
         "prompts": {
             "doc_chat": {
@@ -378,7 +378,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "state_root": "~/.codex-autorunner/workspaces",
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
-        "turn_timeout_seconds": 7200,
+        "turn_timeout_seconds": 28800,
         "request_timeout": None,
         "prompts": {
             "doc_chat": {
