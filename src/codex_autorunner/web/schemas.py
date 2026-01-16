@@ -62,11 +62,20 @@ class SnapshotRequest(Payload):
 class DocChatPayload(Payload):
     message: Optional[str] = None
     stream: bool = False
+    targets: Optional[List[str]] = None
+    target: Optional[str] = None
 
 
 class IngestSpecRequest(Payload):
     force: bool = False
     spec_path: Optional[str] = None
+    message: Optional[str] = None
+
+
+class AppServerThreadResetRequest(Payload):
+    key: str = Field(
+        validation_alias=AliasChoices("key", "feature", "feature_key", "featureKey")
+    )
 
 
 class GithubIssueRequest(Payload):
@@ -167,6 +176,35 @@ class DocsResponse(ResponseModel):
     opinions: str
     spec: str
     summary: str
+
+
+class IngestSpecResponse(ResponseModel):
+    status: str
+    todo: str
+    progress: str
+    opinions: str
+    spec: str
+    summary: str
+    patch: Optional[str] = None
+    agent_message: Optional[str] = None
+
+
+class AppServerThreadsResponse(ResponseModel):
+    doc_chat: Dict[str, Optional[str]]
+    spec_ingest: Optional[str] = None
+    autorunner: Optional[str] = None
+    corruption: Optional[Dict[str, Any]] = None
+
+
+class AppServerThreadResetResponse(ResponseModel):
+    status: str
+    key: str
+    cleared: bool
+
+
+class AppServerThreadResetAllResponse(ResponseModel):
+    status: str
+    cleared: bool
 
 
 class DocWriteResponse(ResponseModel):

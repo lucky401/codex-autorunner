@@ -15,7 +15,13 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
+from ..core.app_server_events import AppServerEventBuffer
+from ..core.app_server_threads import (
+    AppServerThreadRegistry,
+    default_app_server_threads_path,
+)
 from ..core.config import (
+    AppServerConfig,
     ConfigError,
     HubConfig,
     _is_loopback_host,
@@ -37,9 +43,13 @@ from ..core.usage import (
     parse_iso_datetime,
 )
 from ..housekeeping import run_housekeeping_once
+from ..integrations.app_server.client import NotificationHandler
+from ..integrations.app_server.env import build_app_server_env
+from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import load_manifest
 from ..routes import build_repo_router
 from ..routes.system import build_system_routes
+from ..spec_ingest import SpecIngestService
 from ..voice import VoiceConfig, VoiceService
 from .hub_jobs import HubJobManager
 from .middleware import (
@@ -74,6 +84,11 @@ class AppContext:
     engine: Engine
     manager: RunnerManager
     doc_chat: DocChatService
+    spec_ingest: SpecIngestService
+    app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
+    app_server_prune_interval: Optional[float]
+    app_server_threads: AppServerThreadRegistry
+    app_server_events: AppServerEventBuffer
     voice_config: VoiceConfig
     voice_missing_reason: Optional[str]
     voice_service: Optional[VoiceService]
@@ -98,10 +113,65 @@ class HubAppContext:
     config: HubConfig
     supervisor: HubSupervisor
     job_manager: HubJobManager
+    app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
+    app_server_prune_interval: Optional[float]
     static_dir: Path
     static_assets_context: Optional[object]
     asset_version: str
     logger: logging.Logger
+
+
+@dataclass(frozen=True)
+class ServerOverrides:
+    allowed_hosts: Optional[list[str]] = None
+    allowed_origins: Optional[list[str]] = None
+    auth_token_env: Optional[str] = None
+
+
+def _app_server_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[float]:
+    if not idle_ttl_seconds or idle_ttl_seconds <= 0:
+        return None
+    return float(min(600.0, max(60.0, idle_ttl_seconds / 2)))
+
+
+def _build_app_server_supervisor(
+    config: AppServerConfig,
+    *,
+    logger: logging.Logger,
+    event_prefix: str,
+    notification_handler: Optional[NotificationHandler] = None,
+) -> tuple[Optional[WorkspaceAppServerSupervisor], Optional[float]]:
+    if not config.command:
+        return None, None
+
+    def _env_builder(
+        workspace_root: Path, _workspace_id: str, state_dir: Path
+    ) -> dict[str, str]:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        return build_app_server_env(
+            config.command,
+            workspace_root,
+            state_dir,
+            logger=logger,
+            event_prefix=event_prefix,
+        )
+
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+    supervisor = WorkspaceAppServerSupervisor(
+        config.command,
+        state_root=config.state_root,
+        env_builder=_env_builder,
+        logger=logger,
+        max_handles=config.max_handles,
+        idle_ttl_seconds=config.idle_ttl_seconds,
+        request_timeout=config.request_timeout,
+        notification_handler=notification_handler,
+    )
+    return supervisor, _app_server_prune_interval(config.idle_ttl_seconds)
 
 
 def _build_app_context(
@@ -117,7 +187,6 @@ def _build_app_context(
     )
     engine = Engine(config.root)
     manager = RunnerManager(engine)
-    doc_chat = DocChatService(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
     voice_missing_reason: Optional[str] = None
     try:
@@ -154,6 +223,28 @@ def _build_app_context(
         logger,
         logging.INFO,
         f"Repo server ready at {engine.repo_root}",
+    )
+    app_server_events = AppServerEventBuffer()
+    app_server_supervisor, app_server_prune_interval = _build_app_server_supervisor(
+        engine.config.app_server,
+        logger=logger,
+        event_prefix="web.app_server",
+        notification_handler=app_server_events.handle_notification,
+    )
+    app_server_threads = AppServerThreadRegistry(
+        default_app_server_threads_path(engine.repo_root)
+    )
+    doc_chat = DocChatService(
+        engine,
+        app_server_supervisor=app_server_supervisor,
+        app_server_threads=app_server_threads,
+        app_server_events=app_server_events,
+    )
+    spec_ingest = SpecIngestService(
+        engine,
+        app_server_supervisor=app_server_supervisor,
+        app_server_threads=app_server_threads,
+        app_server_events=app_server_events,
     )
     voice_service: Optional[VoiceService]
     if voice_missing_reason:
@@ -205,6 +296,11 @@ def _build_app_context(
         engine=engine,
         manager=manager,
         doc_chat=doc_chat,
+        spec_ingest=spec_ingest,
+        app_server_supervisor=app_server_supervisor,
+        app_server_prune_interval=app_server_prune_interval,
+        app_server_threads=app_server_threads,
+        app_server_events=app_server_events,
         voice_config=voice_config,
         voice_missing_reason=voice_missing_reason,
         voice_service=voice_service,
@@ -231,6 +327,11 @@ def _apply_app_context(app: FastAPI, context: AppContext) -> None:
     app.state.config = context.engine.config  # Expose config consistently
     app.state.manager = context.manager
     app.state.doc_chat = context.doc_chat
+    app.state.spec_ingest = context.spec_ingest
+    app.state.app_server_supervisor = context.app_server_supervisor
+    app.state.app_server_prune_interval = context.app_server_prune_interval
+    app.state.app_server_threads = context.app_server_threads
+    app.state.app_server_events = context.app_server_events
     app.state.voice_config = context.voice_config
     app.state.voice_missing_reason = context.voice_missing_reason
     app.state.voice_service = context.voice_service
@@ -264,6 +365,11 @@ def _build_hub_context(
         logging.INFO,
         f"Hub app ready at {config.root}",
     )
+    app_server_supervisor, app_server_prune_interval = _build_app_server_supervisor(
+        config.app_server,
+        logger=logger,
+        event_prefix="hub.app_server",
+    )
     static_dir, static_context = materialize_static_assets(
         config.static_assets.cache_root,
         max_cache_entries=config.static_assets.max_cache_entries,
@@ -281,6 +387,8 @@ def _build_hub_context(
         config=config,
         supervisor=supervisor,
         job_manager=HubJobManager(logger=logger),
+        app_server_supervisor=app_server_supervisor,
+        app_server_prune_interval=app_server_prune_interval,
         static_dir=static_dir,
         static_assets_context=static_context,
         asset_version=asset_version(static_dir),
@@ -293,6 +401,8 @@ def _apply_hub_context(app: FastAPI, context: HubAppContext) -> None:
     app.state.logger = context.logger
     app.state.config = context.config  # Expose config for route modules
     app.state.job_manager = context.job_manager
+    app.state.app_server_supervisor = context.app_server_supervisor
+    app.state.app_server_prune_interval = context.app_server_prune_interval
     app.state.static_dir = context.static_dir
     app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
@@ -344,6 +454,26 @@ def _app_lifespan(context: AppContext):
         asyncio.create_task(_cleanup_loop())
         if app.state.config.housekeeping.enabled:
             asyncio.create_task(_housekeeping_loop())
+        app_server_supervisor = getattr(app.state, "app_server_supervisor", None)
+        app_server_prune_interval = getattr(
+            app.state, "app_server_prune_interval", None
+        )
+        if app_server_supervisor is not None and app_server_prune_interval:
+
+            async def _app_server_prune_loop():
+                while True:
+                    await asyncio.sleep(app_server_prune_interval)
+                    try:
+                        await app_server_supervisor.prune_idle()
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "App-server prune task failed",
+                            exc,
+                        )
+
+            asyncio.create_task(_app_server_prune_loop())
 
         if (
             context.tui_idle_seconds is not None
@@ -399,6 +529,17 @@ def _app_lifespan(context: AppContext):
                     app.state.session_registry,
                     app.state.repo_to_session,
                 )
+            app_server_supervisor = getattr(app.state, "app_server_supervisor", None)
+            if app_server_supervisor is not None:
+                try:
+                    await app_server_supervisor.close_all()
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "App-server shutdown failed",
+                        exc,
+                    )
             static_context = getattr(app.state, "static_assets_context", None)
             if static_context is not None:
                 static_context.close()
@@ -407,7 +548,9 @@ def _app_lifespan(context: AppContext):
 
 
 def create_app(
-    repo_root: Optional[Path] = None, base_path: Optional[str] = None
+    repo_root: Optional[Path] = None,
+    base_path: Optional[str] = None,
+    server_overrides: Optional[ServerOverrides] = None,
 ) -> ASGIApp:
     context = _build_app_context(repo_root, base_path)
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
@@ -425,7 +568,15 @@ def create_app(
         context.engine.config.server_host, context.engine.config.server_allowed_hosts
     )
     allowed_origins = context.engine.config.server_allowed_origins
-    auth_token = _resolve_auth_token(context.engine.config.server_auth_token_env)
+    auth_token_env = context.engine.config.server_auth_token_env
+    if server_overrides is not None:
+        if server_overrides.allowed_hosts is not None:
+            allowed_hosts = list(server_overrides.allowed_hosts)
+        if server_overrides.allowed_origins is not None:
+            allowed_origins = list(server_overrides.allowed_origins)
+        if server_overrides.auth_token_env is not None:
+            auth_token_env = server_overrides.auth_token_env
+    auth_token = _resolve_auth_token(auth_token_env)
     app.state.auth_token = auth_token
     asgi_app: ASGIApp = app
     if auth_token:
@@ -456,6 +607,15 @@ def create_hub_app(
     repo_apps: dict[str, ASGIApp] = {}
     repo_startup_complete: set[str] = set()
     app.state.hub_started = False
+    repo_server_overrides: Optional[ServerOverrides] = None
+    if context.config.repo_server_inherit:
+        repo_server_overrides = ServerOverrides(
+            allowed_hosts=_resolve_allowed_hosts(
+                context.config.server_host, context.config.server_allowed_hosts
+            ),
+            allowed_origins=list(context.config.server_allowed_origins),
+            auth_token_env=context.config.server_auth_token_env,
+        )
 
     def _unwrap_fastapi(sub_app: ASGIApp) -> Optional[FastAPI]:
         current: ASGIApp = sub_app
@@ -493,7 +653,11 @@ def create_hub_app(
             return False
         try:
             # Hub already handles the base path; avoid reapplying it in child apps.
-            sub_app = create_app(repo_path, base_path="")
+            sub_app = create_app(
+                repo_path,
+                base_path="",
+                server_overrides=repo_server_overrides,
+            )
         except ConfigError as exc:
             mount_errors[prefix] = str(exc)
             try:
@@ -564,6 +728,26 @@ def create_hub_app(
                     await asyncio.sleep(interval)
 
             asyncio.create_task(_housekeeping_loop())
+        app_server_supervisor = getattr(app.state, "app_server_supervisor", None)
+        app_server_prune_interval = getattr(
+            app.state, "app_server_prune_interval", None
+        )
+        if app_server_supervisor is not None and app_server_prune_interval:
+
+            async def _app_server_prune_loop():
+                while True:
+                    await asyncio.sleep(app_server_prune_interval)
+                    try:
+                        await app_server_supervisor.prune_idle()
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Hub app-server prune task failed",
+                            exc,
+                        )
+
+            asyncio.create_task(_app_server_prune_loop())
         for prefix, sub_app in list(repo_apps.items()):
             await _start_repo_app(prefix, sub_app)
         try:
@@ -581,6 +765,17 @@ def create_hub_app(
                         )
                     except Exception:
                         pass
+            app_server_supervisor = getattr(app.state, "app_server_supervisor", None)
+            if app_server_supervisor is not None:
+                try:
+                    await app_server_supervisor.close_all()
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "Hub app-server shutdown failed",
+                        exc,
+                    )
             static_context = getattr(app.state, "static_assets_context", None)
             if static_context is not None:
                 static_context.close()

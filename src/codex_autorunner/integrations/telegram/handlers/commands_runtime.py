@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import re
 import secrets
 import shlex
@@ -55,6 +56,7 @@ from ..constants import (
     MAX_TOPIC_THREAD_HISTORY,
     MODEL_PICKER_PROMPT,
     PLACEHOLDER_TEXT,
+    QUEUED_PLACEHOLDER_TEXT,
     RESUME_MISSING_IDS_LOG_LIMIT,
     RESUME_PICKER_PROMPT,
     RESUME_PREVIEW_ASSISTANT_LIMIT,
@@ -939,12 +941,42 @@ class TelegramCommandHandlers:
             )
 
             turn_semaphore = self._ensure_turn_semaphore()
+            queued = turn_semaphore.locked()
+            placeholder_text = PLACEHOLDER_TEXT
+            if queued:
+                placeholder_text = QUEUED_PLACEHOLDER_TEXT
+            if send_placeholder:
+                placeholder_id = await self._send_placeholder(
+                    message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                    text=placeholder_text,
+                )
+            queue_started_at = time.monotonic()
             async with turn_semaphore:
-                if send_placeholder:
-                    placeholder_id = await self._send_placeholder(
+                queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.turn.queue_wait",
+                    topic_key=key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    codex_thread_id=thread_id,
+                    queue_wait_ms=queue_wait_ms,
+                    queued=queued,
+                    max_parallel_turns=self._config.concurrency.max_parallel_turns,
+                    per_topic_queue=self._config.concurrency.per_topic_queue,
+                )
+                if (
+                    queued
+                    and placeholder_id is not None
+                    and placeholder_text != PLACEHOLDER_TEXT
+                ):
+                    await self._edit_message_text(
                         message.chat_id,
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
+                        placeholder_id,
+                        PLACEHOLDER_TEXT,
                     )
                 turn_handle = await client.turn_start(
                     thread_id,
@@ -2250,7 +2282,14 @@ class TelegramCommandHandlers:
         )
         await self._send_message(
             message.chat_id,
-            f"Started new thread {thread_id}.",
+            "\n".join(
+                [
+                    f"Started new thread {thread_id}.",
+                    f"Directory: {record.workspace_path or 'unbound'}",
+                    f"Model: {record.model or 'default'}",
+                    f"Effort: {record.effort or 'default'}",
+                ]
+            ),
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
@@ -2788,7 +2827,7 @@ class TelegramCommandHandlers:
                 conflict_topic=conflict_key,
             )
             return
-        self._apply_thread_result(
+        updated_record = self._apply_thread_result(
             chat_id,
             thread_id_val,
             result,
@@ -2796,7 +2835,13 @@ class TelegramCommandHandlers:
             overwrite_defaults=True,
         )
         await self._answer_callback(callback, "Resumed thread")
-        message = _format_resume_summary(thread_id, result)
+        message = _format_resume_summary(
+            thread_id,
+            result,
+            workspace_path=updated_record.workspace_path,
+            model=updated_record.model,
+            effort=updated_record.effort,
+        )
         await self._finalize_selection(key, callback, message)
 
     async def _handle_status(
@@ -3442,14 +3487,44 @@ class TelegramCommandHandlers:
         placeholder_id: Optional[int] = None
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
+        queued = False
+        placeholder_text = PLACEHOLDER_TEXT
         try:
             turn_semaphore = self._ensure_turn_semaphore()
+            queued = turn_semaphore.locked()
+            if queued:
+                placeholder_text = QUEUED_PLACEHOLDER_TEXT
+            placeholder_id = await self._send_placeholder(
+                message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                text=placeholder_text,
+            )
+            queue_started_at = time.monotonic()
             async with turn_semaphore:
-                placeholder_id = await self._send_placeholder(
-                    message.chat_id,
+                queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.review.queue_wait",
+                    chat_id=message.chat_id,
                     thread_id=message.thread_id,
-                    reply_to=message.message_id,
+                    codex_thread_id=thread_id,
+                    queue_wait_ms=queue_wait_ms,
+                    queued=queued,
+                    max_parallel_turns=self._config.concurrency.max_parallel_turns,
+                    per_topic_queue=self._config.concurrency.per_topic_queue,
                 )
+                if (
+                    queued
+                    and placeholder_id is not None
+                    and placeholder_text != PLACEHOLDER_TEXT
+                ):
+                    await self._edit_message_text(
+                        message.chat_id,
+                        placeholder_id,
+                        PLACEHOLDER_TEXT,
+                    )
                 turn_handle = await client.review_start(
                     thread_id,
                     target=target,
@@ -3827,8 +3902,41 @@ class TelegramCommandHandlers:
         }
         if sandbox_policy:
             params["sandboxPolicy"] = _normalize_sandbox_policy(sandbox_policy)
+        timeout_seconds = max(0.1, self._config.shell.timeout_ms / 1000.0)
+        request_timeout = timeout_seconds + 1.0
         try:
-            result = await client.request("command/exec", params)
+            result = await client.request(
+                "command/exec", params, timeout=request_timeout
+            )
+        except asyncio.TimeoutError:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.shell.timeout",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                command=command_text,
+                timeout_seconds=timeout_seconds,
+            )
+            timeout_label = int(math.ceil(timeout_seconds))
+            timeout_message = (
+                f"Shell command timed out after {timeout_label}s: `{command_text}`.\n"
+                "Interactive commands (top/htop/watch/tail -f) do not exit. "
+                "Try a one-shot flag like `top -l 1` (macOS) or "
+                "`top -b -n 1` (Linux)."
+            )
+            await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=placeholder_id,
+                response=_with_conversation_id(
+                    timeout_message,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
+            )
+            return
         except Exception as exc:
             log_event(
                 self._logger,

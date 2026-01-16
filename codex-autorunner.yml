@@ -68,6 +68,54 @@ repo:
     # Bounds the agentic sync step (seconds).
     sync_agent_timeout_seconds: 1800
 
+  app_server:
+    # Command used to start the Codex app-server.
+    command:
+      - codex
+      - app-server
+    # Workspace state root (stores per-repo CODEX_HOME state).
+    state_root: ~/.codex-autorunner/workspaces
+    # Cap concurrent handles; null/<=0 disables the cap.
+    max_handles: 20
+    # Close idle app-server handles after this many seconds; null/<=0 disables pruning.
+    idle_ttl_seconds: 3600
+    # Per-turn timeout for app-server runs (seconds); null/<=0 disables.
+    turn_timeout_seconds: 7200
+    # Per-request timeout (seconds); null/<=0 uses the client default.
+    request_timeout: null
+    # Prompt limits for app-server flows (doc chat, spec ingest, autorunner).
+    prompts:
+      doc_chat:
+        max_chars: 12000
+        message_max_chars: 2000
+        target_excerpt_max_chars: 4000
+        recent_summary_max_chars: 2000
+      spec_ingest:
+        max_chars: 12000
+        message_max_chars: 2000
+        spec_excerpt_max_chars: 5000
+      autorunner:
+        max_chars: 16000
+        message_max_chars: 2000
+        todo_excerpt_max_chars: 4000
+        prev_run_max_chars: 3000
+    # Prompt limits for app-server flows (doc chat, spec ingest, autorunner).
+    prompts:
+      doc_chat:
+        max_chars: 12000
+        message_max_chars: 2000
+        target_excerpt_max_chars: 4000
+        recent_summary_max_chars: 2000
+      spec_ingest:
+        max_chars: 12000
+        message_max_chars: 2000
+        spec_excerpt_max_chars: 5000
+      autorunner:
+        max_chars: 16000
+        message_max_chars: 2000
+        todo_excerpt_max_chars: 4000
+        prev_run_max_chars: 3000
+
   server:
     # Bind host/port for the local UI/API. Use 0.0.0.0 only if you intend to expose it.
     host: 127.0.0.1
@@ -120,7 +168,7 @@ repo:
       yolo_approval_policy: never
       yolo_sandbox_policy: dangerFullAccess
     concurrency:
-      max_parallel_turns: 4
+      max_parallel_turns: 5
       per_topic_queue: true
     shell:
       # Allow !<cmd> execution (enabled by default).
@@ -143,6 +191,9 @@ repo:
     app_server_command:
       - codex
       - app-server
+    app_server:
+      # Close idle app-server handles after this many seconds; null/<=0 disables pruning.
+      idle_ttl_seconds: 28800
     polling:
       timeout_seconds: 30
       allowed_updates:
@@ -203,6 +254,8 @@ hub:
     manifest: .codex-autorunner/manifest.yml
     discover_depth: 1
     auto_init_missing: true
+    # When serving repos via the hub, reuse hub server security settings.
+    repo_server_inherit: true
     # Where to pull system updates from (main upstream).
     update_repo_url: https://github.com/Git-on-my-level/codex-autorunner.git
     update_repo_ref: main
@@ -210,6 +263,22 @@ hub:
       path: .codex-autorunner/codex-autorunner-hub.log
       max_bytes: 10000000
       backup_count: 3
+
+  app_server:
+    # Command used to start the Codex app-server.
+    command:
+      - codex
+      - app-server
+    # Workspace state root (stores per-repo CODEX_HOME state).
+    state_root: ~/.codex-autorunner/workspaces
+    # Cap concurrent handles; null/<=0 disables the cap.
+    max_handles: 20
+    # Close idle app-server handles after this many seconds; null/<=0 disables pruning.
+    idle_ttl_seconds: 3600
+    # Per-turn timeout for app-server runs (seconds); null/<=0 disables.
+    turn_timeout_seconds: 7200
+    # Per-request timeout (seconds); null/<=0 uses the client default.
+    request_timeout: null
 
   telegram_bot:
     # Telegram bot integration (polling).
@@ -229,7 +298,7 @@ hub:
       yolo_approval_policy: never
       yolo_sandbox_policy: dangerFullAccess
     concurrency:
-      max_parallel_turns: 4
+      max_parallel_turns: 5
       per_topic_queue: true
     shell:
       # Allow !<cmd> execution (enabled by default).
@@ -252,6 +321,9 @@ hub:
     app_server_command:
       - codex
       - app-server
+    app_server:
+      # Close idle app-server handles after this many seconds; null/<=0 disables pruning.
+      idle_ttl_seconds: 28800
     polling:
       timeout_seconds: 30
       allowed_updates:
@@ -261,7 +333,7 @@ hub:
 
   server:
     host: 127.0.0.1
-    port: 4173
+    port: 4517
     base_path: ""
     access_log: false
     # Optional env var containing the bearer token required for /api and websocket access.
