@@ -81,13 +81,13 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
             should_bypass = True
 
     if has_media and not should_bypass:
-        if message.voice or message.audio:
-            should_bypass = True
-        elif handlers._config.media.batch_uploads and has_batchable_media(message):
+        if handlers._config.media.batch_uploads and has_batchable_media(message):
             if handlers._config.media.enabled:
                 await flush_coalesced_message(handlers, message)
                 await buffer_media_batch(handlers, message)
                 return
+            should_bypass = True
+        else:
             should_bypass = True
 
     if should_bypass:
