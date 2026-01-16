@@ -50,6 +50,7 @@ from .constants import (
     REASONING_BUFFER_TTL_SECONDS,
     SELECTION_STATE_TTL_SECONDS,
     TURN_PREVIEW_TTL_SECONDS,
+    TURN_PROGRESS_TTL_SECONDS,
     UPDATE_ID_PERSIST_INTERVAL_SECONDS,
     TurnKey,
 )
@@ -155,9 +156,10 @@ class TelegramBotService(
         self._reasoning_buffers: dict[str, str] = {}
         self._turn_preview_text: dict[TurnKey, str] = {}
         self._turn_preview_updated_at: dict[TurnKey, float] = {}
+        self._turn_progress_text: dict[TurnKey, str] = {}
+        self._turn_progress_updated_at: dict[TurnKey, float] = {}
         self._turn_progress_trackers: dict[TurnKey, "TurnProgressTracker"] = {}
         self._turn_progress_rendered: dict[TurnKey, str] = {}
-        self._turn_progress_updated_at: dict[TurnKey, float] = {}
         self._turn_progress_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
@@ -673,6 +675,9 @@ class TelegramBotService(
             elif cache_name == "turn_preview":
                 self._turn_preview_text.pop(key, None)
                 self._turn_preview_updated_at.pop(key, None)
+            elif cache_name == "turn_progress":
+                self._turn_progress_text.pop(key, None)
+                self._turn_progress_updated_at.pop(key, None)
             elif cache_name == "progress_trackers":
                 self._turn_progress_trackers.pop(key, None)
                 self._turn_progress_rendered.pop(key, None)
@@ -719,6 +724,9 @@ class TelegramBotService(
                 "reasoning_buffers", REASONING_BUFFER_TTL_SECONDS
             )
             self._evict_expired_cache_entries("turn_preview", TURN_PREVIEW_TTL_SECONDS)
+            self._evict_expired_cache_entries(
+                "turn_progress", TURN_PROGRESS_TTL_SECONDS
+            )
             self._evict_expired_cache_entries(
                 "progress_trackers", PROGRESS_STREAM_TTL_SECONDS
             )
