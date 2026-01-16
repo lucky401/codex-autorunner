@@ -82,6 +82,7 @@ const chatUI = {
   input: document.getElementById("doc-chat-input"),
   send: document.getElementById("doc-chat-send"),
   cancel: document.getElementById("doc-chat-cancel"),
+  newThread: document.getElementById("doc-chat-new-thread"),
   voiceBtn: document.getElementById("doc-chat-voice"),
   voiceStatus: document.getElementById("doc-chat-voice-status"),
   hint: document.getElementById("doc-chat-hint"),
@@ -176,9 +177,10 @@ function parseChatPayload(payload) {
   }
   return {
     response:
+      payload.response ||
+      payload.message ||
       payload.agent_message ||
       payload.agentMessage ||
-      payload.message ||
       payload.content ||
       "",
     content: payload.content || "",
@@ -748,6 +750,19 @@ function extractErrorMessage(params) {
   return "";
 }
 
+function extractOutputDelta(payload) {
+  const message =
+    payload && typeof payload === "object" ? payload.message || payload : payload;
+  if (!message || typeof message !== "object") return "";
+  const method = String(message.method || "").toLowerCase();
+  if (!method.includes("outputdelta")) return "";
+  const params = message.params || {};
+  if (typeof params.delta === "string") return params.delta;
+  if (typeof params.text === "string") return params.text;
+  if (typeof params.output === "string") return params.output;
+  return "";
+}
+
 function addChatEvent(state, entry) {
   state.events.push(entry);
   if (state.events.length > CHAT_EVENT_MAX) {
@@ -995,6 +1010,10 @@ function renderChat() {
         chatUI.voiceBtn.disabled ? "true" : "false"
       );
     }
+  }
+  if (chatUI.newThread) {
+    chatUI.newThread.disabled = isRunning;
+    chatUI.newThread.classList.toggle("disabled", isRunning);
   }
 
   // Update hint text - show status inline when running
@@ -1246,6 +1265,33 @@ function cancelDocChat() {
   renderChat();
 }
 
+async function startNewDocChatThread() {
+  const state = getChatState();
+  if (state.status === "running") {
+    cancelDocChat();
+  }
+  try {
+    await api("/api/app-server/threads/reset", {
+      method: "POST",
+      body: { key: "doc_chat" },
+    });
+    state.history = [];
+    state.status = "idle";
+    state.statusText = "";
+    state.error = "";
+    state.streamText = "";
+    historyNavIndex = -1;
+    resetChatEvents(state);
+    if (chatUI.historyDetails) {
+      chatUI.historyDetails.removeAttribute("open");
+    }
+    renderChat();
+    flash("Started a new doc chat thread");
+  } catch (err) {
+    flash(err.message || "Failed to start a new doc chat thread", "error");
+  }
+}
+
 async function sendDocChat() {
   const message = (chatUI.input.value || "").trim();
   const state = getChatState();
@@ -1443,6 +1489,15 @@ async function handleAppServerStreamEvent(_event, rawData, state) {
   if (!rawData) return;
   const parsed = parseMaybeJson(rawData);
   applyAppServerEvent(state, parsed);
+  const delta = extractOutputDelta(parsed);
+  if (delta) {
+    const entry = state.history[0];
+    if (entry && entry.status === "running") {
+      entry.response = (entry.response || "") + delta;
+      state.streamText = entry.response;
+      renderChat();
+    }
+  }
   renderChatEvents(state);
 }
 
@@ -1611,7 +1666,9 @@ async function handleStreamEvent(event, rawData, state, entry) {
   }
   if (event === "update") {
     const payload = parseChatPayload(parsed);
-    entry.response = payload.response || entry.response;
+    if (payload.response) {
+      entry.response = payload.response;
+    }
     state.streamText = entry.response;
     const updated =
       (payload.updated && payload.updated.length
@@ -2176,6 +2233,9 @@ export function initDocs() {
     triggerSend();
   });
   chatUI.cancel.addEventListener("click", cancelDocChat);
+  if (chatUI.newThread) {
+    chatUI.newThread.addEventListener("click", startNewDocChatThread);
+  }
   if (chatUI.eventsToggle) {
     chatUI.eventsToggle.addEventListener("click", () => {
       const state = getChatState();

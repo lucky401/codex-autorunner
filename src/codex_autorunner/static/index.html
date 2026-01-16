@@ -367,9 +367,14 @@
                   </div>
                 </div>
                 <div class="doc-chat-meta">
-                  <span class="muted small" id="doc-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for newline</span>
-                  <span class="muted small hidden voice-status" id="doc-chat-voice-status"></span>
-                  <span id="doc-chat-status" class="pill pill-idle">idle</span>
+                  <div class="doc-chat-meta-left">
+                    <span class="muted small" id="doc-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for newline</span>
+                    <span class="muted small hidden voice-status" id="doc-chat-voice-status"></span>
+                  </div>
+                  <div class="doc-chat-meta-right">
+                    <button id="doc-chat-new-thread" class="ghost sm" title="Start a new chat thread">New thread</button>
+                    <span id="doc-chat-status" class="pill pill-idle">idle</span>
+                  </div>
                 </div>
               </div>
               <div id="doc-chat-response-wrapper" class="doc-chat-response-wrapper hidden">

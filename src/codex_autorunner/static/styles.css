@@ -2093,6 +2093,28 @@ button.icon-btn {
   font-size: 10px;
 }
 
+.doc-chat-meta-left,
+.doc-chat-meta-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.doc-chat-meta-left {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.doc-chat-meta-right {
+  flex: 0 0 auto;
+}
+
+#doc-chat-new-thread.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .doc-chat-meta .loading {
   color: var(--accent);
 }

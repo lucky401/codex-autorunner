@@ -17,12 +17,9 @@ DOC_CHAT_APP_SERVER_TEMPLATE = """You are Codex, an autonomous coding assistant 
 
 Instructions:
 - Use the base doc content below. Drafts (if present) are the authoritative base.
-- Do NOT write files. Return a unified diff patch that updates any of the work docs listed.
-- Output format:
-Agent: <short summary>
-<PATCH>
-... unified diff ...
-</PATCH>
+- You may inspect the repo and update the work docs listed when needed.
+- If you update docs, edit the files directly. If no changes are needed, do not edit files.
+- Respond with a short summary of what you did or found.
 
 Work docs (paths):
 - TODO: {todo_path}

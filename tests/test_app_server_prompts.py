@@ -40,8 +40,8 @@ def test_doc_chat_prompt_limits_and_instructions(repo: Path) -> None:
         targets=("todo",),
     )
     assert len(prompt) <= limits.max_chars
-    assert "Do NOT write files" in prompt
-    assert "<PATCH>" in prompt and "</PATCH>" in prompt
+    assert "edit the files directly" in prompt
+    assert "<PATCH>" not in prompt
     assert TRUNCATION_MARKER in prompt
     assert ".codex-autorunner/TODO.md" in prompt
 

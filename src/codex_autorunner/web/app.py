@@ -43,7 +43,7 @@ from ..core.usage import (
     parse_iso_datetime,
 )
 from ..housekeeping import run_housekeeping_once
-from ..integrations.app_server.client import NotificationHandler
+from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import load_manifest
@@ -134,12 +134,76 @@ def _app_server_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[floa
     return float(min(600.0, max(60.0, idle_ttl_seconds / 2)))
 
 
+def _normalize_approval_path(path: str, repo_root: Path) -> str:
+    raw = (path or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith(("a/", "b/")):
+        raw = raw[2:]
+    if raw.startswith("./"):
+        raw = raw[2:]
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        try:
+            candidate = candidate.relative_to(repo_root)
+        except ValueError:
+            return raw
+    return candidate.as_posix()
+
+
+def _extract_approval_paths(params: dict, *, repo_root: Path) -> list[str]:
+    paths: list[str] = []
+
+    def _add(entry: object) -> None:
+        if isinstance(entry, str):
+            normalized = _normalize_approval_path(entry, repo_root)
+            if normalized:
+                paths.append(normalized)
+            return
+        if isinstance(entry, dict):
+            raw = entry.get("path") or entry.get("file") or entry.get("name")
+            if isinstance(raw, str):
+                normalized = _normalize_approval_path(raw, repo_root)
+                if normalized:
+                    paths.append(normalized)
+
+    for payload in (params, params.get("item") if isinstance(params, dict) else None):
+        if not isinstance(payload, dict):
+            continue
+        for key in ("files", "fileChanges", "paths"):
+            entries = payload.get(key)
+            if isinstance(entries, list):
+                for entry in entries:
+                    _add(entry)
+        for key in ("path", "file", "name"):
+            _add(payload.get(key))
+    return paths
+
+
+def _extract_turn_context(params: dict) -> tuple[Optional[str], Optional[str]]:
+    if not isinstance(params, dict):
+        return None, None
+    turn_id = params.get("turnId") or params.get("turn_id") or params.get("id")
+    thread_id = params.get("threadId") or params.get("thread_id")
+    turn = params.get("turn")
+    if isinstance(turn, dict):
+        turn_id = turn_id or turn.get("id") or turn.get("turnId")
+        thread_id = thread_id or turn.get("threadId") or turn.get("thread_id")
+    item = params.get("item")
+    if isinstance(item, dict):
+        thread_id = thread_id or item.get("threadId") or item.get("thread_id")
+    turn_id = str(turn_id) if isinstance(turn_id, str) and turn_id else None
+    thread_id = str(thread_id) if isinstance(thread_id, str) and thread_id else None
+    return thread_id, turn_id
+
+
 def _build_app_server_supervisor(
     config: AppServerConfig,
     *,
     logger: logging.Logger,
     event_prefix: str,
     notification_handler: Optional[NotificationHandler] = None,
+    approval_handler: Optional[ApprovalHandler] = None,
 ) -> tuple[Optional[WorkspaceAppServerSupervisor], Optional[float]]:
     if not config.command:
         return None, None
@@ -170,6 +234,7 @@ def _build_app_server_supervisor(
         idle_ttl_seconds=config.idle_ttl_seconds,
         request_timeout=config.request_timeout,
         notification_handler=notification_handler,
+        approval_handler=approval_handler,
     )
     return supervisor, _app_server_prune_interval(config.idle_ttl_seconds)
 
@@ -225,11 +290,75 @@ def _build_app_context(
         f"Repo server ready at {engine.repo_root}",
     )
     app_server_events = AppServerEventBuffer()
+    allowed_doc_paths = {
+        path
+        for kind in ("todo", "progress", "opinions", "spec", "summary")
+        for path in [
+            _normalize_approval_path(
+                str(engine.config.doc_path(kind).relative_to(engine.config.root)),
+                engine.config.root,
+            )
+        ]
+        if path
+    }
+
+    async def _doc_chat_approval_handler(message: dict) -> str:
+        method = message.get("method")
+        params = message.get("params")
+        params = params if isinstance(params, dict) else {}
+        thread_id, turn_id = _extract_turn_context(params)
+        if method == "item/fileChange/requestApproval":
+            paths = _extract_approval_paths(params, repo_root=engine.config.root)
+            normalized = [path for path in paths if path]
+            if not normalized:
+                notice = "Rejected file change without explicit paths."
+                await app_server_events.handle_notification(
+                    {
+                        "method": "error",
+                        "params": {
+                            "message": notice,
+                            "turnId": turn_id,
+                            "threadId": thread_id,
+                        },
+                    }
+                )
+                return "decline"
+            rejected = [path for path in normalized if path not in allowed_doc_paths]
+            if rejected:
+                notice = "Rejected write to non-doc files: " + ", ".join(rejected)
+                await app_server_events.handle_notification(
+                    {
+                        "method": "error",
+                        "params": {
+                            "message": notice,
+                            "turnId": turn_id,
+                            "threadId": thread_id,
+                        },
+                    }
+                )
+                return "decline"
+            return "accept"
+        if method == "item/commandExecution/requestApproval":
+            notice = "Rejected command execution in doc chat session."
+            await app_server_events.handle_notification(
+                {
+                    "method": "error",
+                    "params": {
+                        "message": notice,
+                        "turnId": turn_id,
+                        "threadId": thread_id,
+                    },
+                }
+            )
+            return "decline"
+        return "decline"
+
     app_server_supervisor, app_server_prune_interval = _build_app_server_supervisor(
         engine.config.app_server,
         logger=logger,
         event_prefix="web.app_server",
         notification_handler=app_server_events.handle_notification,
+        approval_handler=_doc_chat_approval_handler,
     )
     app_server_threads = AppServerThreadRegistry(
         default_app_server_threads_path(engine.repo_root)
