@@ -61,8 +61,6 @@ let historyNavIndex = -1;
 
 const chatUI = {
   status: document.getElementById("doc-chat-status"),
-  response: document.getElementById("doc-chat-response"),
-  responseWrapper: document.getElementById("doc-chat-response-wrapper"),
   eventsMain: document.getElementById("doc-chat-events"),
   eventsList: document.getElementById("doc-chat-events-list"),
   eventsCount: document.getElementById("doc-chat-events-count"),
@@ -76,7 +74,6 @@ const chatUI = {
   patchDiscard: document.getElementById("doc-patch-discard"),
   patchReload: document.getElementById("doc-patch-reload"),
   history: document.getElementById("doc-chat-history"),
-  historyDetails: document.getElementById("doc-chat-history-details"),
   historyCount: document.getElementById("doc-chat-history-count"),
   error: document.getElementById("doc-chat-error"),
   input: document.getElementById("doc-chat-input"),
@@ -270,14 +267,6 @@ function normalizeDraftMap(raw) {
     if (normalized) drafts[kind] = normalized;
   });
   return drafts;
-}
-
-function truncateText(text, maxLen) {
-  if (!text) return "";
-  const normalized = text.replace(/\s+/g, " ").trim();
-  return normalized.length > maxLen
-    ? normalized.slice(0, maxLen) + "…"
-    : normalized;
 }
 
 function setDraft(kind, draft) {
@@ -1038,20 +1027,6 @@ function renderChat() {
     chatUI.error.classList.add("hidden");
   }
 
-  // Compute response text - only show actual content, not placeholders
-  let responseText = "";
-  if (isRunning && state.streamText) {
-    responseText = state.streamText;
-  } else if (!isRunning && latest && (latest.response || latest.error)) {
-    responseText = latest.response || latest.error;
-  }
-
-  // Show response wrapper only when there's real content or an error
-  const showResponse = !!responseText || hasError;
-  chatUI.responseWrapper.classList.toggle("hidden", !showResponse);
-  chatUI.response.textContent = responseText;
-  chatUI.response.classList.toggle("streaming", isRunning && state.streamText);
-
   const draft = getDraft(activeDoc);
   const hasPatch = !!(draft && (draft.patch || "").trim());
   const previewing = hasPatch && isDraftPreview(activeDoc);
@@ -1111,25 +1086,28 @@ function renderChatHistory(state) {
   const count = state.history.length;
   chatUI.historyCount.textContent = count;
 
-  // Hide history details if empty
-  if (chatUI.historyDetails) {
-    chatUI.historyDetails.style.display = count === 0 ? "none" : "";
-  }
-
   chatUI.history.innerHTML = "";
-  if (count === 0) return;
+  if (count === 0) {
+    const empty = document.createElement("div");
+    empty.className = "doc-chat-empty";
+    empty.textContent = "No messages yet.";
+    chatUI.history.appendChild(empty);
+    return;
+  }
 
   state.history.slice(0, CHAT_HISTORY_LIMIT).forEach((entry) => {
     const wrapper = document.createElement("div");
     wrapper.className = `doc-chat-entry ${entry.status}`;
 
+    const header = document.createElement("div");
+    header.className = "doc-chat-entry-header";
+
     // Prompt row with copy button
     const promptRow = document.createElement("div");
     promptRow.className = "prompt-row";
-
     const prompt = document.createElement("div");
     prompt.className = "prompt";
-    prompt.textContent = truncateText(entry.prompt, 60);
+    prompt.textContent = entry.prompt || "(no prompt)";
     prompt.title = entry.prompt;
 
     const copyBtn = document.createElement("button");
@@ -1148,59 +1126,6 @@ function renderChatHistory(state) {
     promptRow.appendChild(prompt);
     promptRow.appendChild(copyBtn);
 
-    const response = document.createElement("div");
-    response.className = "response";
-    const preview =
-      entry.error ||
-      entry.response ||
-      (entry.updated && entry.updated.length
-        ? `Drafted: ${entry.updated.map((k) => k.toUpperCase()).join(", ")}`
-        : "(pending...)");
-    response.textContent = truncateText(preview, 80);
-    response.title = preview;
-
-    const detail = document.createElement("details");
-    detail.className = "doc-chat-entry-detail";
-    const summary = document.createElement("summary");
-    summary.textContent = "View details";
-    const body = document.createElement("div");
-    body.className = "doc-chat-entry-body";
-    if (entry.targets && entry.targets.length) {
-      const targets = document.createElement("div");
-      targets.className = "doc-chat-entry-tags";
-      targets.textContent = `Targets: ${entry.targets
-        .map((k) => k.toUpperCase())
-        .join(", ")}`;
-      body.appendChild(targets);
-    }
-    if (entry.updated && entry.updated.length) {
-      const updated = document.createElement("div");
-      updated.className = "doc-chat-entry-tags";
-      updated.textContent = `Drafts: ${entry.updated
-        .map((k) => k.toUpperCase())
-        .join(", ")}`;
-      body.appendChild(updated);
-    }
-    if (entry.response) {
-      const respBlock = document.createElement("pre");
-      respBlock.textContent = entry.response;
-      body.appendChild(respBlock);
-    }
-    const drafts = entry.drafts || {};
-    Object.entries(drafts).forEach(([kind, draft]) => {
-      if (!draft || !draft.patch) return;
-      const label = document.createElement("div");
-      label.className = "doc-chat-entry-draft-label";
-      label.textContent = `${kind.toUpperCase()} draft`;
-      body.appendChild(label);
-      const patchBlock = document.createElement("pre");
-      patchBlock.className = "doc-chat-entry-patch";
-      patchBlock.textContent = draft.patch;
-      body.appendChild(patchBlock);
-    });
-    detail.appendChild(summary);
-    detail.appendChild(body);
-
     const meta = document.createElement("div");
     meta.className = "meta";
 
@@ -1218,10 +1143,38 @@ function renderChatHistory(state) {
     meta.appendChild(dot);
     meta.appendChild(stamp);
 
-    wrapper.appendChild(promptRow);
+    header.appendChild(promptRow);
+    header.appendChild(meta);
+
+    const response = document.createElement("div");
+    response.className = "doc-chat-entry-response";
+    const responseText =
+      entry.error ||
+      entry.response ||
+      (entry.status === "running" ? "Waiting for response..." : "(no response)");
+    response.textContent = responseText;
+    response.classList.toggle(
+      "streaming",
+      entry.status === "running" && !!entry.response
+    );
+
+    wrapper.appendChild(header);
     wrapper.appendChild(response);
-    wrapper.appendChild(detail);
-    wrapper.appendChild(meta);
+
+    const tags = [];
+    if (entry.targets && entry.targets.length) {
+      tags.push(`Targets: ${entry.targets.map((k) => k.toUpperCase()).join(", ")}`);
+    }
+    if (entry.updated && entry.updated.length) {
+      tags.push(`Drafts: ${entry.updated.map((k) => k.toUpperCase()).join(", ")}`);
+    }
+    if (tags.length) {
+      const tagLine = document.createElement("div");
+      tagLine.className = "doc-chat-entry-tags";
+      tagLine.textContent = tags.join(" · ");
+      wrapper.appendChild(tagLine);
+    }
+
     chatUI.history.appendChild(wrapper);
   });
 }
@@ -1282,9 +1235,7 @@ async function startNewDocChatThread() {
     state.streamText = "";
     historyNavIndex = -1;
     resetChatEvents(state);
-    if (chatUI.historyDetails) {
-      chatUI.historyDetails.removeAttribute("open");
-    }
+    chatUI.input.value = "";
     renderChat();
     flash("Started a new doc chat thread");
   } catch (err) {
@@ -1325,10 +1276,6 @@ async function sendDocChat() {
   state.controller = new AbortController();
 
   // Collapse history when starting new request for compact view
-  if (chatUI.historyDetails) {
-    chatUI.historyDetails.removeAttribute("open");
-  }
-
   renderChat();
   chatUI.input.value = "";
   chatUI.input.style.height = "auto"; // Reset textarea height
@@ -1336,6 +1283,7 @@ async function sendDocChat() {
 
   try {
     await performDocChatRequest(entry, state);
+    refreshAllDrafts().catch(() => {});
     if (entry.status === "interrupted") {
       state.status = "interrupted";
       state.error = "";

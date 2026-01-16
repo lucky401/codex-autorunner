@@ -377,10 +377,6 @@
                   </div>
                 </div>
               </div>
-              <div id="doc-chat-response-wrapper" class="doc-chat-response-wrapper hidden">
-                <div id="doc-chat-response" class="doc-chat-response"></div>
-                <div id="doc-chat-error" class="doc-chat-error hidden"></div>
-              </div>
               <div id="doc-chat-events" class="doc-chat-events hidden">
                 <div class="doc-chat-events-header">
                   <span>Live updates</span>
@@ -389,13 +385,14 @@
                 </div>
                 <div class="doc-chat-events-list" id="doc-chat-events-list"></div>
               </div>
-              <details class="doc-chat-history-details" id="doc-chat-history-details">
-                <summary class="doc-chat-history-toggle">
-                  <span>History</span>
+              <div class="doc-chat-history-panel" id="doc-chat-history-panel">
+                <div class="doc-chat-history-header">
+                  <span>Chat history</span>
                   <span class="doc-chat-history-count" id="doc-chat-history-count">0</span>
-                </summary>
+                </div>
                 <div class="doc-chat-history" id="doc-chat-history"></div>
-              </details>
+                <div id="doc-chat-error" class="doc-chat-error hidden"></div>
+              </div>
             </div>
           </div>
         </section>
