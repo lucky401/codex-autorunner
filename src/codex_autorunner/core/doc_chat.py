@@ -1010,6 +1010,7 @@ class DocChatService:
                     )
                     if turn_task in done:
                         yield format_sse("turn", turn_task.result())
+                        yield format_sse("status", {"status": "running"})
                     else:
                         turn_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
