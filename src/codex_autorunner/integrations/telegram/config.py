@@ -29,6 +29,10 @@ DEFAULT_MEDIA_BATCH_UPLOADS = True
 DEFAULT_MEDIA_BATCH_WINDOW_SECONDS = 1.0
 DEFAULT_SHELL_TIMEOUT_MS = 120_000
 DEFAULT_SHELL_MAX_OUTPUT_CHARS = 3800
+DEFAULT_PROGRESS_STREAM_ENABLED = True
+DEFAULT_PROGRESS_STREAM_MAX_ACTIONS = 5
+DEFAULT_PROGRESS_STREAM_MAX_OUTPUT_CHARS = 120
+DEFAULT_PROGRESS_STREAM_MIN_EDIT_INTERVAL_SECONDS = 1.0
 
 PARSE_MODE_ALIASES = {
     "html": "HTML",
@@ -100,6 +104,14 @@ class TelegramBotCommandRegistration:
 
 
 @dataclass(frozen=True)
+class TelegramBotProgressStreamConfig:
+    enabled: bool
+    max_actions: int
+    max_output_chars: int
+    min_edit_interval_seconds: float
+
+
+@dataclass(frozen=True)
 class TelegramMediaCandidate:
     kind: str
     file_id: str
@@ -126,6 +138,7 @@ class TelegramBotConfig:
     concurrency: TelegramBotConcurrency
     media: TelegramBotMediaConfig
     shell: TelegramBotShellConfig
+    progress_stream: TelegramBotProgressStreamConfig
     command_registration: TelegramBotCommandRegistration
     state_file: Path
     app_server_command_env: str
@@ -276,6 +289,42 @@ class TelegramBotConfig:
             max_output_chars=shell_max_output_chars,
         )
 
+        progress_raw_value = cfg.get("progress_stream")
+        progress_raw: dict[str, Any] = (
+            progress_raw_value if isinstance(progress_raw_value, dict) else {}
+        )
+        progress_enabled = bool(
+            progress_raw.get("enabled", DEFAULT_PROGRESS_STREAM_ENABLED)
+        )
+        progress_max_actions = int(
+            progress_raw.get("max_actions", DEFAULT_PROGRESS_STREAM_MAX_ACTIONS)
+        )
+        if progress_max_actions <= 0:
+            progress_max_actions = DEFAULT_PROGRESS_STREAM_MAX_ACTIONS
+        progress_max_output_chars = int(
+            progress_raw.get(
+                "max_output_chars", DEFAULT_PROGRESS_STREAM_MAX_OUTPUT_CHARS
+            )
+        )
+        if progress_max_output_chars <= 0:
+            progress_max_output_chars = DEFAULT_PROGRESS_STREAM_MAX_OUTPUT_CHARS
+        progress_min_edit_interval_seconds = float(
+            progress_raw.get(
+                "min_edit_interval_seconds",
+                DEFAULT_PROGRESS_STREAM_MIN_EDIT_INTERVAL_SECONDS,
+            )
+        )
+        if progress_min_edit_interval_seconds <= 0:
+            progress_min_edit_interval_seconds = (
+                DEFAULT_PROGRESS_STREAM_MIN_EDIT_INTERVAL_SECONDS
+            )
+        progress_stream = TelegramBotProgressStreamConfig(
+            enabled=progress_enabled,
+            max_actions=progress_max_actions,
+            max_output_chars=progress_max_output_chars,
+            min_edit_interval_seconds=progress_min_edit_interval_seconds,
+        )
+
         command_reg_raw_value = cfg.get("command_registration")
         command_reg_raw: dict[str, Any] = (
             command_reg_raw_value if isinstance(command_reg_raw_value, dict) else {}
@@ -347,6 +396,7 @@ class TelegramBotConfig:
             concurrency=concurrency,
             media=media,
             shell=shell,
+            progress_stream=progress_stream,
             command_registration=command_registration,
             state_file=state_file,
             app_server_command_env=app_server_command_env,
