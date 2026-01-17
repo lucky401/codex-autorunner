@@ -5,6 +5,8 @@ import collections
 import json
 import logging
 import os
+import shlex
+import shutil
 import socket
 import time
 from pathlib import Path
@@ -14,10 +16,12 @@ if TYPE_CHECKING:
     from .progress_stream import TurnProgressTracker
     from .state import TelegramTopicRecord
 
+from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
+from ...core.utils import resolve_opencode_binary
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
 from ...manifest import load_manifest
 from ...voice import VoiceConfig, VoiceService
@@ -91,6 +95,85 @@ from .types import (
 from .voice import TelegramVoiceManager
 
 
+def _parse_command(raw: Optional[str]) -> list[str]:
+    if not raw:
+        return []
+    try:
+        return [part for part in shlex.split(raw) if part]
+    except ValueError:
+        return []
+
+
+def _command_available(command: list[str], *, workspace_root: Path) -> bool:
+    if not command:
+        return False
+    entry = str(command[0]).strip()
+    if not entry:
+        return False
+    if os.path.sep in entry or (os.path.altsep and os.path.altsep in entry):
+        path = Path(entry)
+        if not path.is_absolute():
+            path = workspace_root / path
+        return path.is_file() and os.access(path, os.X_OK)
+    return shutil.which(entry) is not None
+
+
+def _build_opencode_supervisor(
+    config: TelegramBotConfig,
+    *,
+    logger: logging.Logger,
+) -> Optional[OpenCodeSupervisor]:
+    raw_command = os.environ.get("CAR_OPENCODE_COMMAND")
+    command = _parse_command(raw_command)
+    opencode_binary = config.agent_binaries.get("opencode")
+    if not command and opencode_binary:
+        command = [
+            opencode_binary,
+            "serve",
+            "--hostname",
+            "127.0.0.1",
+            "--port",
+            "0",
+        ]
+    resolved_source = None
+    if command:
+        resolved_source = command[0]
+    elif opencode_binary:
+        resolved_source = opencode_binary
+    resolved_binary = resolve_opencode_binary(resolved_source)
+    if command:
+        if resolved_binary:
+            command[0] = resolved_binary
+    else:
+        if resolved_binary:
+            command = [
+                resolved_binary,
+                "serve",
+                "--hostname",
+                "127.0.0.1",
+                "--port",
+                "0",
+            ]
+    if not command or not _command_available(command, workspace_root=config.root):
+        log_event(
+            logger,
+            logging.INFO,
+            "telegram.opencode.unavailable",
+            reason="command_missing",
+        )
+        return None
+    username = os.environ.get("OPENCODE_SERVER_USERNAME")
+    password = os.environ.get("OPENCODE_SERVER_PASSWORD")
+    return OpenCodeSupervisor(
+        command,
+        logger=logger,
+        max_handles=config.app_server_max_handles,
+        idle_ttl_seconds=config.app_server_idle_ttl_seconds,
+        username=username if username and password else None,
+        password=password if username and password else None,
+    )
+
+
 class TelegramBotService(
     TelegramRuntimeHelpers,
     TelegramMessageTransport,
@@ -133,6 +216,10 @@ class TelegramBotService(
             logger=self._logger,
             max_handles=config.app_server_max_handles,
             idle_ttl_seconds=config.app_server_idle_ttl_seconds,
+        )
+        self._opencode_supervisor = _build_opencode_supervisor(
+            config,
+            logger=self._logger,
         )
         self._bot = TelegramBotClient(config.bot_token or "", logger=self._logger)
         self._poller = TelegramUpdatePoller(
@@ -262,6 +349,8 @@ class TelegramBotService(
                         self._logger,
                     )
                 await self._app_server_supervisor.prune_idle()
+                if self._opencode_supervisor is not None:
+                    await self._opencode_supervisor.prune_idle()
             except Exception as exc:
                 log_event(
                     self._logger,

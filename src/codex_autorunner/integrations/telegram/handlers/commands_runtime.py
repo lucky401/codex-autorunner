@@ -16,6 +16,8 @@ from os import getenv
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
+from ....agents.opencode.harness import OpenCodeHarness
+from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.config import load_config
 from ....core.injected_context import wrap_injected_context
 from ....core.logging_utils import log_event
@@ -411,6 +413,34 @@ class TelegramCommandHandlers:
         if not binary:
             return False
         return resolve_opencode_binary(binary) is not None
+
+    async def _fetch_model_list(
+        self,
+        record: Optional["TelegramTopicRecord"],
+        *,
+        agent: str,
+        client: CodexAppServerClient,
+        list_params: dict[str, Any],
+    ) -> Any:
+        if agent == "opencode":
+            supervisor = getattr(self, "_opencode_supervisor", None)
+            if supervisor is None:
+                raise OpenCodeSupervisorError("OpenCode backend is not configured")
+            workspace_root = self._canonical_workspace_root(
+                record.workspace_path if record else None
+            )
+            if workspace_root is None:
+                raise OpenCodeSupervisorError("OpenCode workspace is unavailable")
+            harness = OpenCodeHarness(supervisor)
+            catalog = await harness.model_catalog(workspace_root)
+            return [
+                {
+                    "id": model.id,
+                    "displayName": model.display_name,
+                }
+                for model in catalog.models
+            ]
+        return await client.request("model/list", list_params)
 
     async def _verify_active_thread(
         self, message: TelegramMessage, record: "TelegramTopicRecord"
@@ -3864,10 +3894,29 @@ class TelegramCommandHandlers:
         argv = self._parse_command_args(args)
         if not argv:
             try:
-                result = await client.request(
-                    "model/list",
-                    list_params,
+                result = await self._fetch_model_list(
+                    record,
+                    agent=agent,
+                    client=client,
+                    list_params=list_params,
                 )
+            except OpenCodeSupervisorError as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.model.list.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    agent=agent,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "OpenCode backend unavailable; install opencode or switch to /agent codex.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             except Exception as exc:
                 log_event(
                     self._logger,
@@ -3875,6 +3924,7 @@ class TelegramCommandHandlers:
                     "telegram.model.list.failed",
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
+                    agent=agent,
                     exc=exc,
                 )
                 await self._send_message(
@@ -3933,10 +3983,29 @@ class TelegramCommandHandlers:
             return
         if argv[0].lower() in ("list", "ls"):
             try:
-                result = await client.request(
-                    "model/list",
-                    list_params,
+                result = await self._fetch_model_list(
+                    record,
+                    agent=agent,
+                    client=client,
+                    list_params=list_params,
                 )
+            except OpenCodeSupervisorError as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.model.list.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    agent=agent,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "OpenCode backend unavailable; install opencode or switch to /agent codex.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             except Exception as exc:
                 log_event(
                     self._logger,
@@ -3944,6 +4013,7 @@ class TelegramCommandHandlers:
                     "telegram.model.list.failed",
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
+                    agent=agent,
                     exc=exc,
                 )
                 await self._send_message(
