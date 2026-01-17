@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from ..codex_cli import extract_flag_value
+from ..codex_cli import apply_codex_options, extract_flag_value, supports_reasoning
 from ..core.locks import process_alive, read_lock_info
 from ..core.state import load_state
 
@@ -25,6 +25,20 @@ SSE_HEADERS = {
 }
 
 
+async def _interruptible_sleep(
+    seconds: float, shutdown_event: Optional[asyncio.Event]
+) -> bool:
+    """Sleep that can be interrupted by shutdown_event. Returns True if interrupted."""
+    if shutdown_event is None:
+        await asyncio.sleep(seconds)
+        return False
+    try:
+        await asyncio.wait_for(shutdown_event.wait(), timeout=seconds)
+        return True  # Event was set
+    except asyncio.TimeoutError:
+        return False  # Normal timeout, continue
+
+
 def _extract_bypass_flag(args: list[str]) -> tuple[str, list[str]]:
     chosen = None
     for arg in args:
@@ -35,7 +49,13 @@ def _extract_bypass_flag(args: list[str]) -> tuple[str, list[str]]:
     return chosen or "--yolo", filtered
 
 
-def build_codex_terminal_cmd(engine, *, resume_mode: bool) -> list[str]:
+def build_codex_terminal_cmd(
+    engine,
+    *,
+    resume_mode: bool,
+    model: Optional[str] = None,
+    reasoning: Optional[str] = None,
+) -> list[str]:
     """
     Build the subprocess argv for launching the Codex interactive CLI inside a PTY.
     """
@@ -43,18 +63,36 @@ def build_codex_terminal_cmd(engine, *, resume_mode: bool) -> list[str]:
         list(engine.config.codex_terminal_args)
     )
     if resume_mode:
-        return [
+        cmd = [
             engine.config.codex_binary,
             bypass_flag,
             "resume",
             *terminal_args,
         ]
+        return apply_codex_options(
+            cmd,
+            model=model,
+            reasoning=reasoning,
+            supports_reasoning=supports_reasoning(engine.config.codex_binary),
+        )
 
     cmd = [
         engine.config.codex_binary,
         bypass_flag,
         *terminal_args,
     ]
+    return apply_codex_options(
+        cmd,
+        model=model,
+        reasoning=reasoning,
+        supports_reasoning=supports_reasoning(engine.config.codex_binary),
+    )
+
+
+def build_opencode_terminal_cmd(model: Optional[str] = None) -> list[str]:
+    cmd = ["opencode"]
+    if model:
+        cmd.extend(["--model", model])
     return cmd
 
 
@@ -73,7 +111,11 @@ def resolve_runner_status(engine, state) -> tuple[str, Optional[int], bool]:
     return status, runner_pid, running
 
 
-async def log_stream(log_path: Path, heartbeat_interval: float = 15.0):
+async def log_stream(
+    log_path: Path,
+    heartbeat_interval: float = 15.0,
+    shutdown_event: Optional[asyncio.Event] = None,
+):
     """SSE stream generator for log file tailing."""
     if not log_path.exists():
         yield "data: log file not found\n\n"
@@ -82,6 +124,8 @@ async def log_stream(log_path: Path, heartbeat_interval: float = 15.0):
     with log_path.open("r", encoding="utf-8") as f:
         f.seek(0, 2)
         while True:
+            if shutdown_event is not None and shutdown_event.is_set():
+                return
             line = f.readline()
             if line:
                 yield f"data: {line.rstrip()}\n\n"
@@ -91,10 +135,17 @@ async def log_stream(log_path: Path, heartbeat_interval: float = 15.0):
                 if now - last_emit_at >= heartbeat_interval:
                     yield ": ping\n\n"
                     last_emit_at = now
-                await asyncio.sleep(0.5)
+                if await _interruptible_sleep(0.5, shutdown_event):
+                    return
 
 
-async def state_stream(engine, manager, logger=None, heartbeat_interval: float = 15.0):
+async def state_stream(
+    engine,
+    manager,
+    logger=None,
+    heartbeat_interval: float = 15.0,
+    shutdown_event: Optional[asyncio.Event] = None,
+):
     """SSE stream generator for state updates."""
     last_payload = None
     last_error_log_at = 0.0
@@ -104,6 +155,8 @@ async def state_stream(engine, manager, logger=None, heartbeat_interval: float =
         engine.config.codex_args, "--model"
     )
     while True:
+        if shutdown_event is not None and shutdown_event.is_set():
+            return
         emitted = False
         try:
             state = await asyncio.to_thread(load_state, engine.state_path)
@@ -141,4 +194,5 @@ async def state_stream(engine, manager, logger=None, heartbeat_interval: float =
             if now - last_emit_at >= heartbeat_interval:
                 yield ": ping\n\n"
                 last_emit_at = now
-        await asyncio.sleep(1.0)
+        if await _interruptible_sleep(1.0, shutdown_event):
+            return

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shlex
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
+from ..agents.opencode.supervisor import OpenCodeSupervisor
 from ..core.app_server_events import AppServerEventBuffer
 from ..core.app_server_threads import (
     AppServerThreadRegistry,
@@ -91,6 +93,8 @@ class AppContext:
     app_server_prune_interval: Optional[float]
     app_server_threads: AppServerThreadRegistry
     app_server_events: AppServerEventBuffer
+    opencode_supervisor: Optional[OpenCodeSupervisor]
+    opencode_prune_interval: Optional[float]
     voice_config: VoiceConfig
     voice_missing_reason: Optional[str]
     voice_service: Optional[VoiceService]
@@ -241,6 +245,40 @@ def _build_app_server_supervisor(
     return supervisor, _app_server_prune_interval(config.idle_ttl_seconds)
 
 
+def _parse_command(raw: Optional[str]) -> list[str]:
+    if not raw:
+        return []
+    try:
+        return [part for part in shlex.split(raw) if part]
+    except ValueError:
+        return []
+
+
+def _build_opencode_supervisor(
+    config: AppServerConfig,
+    *,
+    logger: logging.Logger,
+) -> tuple[Optional[OpenCodeSupervisor], Optional[float]]:
+    raw_command = os.environ.get("CAR_OPENCODE_COMMAND")
+    command = _parse_command(raw_command) if raw_command else []
+    if not command:
+        command = ["opencode", "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    if not command:
+        return None, None
+    username = os.environ.get("OPENCODE_SERVER_USERNAME")
+    password = os.environ.get("OPENCODE_SERVER_PASSWORD")
+    supervisor = OpenCodeSupervisor(
+        command,
+        logger=logger,
+        request_timeout=config.request_timeout,
+        max_handles=config.max_handles,
+        idle_ttl_seconds=config.idle_ttl_seconds,
+        username=username if username and password else None,
+        password=password if username and password else None,
+    )
+    return supervisor, _app_server_prune_interval(config.idle_ttl_seconds)
+
+
 def _build_app_context(
     repo_root: Optional[Path], base_path: Optional[str]
 ) -> AppContext:
@@ -365,17 +403,23 @@ def _build_app_context(
     app_server_threads = AppServerThreadRegistry(
         default_app_server_threads_path(engine.repo_root)
     )
+    opencode_supervisor, opencode_prune_interval = _build_opencode_supervisor(
+        config.app_server,
+        logger=logger,
+    )
     doc_chat = DocChatService(
         engine,
         app_server_supervisor=app_server_supervisor,
         app_server_threads=app_server_threads,
         app_server_events=app_server_events,
+        opencode_supervisor=opencode_supervisor,
     )
     spec_ingest = SpecIngestService(
         engine,
         app_server_supervisor=app_server_supervisor,
         app_server_threads=app_server_threads,
         app_server_events=app_server_events,
+        opencode_supervisor=opencode_supervisor,
     )
     snapshot_service = SnapshotService(
         engine,
@@ -406,6 +450,22 @@ def _build_app_context(
     initial_state = load_state(engine.state_path)
     session_registry = dict(initial_state.sessions)
     repo_to_session = dict(initial_state.repo_to_session)
+    # Normalize persisted keys from older/newer versions:
+    # - Prefer bare repo keys for the default "codex" agent.
+    # - Preserve `repo:agent` keys for non-default agents (e.g. opencode).
+    normalized_repo_to_session: dict[str, str] = {}
+    for raw_key, session_id in repo_to_session.items():
+        key = str(raw_key)
+        if ":" in key:
+            repo, agent = key.split(":", 1)
+            agent_norm = agent.strip().lower()
+            if not agent_norm or agent_norm == "codex":
+                key = repo
+            else:
+                key = f"{repo}:{agent_norm}"
+        # Keep the first mapping we see to avoid surprising overrides.
+        normalized_repo_to_session.setdefault(key, session_id)
+    repo_to_session = normalized_repo_to_session
     terminal_sessions: dict = {}
     if session_registry or repo_to_session:
         prune_terminal_registry(
@@ -438,6 +498,8 @@ def _build_app_context(
         app_server_prune_interval=app_server_prune_interval,
         app_server_threads=app_server_threads,
         app_server_events=app_server_events,
+        opencode_supervisor=opencode_supervisor,
+        opencode_prune_interval=opencode_prune_interval,
         voice_config=voice_config,
         voice_missing_reason=voice_missing_reason,
         voice_service=voice_service,
@@ -470,6 +532,8 @@ def _apply_app_context(app: FastAPI, context: AppContext) -> None:
     app.state.app_server_prune_interval = context.app_server_prune_interval
     app.state.app_server_threads = context.app_server_threads
     app.state.app_server_events = context.app_server_events
+    app.state.opencode_supervisor = context.opencode_supervisor
+    app.state.opencode_prune_interval = context.opencode_prune_interval
     app.state.voice_config = context.voice_config
     app.state.voice_missing_reason = context.voice_missing_reason
     app.state.voice_service = context.voice_service
@@ -624,6 +688,28 @@ def _app_lifespan(context: AppContext):
 
             tasks.append(asyncio.create_task(_app_server_prune_loop()))
 
+        opencode_supervisor = getattr(app.state, "opencode_supervisor", None)
+        opencode_prune_interval = getattr(app.state, "opencode_prune_interval", None)
+        if opencode_supervisor is not None and opencode_prune_interval:
+
+            async def _opencode_prune_loop():
+                try:
+                    while True:
+                        await asyncio.sleep(opencode_prune_interval)
+                        try:
+                            await opencode_supervisor.prune_idle()
+                        except Exception as exc:
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "OpenCode prune task failed",
+                                exc,
+                            )
+                except asyncio.CancelledError:
+                    return
+
+            tasks.append(asyncio.create_task(_opencode_prune_loop()))
+
         if (
             context.tui_idle_seconds is not None
             and context.tui_idle_check_seconds is not None
@@ -671,9 +757,22 @@ def _app_lifespan(context: AppContext):
 
             tasks.append(asyncio.create_task(_tui_idle_loop()))
 
+        # Shutdown event for graceful SSE/WebSocket termination during reload
+        app.state.shutdown_event = asyncio.Event()
+        app.state.active_websockets: set = set()
+
         try:
             yield
         finally:
+            # Signal SSE streams to stop and close WebSocket connections
+            app.state.shutdown_event.set()
+            for ws in list(app.state.active_websockets):
+                try:
+                    await ws.close(code=1012)  # 1012 = Service Restart
+                except Exception:
+                    pass
+            app.state.active_websockets.clear()
+
             for task in tasks:
                 task.cancel()
             if tasks:
@@ -698,6 +797,17 @@ def _app_lifespan(context: AppContext):
                         app.state.logger,
                         logging.WARNING,
                         "App-server shutdown failed",
+                        exc,
+                    )
+            opencode_supervisor = getattr(app.state, "opencode_supervisor", None)
+            if opencode_supervisor is not None:
+                try:
+                    await opencode_supervisor.close_all()
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "OpenCode shutdown failed",
                         exc,
                     )
             static_context = getattr(app.state, "static_assets_context", None)

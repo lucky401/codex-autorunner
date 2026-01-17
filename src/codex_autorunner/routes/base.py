@@ -22,6 +22,7 @@ from ..web.static_assets import index_response_headers, render_index_html
 from .shared import (
     SSE_HEADERS,
     build_codex_terminal_cmd,
+    build_opencode_terminal_cmd,
     log_stream,
     resolve_runner_status,
     state_stream,
@@ -76,8 +77,14 @@ def build_base_routes(static_dir: Path) -> APIRouter:
     async def stream_state_endpoint(request: Request):
         engine = request.app.state.engine
         manager = request.app.state.manager
+        shutdown_event = getattr(request.app.state, "shutdown_event", None)
         return StreamingResponse(
-            state_stream(engine, manager, logger=request.app.state.logger),
+            state_stream(
+                engine,
+                manager,
+                logger=request.app.state.logger,
+                shutdown_event=shutdown_event,
+            ),
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
@@ -103,8 +110,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
     @router.get("/api/logs/stream")
     async def stream_logs_endpoint(request: Request):
         engine = request.app.state.engine
+        shutdown_event = getattr(request.app.state, "shutdown_event", None)
         return StreamingResponse(
-            log_stream(engine.log_path),
+            log_stream(engine.log_path, shutdown_event=shutdown_event),
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
@@ -135,6 +143,10 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         if app is None:
             await ws.close()
             return
+        # Track websocket for graceful shutdown during reload
+        active_websockets = getattr(app.state, "active_websockets", None)
+        if active_websockets is not None:
+            active_websockets.add(ws)
         logger = app.state.logger
         engine = app.state.engine
         terminal_sessions: dict[str, ActiveSession] = app.state.terminal_sessions
@@ -143,6 +155,22 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         repo_to_session: dict[str, str] = app.state.repo_to_session
         repo_path = str(engine.repo_root)
         state_path = engine.state_path
+        agent = (ws.query_params.get("agent") or "codex").strip().lower()
+        model = (ws.query_params.get("model") or "").strip() or None
+        reasoning = (ws.query_params.get("reasoning") or "").strip() or None
+        session_id = None
+        active_session: Optional[ActiveSession] = None
+        seen_update_interval = 5.0
+
+        def _session_key(repo: str, agent: str) -> str:
+            normalized = (agent or "").strip().lower()
+            # Backwards-compatible keying:
+            # - Codex sessions continue to use the bare repo path key so existing
+            #   CLI/API callers that only know `repo_path` keep working.
+            # - Other agents (e.g. OpenCode) use a scoped `repo:agent` key.
+            if not normalized or normalized == "codex":
+                return repo
+            return f"{repo}:{normalized}"
 
         client_session_id = ws.query_params.get("session_id")
         close_session_id = ws.query_params.get("close_session_id")
@@ -150,9 +178,6 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         attach_only = mode == "attach"
         terminal_debug_param = (ws.query_params.get("terminal_debug") or "").strip()
         terminal_debug = terminal_debug_param.lower() in {"1", "true", "yes", "on"}
-        session_id = None
-        active_session: Optional[ActiveSession] = None
-        seen_update_interval = 5.0
 
         def _mark_dirty() -> None:
             app.state.session_state_dirty = True
@@ -186,8 +211,19 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     terminal_sessions.pop(client_session_id, None)
                     session_registry.pop(client_session_id, None)
                     repo_to_session = {
-                        repo: sid
-                        for repo, sid in repo_to_session.items()
+                        _session_key(repo, ag): sid
+                        for repo, ag, sid in [
+                            (
+                                k.split(":", 1)[0],
+                                (
+                                    (k.split(":", 1)[1] or "codex")
+                                    if ":" in k
+                                    else "codex"
+                                ),
+                                v,
+                            )
+                            for k, v in repo_to_session.items()
+                        ]
                         if sid != client_session_id
                     }
                     app.state.repo_to_session = repo_to_session
@@ -197,7 +233,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     session_id = client_session_id
 
             if not active_session:
-                mapped_session_id = repo_to_session.get(repo_path)
+                mapped_session_id = repo_to_session.get(_session_key(repo_path, agent))
                 if mapped_session_id:
                     mapped_session = terminal_sessions.get(mapped_session_id)
                     if mapped_session and mapped_session.pty.isalive():
@@ -208,7 +244,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                             mapped_session.close()
                         terminal_sessions.pop(mapped_session_id, None)
                         session_registry.pop(mapped_session_id, None)
-                        repo_to_session.pop(repo_path, None)
+                        repo_to_session.pop(_session_key(repo_path, agent), None)
                         _mark_dirty()
                 if attach_only:
                     await ws.send_text(
@@ -235,15 +271,34 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         terminal_sessions.pop(close_session_id, None)
                         session_registry.pop(close_session_id, None)
                         repo_to_session = {
-                            repo: sid
-                            for repo, sid in repo_to_session.items()
+                            _session_key(repo, ag): sid
+                            for repo, ag, sid in [
+                                (
+                                    k.split(":", 1)[0],
+                                    (
+                                        (k.split(":", 1)[1] or "codex")
+                                        if ":" in k
+                                        else "codex"
+                                    ),
+                                    v,
+                                )
+                                for k, v in repo_to_session.items()
+                            ]
                             if sid != close_session_id
                         }
                         app.state.repo_to_session = repo_to_session
                         _mark_dirty()
                 session_id = str(uuid.uuid4())
                 resume_mode = mode == "resume"
-                cmd = build_codex_terminal_cmd(engine, resume_mode=resume_mode)
+                if agent == "opencode":
+                    cmd = build_opencode_terminal_cmd(model)
+                else:
+                    cmd = build_codex_terminal_cmd(
+                        engine,
+                        resume_mode=resume_mode,
+                        model=model,
+                        reasoning=reasoning,
+                    )
                 try:
                     pty = PTYSession(cmd, cwd=str(engine.repo_root))
                     active_session = ActiveSession(
@@ -255,15 +310,17 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         created_at=now_iso(),
                         last_seen_at=now_iso(),
                         status="active",
+                        agent=agent,
                     )
-                    repo_to_session[repo_path] = session_id
+                    repo_to_session[_session_key(repo_path, agent)] = session_id
                     _mark_dirty()
                 except FileNotFoundError:
+                    binary = cmd[0] if cmd else "codex"
                     await ws.send_text(
                         json.dumps(
                             {
                                 "type": "error",
-                                "message": f"Codex binary not found: {engine.config.codex_binary}",
+                                "message": f"Agent binary not found: {binary}",
                             }
                         )
                     )
@@ -276,10 +333,15 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         created_at=now_iso(),
                         last_seen_at=now_iso(),
                         status="active",
+                        agent=agent,
                     )
                     _mark_dirty()
-                if session_id and repo_to_session.get(repo_path) != session_id:
-                    repo_to_session[repo_path] = session_id
+                if (
+                    session_id
+                    and repo_to_session.get(_session_key(repo_path, agent))
+                    != session_id
+                ):
+                    repo_to_session[_session_key(repo_path, agent)] = session_id
                     _mark_dirty()
                 _maybe_persist_sessions(force=True)
 
@@ -446,8 +508,19 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         terminal_sessions.pop(session_id, None)
                         session_registry.pop(session_id, None)
                         repo_to_session = {
-                            repo: sid
-                            for repo, sid in repo_to_session.items()
+                            _session_key(repo, ag): sid
+                            for repo, ag, sid in [
+                                (
+                                    k.split(":", 1)[0],
+                                    (
+                                        (k.split(":", 1)[1] or "codex")
+                                        if ":" in k
+                                        else "codex"
+                                    ),
+                                    v,
+                                )
+                                for k, v in repo_to_session.items()
+                            ]
                             if sid != session_id
                         }
                         app.state.repo_to_session = repo_to_session
@@ -462,5 +535,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             await ws.close()
         except Exception:
             safe_log(logger, logging.WARNING, "Terminal websocket close failed")
+        finally:
+            # Unregister websocket from active set
+            if active_websockets is not None:
+                active_websockets.discard(ws)
 
     return router

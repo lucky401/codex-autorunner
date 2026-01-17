@@ -1,4 +1,10 @@
 import { api, flash, buildWsUrl, getAuthToken, isMobileViewport } from "./utils.js";
+import {
+  getSelectedAgent,
+  getSelectedModel,
+  getSelectedReasoning,
+  initAgentControls,
+} from "./agentControls.js";
 
 function base64UrlEncode(value) {
   if (!value) return null;
@@ -293,13 +299,23 @@ export class TerminalManager {
     this.disconnectBtn = document.getElementById("terminal-disconnect");
     this.resumeBtn = document.getElementById("terminal-resume");
     this.jumpBottomBtn = document.getElementById("terminal-jump-bottom");
+    this.agentSelect = document.getElementById("terminal-agent-select");
+    this.modelSelect = document.getElementById("terminal-model-select");
+    this.reasoningSelect = document.getElementById("terminal-reasoning-select");
 
     if (!this.statusEl || !this.connectBtn || !this.disconnectBtn || !this.resumeBtn) {
       return;
     }
 
     this.connectBtn.addEventListener("click", () => this.connect({ mode: "new" }));
-    this.resumeBtn.addEventListener("click", () => this.connect({ mode: "resume" }));
+    this.resumeBtn.addEventListener("click", () => {
+      const selectedAgent = getSelectedAgent();
+      if (selectedAgent && selectedAgent.toLowerCase() === "opencode") {
+        this.connect({ mode: "new" });
+      } else {
+        this.connect({ mode: "resume" });
+      }
+    });
     this.disconnectBtn.addEventListener("click", () => this.disconnect());
     this.jumpBottomBtn?.addEventListener("click", () => {
       this.term?.scrollToBottom();
@@ -322,6 +338,16 @@ export class TerminalManager {
     this._initMobileControls();
     this._initTerminalVoice();
     this._initTextInputPanel();
+    initAgentControls({
+      agentSelect: this.agentSelect,
+      modelSelect: this.modelSelect,
+      reasoningSelect: this.reasoningSelect,
+    });
+
+    // Update resume button visibility when agent changes
+    if (this.agentSelect) {
+      this.agentSelect.addEventListener("change", () => this._updateButtons(false));
+    }
 
     subscribe("state:update", (state) => {
       if (
@@ -389,15 +415,18 @@ export class TerminalManager {
   _renderStatus() {
     if (!this.statusEl) return;
     const sessionId = this.currentSessionId;
+    const isConnected = this.statusBase === "Connected";
+    this.statusEl.classList.toggle("connected", isConnected);
     if (!sessionId) {
       this.statusEl.textContent = this.statusBase;
+      this.statusEl.title = "";
       return;
     }
+    const shortId = sessionId.substring(0, 8);
     const repoLabel = this._getRepoLabel();
-    const suffix = repoLabel
-      ? ` (session ${sessionId} · repo ${repoLabel})`
-      : ` (session ${sessionId})`;
+    const suffix = repoLabel ? ` ${shortId} · ${repoLabel}` : ` ${shortId}`;
     this.statusEl.textContent = `${this.statusBase}${suffix}`;
+    this.statusEl.title = `Session: ${sessionId}`;
   }
 
   _getRepoLabel() {
@@ -1957,7 +1986,16 @@ export class TerminalManager {
   _updateButtons(connected) {
     if (this.connectBtn) this.connectBtn.disabled = connected;
     if (this.disconnectBtn) this.disconnectBtn.disabled = !connected;
-    if (this.resumeBtn) this.resumeBtn.disabled = connected;
+    if (this.resumeBtn) {
+      const selectedAgent = getSelectedAgent();
+      const isOpencode = selectedAgent && selectedAgent.toLowerCase() === "opencode";
+      if (isOpencode) {
+        this.resumeBtn.classList.add("hidden");
+      } else {
+        this.resumeBtn.classList.remove("hidden");
+        this.resumeBtn.disabled = connected;
+      }
+    }
     this._updateTextInputConnected(connected);
 
     const voiceUnavailable = this.voiceBtn?.classList.contains("disabled");
@@ -2121,6 +2159,14 @@ export class TerminalManager {
     const queryParams = new URLSearchParams();
     if (mode) queryParams.append("mode", mode);
     if (this.terminalDebug) queryParams.append("terminal_debug", "1");
+    if (!isAttach) {
+      const selectedAgent = getSelectedAgent();
+      const selectedModel = getSelectedModel(selectedAgent);
+      const selectedReasoning = getSelectedReasoning(selectedAgent);
+      if (selectedAgent) queryParams.append("agent", selectedAgent);
+      if (selectedModel) queryParams.append("model", selectedModel);
+      if (selectedReasoning) queryParams.append("reasoning", selectedReasoning);
+    }
 
     const savedSessionId = this._getSavedSessionId();
     this._logTerminalDebug("connect", {

@@ -1,13 +1,16 @@
 import asyncio
 import contextlib
 import difflib
+import json
 import re
 import threading
+import time
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .agents.opencode.supervisor import OpenCodeSupervisor
 from .core.app_server_events import AppServerEventBuffer
 from .core.app_server_prompts import (
     build_spec_ingest_prompt as build_app_server_spec_ingest_prompt,
@@ -16,6 +19,7 @@ from .core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
 )
+from .core.docs import validate_todo_markdown
 from .core.engine import Engine
 from .core.locks import FileLock, FileLockBusy, FileLockError
 from .core.patch_utils import (
@@ -79,6 +83,7 @@ class SpecIngestService:
         app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None,
         app_server_threads: Optional[AppServerThreadRegistry] = None,
         app_server_events: Optional[AppServerEventBuffer] = None,
+        opencode_supervisor: Optional[OpenCodeSupervisor] = None,
     ) -> None:
         self.engine = engine
         self._app_server_supervisor = app_server_supervisor
@@ -86,6 +91,7 @@ class SpecIngestService:
             default_app_server_threads_path(self.engine.repo_root)
         )
         self._app_server_events = app_server_events
+        self._opencode_supervisor = opencode_supervisor
         self.patch_path = (
             self.engine.repo_root / ".codex-autorunner" / SPEC_INGEST_PATCH_NAME
         )
@@ -176,6 +182,11 @@ class SpecIngestService:
             raise SpecIngestError("App-server backend is not configured")
         return self._app_server_supervisor
 
+    def _ensure_opencode(self) -> OpenCodeSupervisor:
+        if self._opencode_supervisor is None:
+            raise SpecIngestError("OpenCode backend is not configured")
+        return self._opencode_supervisor
+
     def _get_active_turn(self) -> Optional[ActiveSpecIngestTurn]:
         with self._active_turn_lock:
             return self._active_turn
@@ -210,6 +221,8 @@ class SpecIngestService:
             return
         active.interrupt_sent = True
         try:
+            if not hasattr(active.client, "turn_interrupt"):
+                return
             await asyncio.wait_for(
                 active.client.turn_interrupt(
                     active.turn_id, thread_id=active.thread_id
@@ -219,6 +232,24 @@ class SpecIngestService:
         except asyncio.TimeoutError:
             pass
         except CodexAppServerError:
+            pass
+
+    async def _abort_opencode(
+        self, active: ActiveSpecIngestTurn, thread_id: str
+    ) -> None:
+        if active.interrupt_sent:
+            return
+        active.interrupt_sent = True
+        try:
+            if not hasattr(active.client, "abort"):
+                return
+            await asyncio.wait_for(
+                active.client.abort(thread_id),
+                timeout=SPEC_INGEST_INTERRUPT_GRACE_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            pass
+        except Exception:
             pass
 
     async def interrupt(self) -> Dict[str, str]:
@@ -355,6 +386,8 @@ class SpecIngestService:
         force: bool,
         spec_path: Optional[Path],
         message: Optional[str],
+        model: Optional[str] = None,
+        reasoning: Optional[str] = None,
     ) -> Dict[str, str]:
         if not force:
             ensure_can_overwrite(self.engine, force=False)
@@ -391,11 +424,17 @@ class SpecIngestService:
                 raise SpecIngestError("App-server did not return a thread id")
             self._app_server_threads.set_thread_id(key, thread_id)
 
+        turn_kwargs: dict[str, Any] = {}
+        if model:
+            turn_kwargs["model"] = model
+        if reasoning:
+            turn_kwargs["effort"] = reasoning
         handle = await client.turn_start(
             thread_id,
             prompt,
             approval_policy="never",
             sandbox_policy="dangerFullAccess",  # Allowed for doc edits per user request
+            **turn_kwargs,
         )
         active = self._register_active_turn(client, handle.turn_id, handle.thread_id)
         if self._app_server_events is not None:
@@ -480,6 +519,12 @@ class SpecIngestService:
             if patch.strip():
                 patches.append(patch)
 
+        todo_errors = validate_todo_markdown(docs_preview.get("todo", ""))
+        if todo_errors:
+            # Restore docs before failing.
+            self._restore_docs(backups)
+            raise SpecIngestError("Invalid TODO format: " + "; ".join(todo_errors))
+
         # Always restore docs to state before ingest (user must apply patch)
         self._restore_docs(backups)
 
@@ -496,17 +541,252 @@ class SpecIngestService:
             docs_preview, patch=patch_text, agent_message=agent_message
         )
 
+    async def _execute_opencode(
+        self,
+        *,
+        force: bool,
+        spec_path: Optional[Path],
+        message: Optional[str],
+        model: Optional[str],
+        reasoning: Optional[str],
+    ) -> Dict[str, str]:
+        if not force:
+            ensure_can_overwrite(self.engine, force=False)
+        spec_target = self._spec_path(spec_path)
+        prompt = build_app_server_spec_ingest_prompt(
+            self.engine.config,
+            message=message or "Ingest SPEC into TODO/PROGRESS/OPINIONS.",
+            spec_path=spec_target,
+        )
+        backups = {
+            key: self.engine.docs.read_doc(key)
+            for key in ("todo", "progress", "opinions")
+        }
+        supervisor = self._ensure_opencode()
+        client = await supervisor.get_client(self.engine.repo_root)
+        key = "spec_ingest.opencode"
+        thread_id = self._app_server_threads.get_thread_id(key)
+        if thread_id:
+            try:
+                await client.get_session(thread_id)
+            except Exception:
+                self._app_server_threads.reset_thread(key)
+                thread_id = None
+        if not thread_id:
+            session = await client.create_session(directory=str(self.engine.repo_root))
+            thread_id = self._extract_opencode_session_id(session)
+            if not isinstance(thread_id, str) or not thread_id:
+                raise SpecIngestError("OpenCode did not return a session id")
+            self._app_server_threads.set_thread_id(key, thread_id)
+
+        model_payload = self._split_opencode_model(model)
+        result = await client.send_message(
+            thread_id,
+            message=prompt,
+            model=model_payload,
+            variant=reasoning,
+        )
+        turn_id = self._extract_opencode_turn_id(thread_id, result)
+        active = self._register_active_turn(client, turn_id, thread_id)
+        output_task = asyncio.create_task(
+            self._collect_opencode_output(client, thread_id, active)
+        )
+        timeout_task = asyncio.create_task(asyncio.sleep(SPEC_INGEST_TIMEOUT_SECONDS))
+        interrupt_task = asyncio.create_task(active.interrupt_event.wait())
+        try:
+            tasks = {output_task, timeout_task, interrupt_task}
+            done, _pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            if timeout_task in done:
+                output_task.add_done_callback(lambda task: task.exception())
+                raise SpecIngestError("Spec ingest agent timed out")
+            if interrupt_task in done:
+                active.interrupted = True
+                await self._abort_opencode(active, thread_id)
+                done, _pending = await asyncio.wait(
+                    {output_task}, timeout=SPEC_INGEST_INTERRUPT_GRACE_SECONDS
+                )
+                if not done:
+                    output_task.add_done_callback(lambda task: task.exception())
+            output = await output_task
+        finally:
+            self._clear_active_turn(turn_id)
+            timeout_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await timeout_task
+            interrupt_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await interrupt_task
+
+        if active.interrupted:
+            self._restore_docs(backups)
+            return self._assemble_response(
+                {},
+                status="interrupted",
+                agent_message="Spec ingest interrupted",
+            )
+
+        agent_message = SpecIngestPatchParser.parse_agent_message(output)
+        patches = []
+        docs_preview = {}
+        targets = self._allowed_targets()
+
+        for key in ("todo", "progress", "opinions"):
+            path = self.engine.config.doc_path(key)
+            try:
+                after = path.read_text(encoding="utf-8")
+            except OSError:
+                after = ""
+            before = backups.get(key, "")
+            docs_preview[key] = after
+
+            if after == before:
+                continue
+
+            rel_path = targets[key]
+            patch = self._build_patch(rel_path, before, after)
+            if patch.strip():
+                patches.append(patch)
+
+        todo_errors = validate_todo_markdown(docs_preview.get("todo", ""))
+        if todo_errors:
+            self._restore_docs(backups)
+            raise SpecIngestError("Invalid TODO format: " + "; ".join(todo_errors))
+
+        self._restore_docs(backups)
+
+        patch_text = "\n".join(patches)
+        if not patch_text.strip():
+            raise SpecIngestError(
+                "OpenCode did not make any changes to TODO/PROGRESS/OPINIONS"
+            )
+
+        self.patch_path.write_text(patch_text, encoding="utf-8")
+        self.last_agent_message = agent_message
+
+        return self._assemble_response(
+            docs_preview, patch=patch_text, agent_message=agent_message
+        )
+
     async def execute(
         self,
         *,
         force: bool,
         spec_path: Optional[Path] = None,
         message: Optional[str] = None,
+        agent: Optional[str] = None,
+        model: Optional[str] = None,
+        reasoning: Optional[str] = None,
     ) -> Dict[str, str]:
         async with self.ingest_lock():
+            if (agent or "").strip().lower() == "opencode":
+                return await self._execute_opencode(
+                    force=force,
+                    spec_path=spec_path,
+                    message=message,
+                    model=model,
+                    reasoning=reasoning,
+                )
             return await self._execute_app_server(
-                force=force, spec_path=spec_path, message=message
+                force=force,
+                spec_path=spec_path,
+                message=message,
+                model=model,
+                reasoning=reasoning,
             )
+
+    def _split_opencode_model(self, model: Optional[str]) -> Optional[dict[str, str]]:
+        if not model or "/" not in model:
+            return None
+        provider_id, model_id = model.split("/", 1)
+        provider_id = provider_id.strip()
+        model_id = model_id.strip()
+        if not provider_id or not model_id:
+            return None
+        return {"providerID": provider_id, "modelID": model_id}
+
+    def _extract_opencode_turn_id(self, session_id: str, payload: Any) -> str:
+        # Fallback: placeholder for tracking since events filter by session_id only
+        if isinstance(payload, dict):
+            for key in ("id", "messageId", "message_id", "turn_id", "turnId"):
+                value = payload.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        return f"{session_id}:{int(time.time() * 1000)}"
+
+    def _extract_opencode_session_id(self, payload: Any) -> Optional[str]:
+        if not isinstance(payload, dict):
+            return None
+        for key in ("sessionID", "sessionId", "session_id", "id"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        properties = payload.get("properties")
+        if isinstance(properties, dict):
+            value = properties.get("sessionID")
+            if isinstance(value, str) and value:
+                return value
+            part = properties.get("part")
+            if isinstance(part, dict):
+                value = part.get("sessionID")
+                if isinstance(value, str) and value:
+                    return value
+        session = payload.get("session")
+        if isinstance(session, dict):
+            return self._extract_opencode_session_id(session)
+        return None
+
+    async def _collect_opencode_output(
+        self, client: Any, session_id: str, active: ActiveSpecIngestTurn
+    ) -> str:
+        text_parts: list[str] = []
+        async for event in client.stream_events(directory=str(self.engine.repo_root)):
+            raw = event.data or ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {}
+            event_session_id = self._extract_opencode_session_id(payload)
+            if event_session_id and event_session_id != session_id:
+                continue
+            if event.event == "permission.asked":
+                properties = (
+                    payload.get("properties") if isinstance(payload, dict) else {}
+                )
+                request_id = None
+                if isinstance(properties, dict):
+                    request_id = properties.get("id") or properties.get("requestID")
+                if isinstance(request_id, str) and request_id:
+                    try:
+                        await client.respond_permission(
+                            request_id=request_id, reply="reject"
+                        )
+                    except Exception:
+                        pass
+            if event.event == "message.part.updated":
+                properties = (
+                    payload.get("properties") if isinstance(payload, dict) else None
+                )
+                if isinstance(properties, dict):
+                    part = properties.get("part")
+                    delta = properties.get("delta")
+                else:
+                    part = payload.get("part")
+                    delta = payload.get("delta")
+                if isinstance(delta, dict):
+                    delta = delta.get("text")
+                if isinstance(delta, str) and delta:
+                    text_parts.append(delta)
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text")
+                    if isinstance(text, str) and text:
+                        text_parts.append(text)
+            if event.event == "session.idle" and event_session_id == session_id:
+                break
+            if active.interrupted:
+                break
+        return "".join(text_parts).strip()
 
 
 class SpecIngestPatchParser:
