@@ -92,7 +92,7 @@ def build_codex_terminal_cmd(
 
 def build_opencode_terminal_cmd(binary: str, model: Optional[str] = None) -> list[str]:
     resolved = resolve_opencode_binary(binary)
-    cmd = [resolved or binary or "opencode"]
+    cmd = [resolved or binary]
     if model:
         cmd.extend(["--model", model])
     return cmd

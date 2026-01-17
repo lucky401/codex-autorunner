@@ -384,13 +384,10 @@ class TelegramCommandHandlers:
         return agent == "codex"
 
     def _opencode_available(self) -> bool:
-        raw_command = os.environ.get("CAR_OPENCODE_COMMAND")
-        if resolve_opencode_binary(raw_command):
-            return True
         binary = self._config.agent_binaries.get("opencode")
-        if binary:
-            return resolve_opencode_binary(binary) is not None
-        return resolve_opencode_binary() is not None
+        if not binary:
+            return False
+        return resolve_opencode_binary(binary) is not None
 
     async def _verify_active_thread(
         self, message: TelegramMessage, record: "TelegramTopicRecord"

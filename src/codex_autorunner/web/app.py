@@ -278,10 +278,7 @@ def _build_opencode_supervisor(
     opencode_command: Optional[list[str]],
     logger: logging.Logger,
 ) -> tuple[Optional[OpenCodeSupervisor], Optional[float]]:
-    raw_command = os.environ.get("CAR_OPENCODE_COMMAND")
-    command = _parse_command(raw_command) if raw_command else []
-    if not command:
-        command = list(opencode_command or [])
+    command = list(opencode_command or [])
     if not command and opencode_binary:
         command = [
             opencode_binary,
@@ -291,10 +288,10 @@ def _build_opencode_supervisor(
             "--port",
             "0",
         ]
-    resolved_source = raw_command
-    if not resolved_source and opencode_command:
-        resolved_source = opencode_command[0] if opencode_command else None
-    if not resolved_source and opencode_binary:
+    resolved_source = None
+    if opencode_command:
+        resolved_source = opencode_command[0]
+    elif opencode_binary:
         resolved_source = opencode_binary
     resolved_binary = resolve_opencode_binary(resolved_source)
     if command:

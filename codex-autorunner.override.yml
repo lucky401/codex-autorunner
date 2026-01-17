@@ -1,0 +1,3 @@
+agents:
+  opencode:
+    binary: /Users/dazheng/.opencode/bin/opencode

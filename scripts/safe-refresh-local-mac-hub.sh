@@ -35,7 +35,6 @@ set -euo pipefail
 #   LOCAL_BIN              Local bin path to prepend (default: ~/.local/bin)
 #   PY39_BIN               Python bin path to prepend (default: ~/Library/Python/3.9/bin)
 #   OPENCODE_BIN           OpenCode bin path to prepend (default: ~/.opencode/bin)
-#   OPENCODE_COMMAND        OpenCode serve command (default: ~/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 0)
 
 LABEL="${LABEL:-com.codex.autorunner}"
 PLIST_PATH="${PLIST_PATH:-$HOME/Library/LaunchAgents/${LABEL}.plist}"
@@ -69,7 +68,6 @@ NVM_BIN="${NVM_BIN:-$HOME/.nvm/versions/node/v22.12.0/bin}"
 LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
 PY39_BIN="${PY39_BIN:-$HOME/Library/Python/3.9/bin}"
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin}"
-OPENCODE_COMMAND="${OPENCODE_COMMAND:-$OPENCODE_BIN/opencode serve --hostname 127.0.0.1 --port 0}"
 
 current_target=""
 swap_completed=false
@@ -436,7 +434,7 @@ plist_path.write_text(new_text)
 PY
 }
 
-_ensure_plist_has_opencode_env() {
+_ensure_plist_has_opencode_path() {
   if [[ ! -f "${PLIST_PATH}" ]]; then
     return 0
   fi
@@ -449,7 +447,6 @@ from pathlib import Path
 
 plist_path = Path("${PLIST_PATH}")
 opencode_bin = "${OPENCODE_BIN}"
-opencode_cmd = "${OPENCODE_COMMAND}"
 
 with plist_path.open("rb") as handle:
     plist = plistlib.load(handle)
@@ -463,9 +460,6 @@ if not isinstance(cmd, str):
     raise SystemExit("LaunchAgent plist ProgramArguments[2] is not a string.")
 
 updated = False
-if "CAR_OPENCODE_COMMAND=" not in cmd:
-    cmd = f"CAR_OPENCODE_COMMAND='{opencode_cmd}'; {cmd}"
-    updated = True
 
 if opencode_bin and opencode_bin not in cmd:
     if "PATH=" in cmd:
@@ -508,7 +502,7 @@ _wait_pid_exit() {
 _reload() {
   local pid
   pid="$(_service_pid)"
-  _ensure_plist_has_opencode_env
+  _ensure_plist_has_opencode_path
   launchctl unload -w "${PLIST_PATH}" >/dev/null 2>&1 || true
   if [[ -n "${pid}" && "${pid}" != "0" ]]; then
     if ! _wait_pid_exit "${pid}"; then
@@ -665,7 +659,7 @@ _write_telegram_plist() {
   <array>
     <string>/bin/sh</string>
     <string>-lc</string>
-    <string>CAR_OPENCODE_COMMAND='${OPENCODE_COMMAND}'; PATH=${OPENCODE_BIN}:${NVM_BIN}:${LOCAL_BIN}:${PY39_BIN}:\$PATH; ${CURRENT_VENV_LINK}/bin/codex-autorunner telegram start --path ${root}</string>
+    <string>PATH=${OPENCODE_BIN}:${NVM_BIN}:${LOCAL_BIN}:${PY39_BIN}:\$PATH; ${CURRENT_VENV_LINK}/bin/codex-autorunner telegram start --path ${root}</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${root}</string>
