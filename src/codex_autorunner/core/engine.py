@@ -4,7 +4,6 @@ import dataclasses
 import json
 import logging
 import os
-import shutil
 import signal
 import threading
 import time
@@ -49,6 +48,7 @@ from .utils import (
     atomic_write,
     ensure_executable,
     find_repo_root,
+    resolve_executable,
     resolve_opencode_binary,
 )
 
@@ -1194,7 +1194,7 @@ class Engine:
             if not path.is_absolute():
                 path = self.repo_root / path
             return path.is_file() and os.access(path, os.X_OK)
-        return shutil.which(entry) is not None
+        return resolve_executable(entry) is not None
 
     def _build_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
         config = self.config.app_server

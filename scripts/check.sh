@@ -58,6 +58,9 @@ echo "Linting Python (ruff)..."
 echo "Linting injected context hints..."
 "$PYTHON_BIN" scripts/check_injected_context.py
 
+echo "Linting command resolution..."
+"$PYTHON_BIN" scripts/check_command_resolution.py
+
 echo "Checking work docs..."
 "$PYTHON_BIN" scripts/check_docs.py
 

@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import shlex
-import shutil
 import socket
 import time
 from pathlib import Path
@@ -21,7 +20,7 @@ from ...core.locks import process_alive
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
-from ...core.utils import resolve_opencode_binary
+from ...core.utils import resolve_executable, resolve_opencode_binary
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
 from ...manifest import load_manifest
 from ...voice import VoiceConfig, VoiceService
@@ -115,7 +114,7 @@ def _command_available(command: list[str], *, workspace_root: Path) -> bool:
         if not path.is_absolute():
             path = workspace_root / path
         return path.is_file() and os.access(path, os.X_OK)
-    return shutil.which(entry) is not None
+    return resolve_executable(entry) is not None
 
 
 def _build_opencode_supervisor(

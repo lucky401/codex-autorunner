@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import shlex
-import shutil
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,7 +42,7 @@ from ..core.usage import (
     get_hub_usage_summary_cached,
     parse_iso_datetime,
 )
-from ..core.utils import resolve_opencode_binary
+from ..core.utils import resolve_executable, resolve_opencode_binary
 from ..housekeeping import run_housekeeping_once
 from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
@@ -264,7 +263,7 @@ def _command_available(command: list[str], *, workspace_root: Path) -> bool:
         if not path.is_absolute():
             path = workspace_root / path
         return path.is_file() and os.access(path, os.X_OK)
-    return shutil.which(entry) is not None
+    return resolve_executable(entry) is not None
 
 
 def _build_opencode_supervisor(
