@@ -409,6 +409,18 @@ class DocChatService:
         with self.engine.log_path.open("a", encoding="utf-8") as f:
             f.write(line)
 
+    def _log_output(
+        self, chat_id: str, text: Optional[str], label: str = "stdout"
+    ) -> None:
+        if text is None:
+            return
+        lines = text.splitlines()
+        if not lines:
+            self._log(chat_id, f"{label}: ")
+            return
+        for line in lines:
+            self._log(chat_id, f"{label}: {line}")
+
     def _doc_pointer(self, targets: Optional[tuple[str, ...]]) -> str:
         config = self._repo_config()
         if not targets:
@@ -1276,6 +1288,7 @@ class DocChatService:
         allowed_kinds = ALLOWED_DOC_KINDS
         unexpected: list[str] = []
         config = self._repo_config()
+        self._log_output(chat_id, response_text or output)
         for kind in ALLOWED_DOC_KINDS:
             path = config.doc_path(kind)
             after = path.read_text(encoding="utf-8")
