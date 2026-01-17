@@ -893,6 +893,57 @@ class TelegramBotService(
     ) -> None:
         key = self._resolve_topic_key(chat_id, thread_id)
         record = self._router.get_topic(key)
+        if record and record.agent == "opencode":
+            session_id = record.active_thread_id
+            workspace_path = record.workspace_path
+            if (
+                not session_id
+                or self._opencode_supervisor is None
+                or not isinstance(workspace_path, str)
+                or not workspace_path
+            ):
+                runtime.interrupt_requested = False
+                if runtime.interrupt_message_id is not None:
+                    await self._edit_message_text(
+                        chat_id,
+                        runtime.interrupt_message_id,
+                        "Interrupt failed (OpenCode unavailable).",
+                    )
+                    runtime.interrupt_message_id = None
+                    runtime.interrupt_turn_id = None
+                return
+            try:
+                client = await self._opencode_supervisor.get_client(
+                    Path(workspace_path)
+                )
+                await client.abort(session_id)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.interrupt.failed",
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    exc=exc,
+                )
+                if (
+                    runtime.interrupt_message_id is not None
+                    and runtime.interrupt_turn_id == turn_id
+                ):
+                    await self._edit_message_text(
+                        chat_id,
+                        runtime.interrupt_message_id,
+                        "Interrupt failed (OpenCode error).",
+                    )
+                runtime.interrupt_message_id = None
+                runtime.interrupt_turn_id = None
+                runtime.interrupt_requested = False
+                return
+            runtime.interrupt_message_id = None
+            runtime.interrupt_turn_id = None
+            runtime.interrupt_requested = False
+            return
         client = await self._client_for_workspace(
             record.workspace_path if record else None
         )
