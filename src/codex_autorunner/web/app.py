@@ -8,10 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from fastapi import (
-    FastAPI,
-    HTTPException,
-)
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
@@ -39,7 +36,6 @@ from ..core.optional_dependencies import require_optional_dependencies
 from ..core.request_context import get_request_id
 from ..core.snapshot import SnapshotService
 from ..core.state import load_state, persist_session_registry
-from ..core.utils import resolve_opencode_binary
 from ..core.usage import (
     UsageError,
     default_codex_home,
@@ -47,6 +43,7 @@ from ..core.usage import (
     get_hub_usage_summary_cached,
     parse_iso_datetime,
 )
+from ..core.utils import resolve_opencode_binary
 from ..housekeeping import run_housekeeping_once
 from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
