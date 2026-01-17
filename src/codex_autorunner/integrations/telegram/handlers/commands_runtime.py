@@ -1247,6 +1247,7 @@ class TelegramCommandHandlers:
                 await self._start_turn_progress(
                     turn_key,
                     ctx=ctx,
+                    agent=self._effective_agent(record),
                     model=record.model,
                     label="working",
                 )
@@ -4172,6 +4173,7 @@ class TelegramCommandHandlers:
                 await self._start_turn_progress(
                     turn_key,
                     ctx=ctx,
+                    agent=self._effective_agent(record),
                     model=record.model,
                     label="working",
                 )
