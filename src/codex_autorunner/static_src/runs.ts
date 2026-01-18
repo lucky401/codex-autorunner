@@ -49,6 +49,10 @@ const runsState: RunsState = {
 
 let closeDetailsModal: (() => void) | null = null;
 
+const RUN_OUTPUT_MAX_LINES = 160;
+const RUN_DIFF_MAX_LINES = 400;
+const RUN_PLAN_MAX_LINES = 120;
+
 interface UIElements {
   refresh: HTMLElement | null;
   tableBody: HTMLElement | null;
@@ -111,6 +115,15 @@ function formatDuration(seconds: number | null | undefined): string {
 function formatNumber(value: number | null | undefined): string {
   if (typeof value !== "number" || Number.isNaN(value)) return "–";
   return value.toLocaleString();
+}
+
+function truncateLines(text: string, maxLines: number): string {
+  if (!text) return "";
+  const lines = text.split("\n");
+  if (lines.length <= maxLines) return text;
+  const trimmed = lines.slice(0, maxLines);
+  trimmed.push(`… (${lines.length - maxLines} more lines)`);
+  return trimmed.join("\n");
 }
 
 function runStatus(entry: RunEntry): string {
@@ -234,27 +247,6 @@ function renderTodoAnalytics(): void {
   }
 }
 
-async function loadArtifact(runId: number, kind: string, targetEl: HTMLElement | null): Promise<void> {
-  if (!targetEl) return;
-  targetEl.textContent = "Loading…";
-  try {
-    const text = await api(`/api/runs/${runId}/${kind}`);
-    if (typeof text === "string") {
-      targetEl.textContent = text || "Not available.";
-    } else if (text !== null && text !== undefined) {
-      targetEl.textContent = JSON.stringify(text, null, 2);
-    } else {
-      targetEl.textContent = "Not available.";
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "";
-    targetEl.textContent =
-      message.includes("401") || message.includes("403") || message.includes("404")
-        ? "Not available."
-        : "Unable to load.";
-  }
-}
-
 interface PlanStep {
   step?: string;
   task?: string;
@@ -319,7 +311,7 @@ async function loadPlan(runId: number): Promise<void> {
       planData = planRaw;
     }
     const formatted = formatPlan(planData);
-    ui.modalPlan.textContent = formatted || "Not available.";
+    ui.modalPlan.textContent = formatted ? truncateLines(formatted, RUN_PLAN_MAX_LINES) : "Not available.";
   } catch (err) {
     const message = err instanceof Error ? err.message : "";
     ui.modalPlan.textContent =
@@ -329,41 +321,48 @@ async function loadPlan(runId: number): Promise<void> {
   }
 }
 
-function stripLogPrefix(line: string): string {
-  return line
-    .replace(/^\[[^\]]*]\s*/, "")
-    .replace(/^run=\d+\s*/, "")
-    .replace(/^(stdout|stderr):\s*/i, "")
-    .replace(/^doc-chat id=[a-f0-9]+ stdout:\s*/i, "")
-    .trimEnd();
-}
-
-function extractFinalOutput(logText: string): string {
-  if (!logText) return "";
-  const lines = logText.split("\n");
-  const outputs: string[] = [];
-  lines.forEach((line) => {
-    const stripped = stripLogPrefix(line).trimStart();
-    if (!stripped) return;
-    if (/^Agent:\s*/i.test(stripped)) {
-      outputs.push(stripped.replace(/^Agent:\s*/i, ""));
-    }
-  });
-  if (!outputs.length) return "";
-  return outputs.join("\n").trim();
-}
-
 async function loadFinalOutput(runId: number): Promise<void> {
   if (!ui.modalOutput) return;
   ui.modalOutput.textContent = "Loading…";
   try {
-    const payload = await api(`/api/logs?run_id=${runId}`);
-    const logText = typeof (payload as { log?: string })?.log === "string" ? (payload as { log?: string }).log : "";
-    const output = extractFinalOutput(logText);
-    ui.modalOutput.textContent = output || "Not available.";
+    const text = await api(`/api/runs/${runId}/output`);
+    if (typeof text === "string" && text.trim()) {
+      ui.modalOutput.textContent = truncateLines(text, RUN_OUTPUT_MAX_LINES);
+      return;
+    }
+    if (text !== null && text !== undefined) {
+      const formatted = JSON.stringify(text, null, 2);
+      ui.modalOutput.textContent = truncateLines(formatted, RUN_OUTPUT_MAX_LINES);
+      return;
+    }
+    ui.modalOutput.textContent = "Not available.";
   } catch (err) {
     const message = err instanceof Error ? err.message : "";
     ui.modalOutput.textContent =
+      message.includes("401") || message.includes("403") || message.includes("404")
+        ? "Not available."
+        : "Unable to load.";
+  }
+}
+
+async function loadDiff(runId: number): Promise<void> {
+  if (!ui.modalDiff) return;
+  ui.modalDiff.textContent = "Loading…";
+  try {
+    const text = await api(`/api/runs/${runId}/diff`);
+    if (typeof text === "string" && text.trim()) {
+      ui.modalDiff.textContent = truncateLines(text, RUN_DIFF_MAX_LINES);
+      return;
+    }
+    if (text !== null && text !== undefined) {
+      const formatted = JSON.stringify(text, null, 2);
+      ui.modalDiff.textContent = truncateLines(formatted, RUN_DIFF_MAX_LINES);
+      return;
+    }
+    ui.modalDiff.textContent = "Not available.";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    ui.modalDiff.textContent =
       message.includes("401") || message.includes("403") || message.includes("404")
         ? "Not available."
         : "Unable to load.";
@@ -440,7 +439,7 @@ function openRunDetails(run: RunEntry): void {
   renderTokenBreakdown(run);
   renderCompletedTodos(run);
   if (ui.modalPlan) loadPlan(run.run_id);
-  if (ui.modalDiff) loadArtifact(run.run_id, "diff", ui.modalDiff);
+  if (ui.modalDiff) loadDiff(run.run_id);
   if (ui.modalOutput) loadFinalOutput(run.run_id);
   const triggerEl = document.activeElement;
   closeDetailsModal = openModal(ui.modal, {
