@@ -29,7 +29,7 @@ from ....agents.opencode.runtime import (
     split_model_id,
 )
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
-from ....core.config import load_config
+from ....core.config import load_repo_config
 from ....core.injected_context import wrap_injected_context
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
@@ -1945,7 +1945,7 @@ class TelegramCommandHandlers:
             )
             return prompt_text, False
         try:
-            repo_config = load_config(repo_root)
+            repo_config = load_repo_config(repo_root)
             raw_config = repo_config.raw if repo_config else None
         except Exception:
             raw_config = None

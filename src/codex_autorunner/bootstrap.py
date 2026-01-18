@@ -6,11 +6,9 @@ from .core.about_car import ensure_about_car_file_for_repo
 from .core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
-    find_nearest_hub_config_path,
-    load_config_data,
-    repo_overrides_from_hub,
-    resolve_config_data,
-    resolve_repo_config_data,
+    REPO_OVERRIDE_FILENAME,
+    ConfigError,
+    resolve_hub_config_data,
 )
 from .core.utils import atomic_write
 from .manifest import load_manifest
@@ -57,33 +55,34 @@ def _seed_doc(path: Path, force: bool, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def write_repo_config(repo_root: Path, force: bool = False) -> Path:
-    config_path = repo_root / CONFIG_FILENAME
-    if config_path.exists() and not force:
-        return config_path
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    hub_config_path = find_nearest_hub_config_path(repo_root.parent)
-    hub_overrides = None
-    if hub_config_path is not None:
-        hub_data = load_config_data(hub_config_path)
-        hub_overrides = repo_overrides_from_hub(hub_data)
-    with config_path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(
-            resolve_repo_config_data(repo_root, hub_overrides=hub_overrides),
-            f,
-            sort_keys=False,
-        )
-    return config_path
-
-
 def write_hub_config(hub_root: Path, force: bool = False) -> Path:
     config_path = hub_root / CONFIG_FILENAME
     if config_path.exists() and not force:
+        try:
+            data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            raise ConfigError(
+                f"Invalid YAML in existing hub config {config_path}: {exc}. "
+                "Back up the file or delete it, or rerun with --force to overwrite."
+            ) from exc
+        if not isinstance(data, dict):
+            raise ConfigError(
+                f"Existing hub config {config_path} must be a mapping. "
+                "Back up the file or delete it, or rerun with --force to overwrite."
+            )
+        mode = data.get("mode")
+        if mode != "hub":
+            raise ConfigError(
+                f"Existing config at {config_path} is not a hub config "
+                f"(mode: {mode!r}). Move repo overrides into "
+                f"{hub_root / REPO_OVERRIDE_FILENAME} or back up and delete the file, "
+                "then rerun. Use --force to overwrite it."
+            )
         return config_path
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(
-            resolve_config_data(hub_root, "hub"),
+            resolve_hub_config_data(hub_root),
             f,
             sort_keys=False,
         )
@@ -96,6 +95,7 @@ def seed_repo_files(
     """
     Initialize a repository's .codex-autorunner directory with defaults.
     This is used by the CLI init path and hub auto-init discovery.
+    Repo config is derived from the hub config; no repo config file is written.
     """
     if git_required and not (repo_root / ".git").exists():
         raise ValueError("Missing .git directory; pass git_required=False to bypass")
@@ -106,8 +106,6 @@ def seed_repo_files(
     gitignore_path = ca_dir / ".gitignore"
     if not gitignore_path.exists() or force:
         gitignore_path.write_text(GITIGNORE_CONTENT, encoding="utf-8")
-
-    write_repo_config(repo_root, force=force)
 
     state_path = ca_dir / "state.json"
     if not state_path.exists() or force:
