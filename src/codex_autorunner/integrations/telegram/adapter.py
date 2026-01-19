@@ -153,6 +153,16 @@ class QuestionOptionCallback:
 
 
 @dataclass(frozen=True)
+class QuestionDoneCallback:
+    request_id: str
+
+
+@dataclass(frozen=True)
+class QuestionCustomCallback:
+    request_id: str
+
+
+@dataclass(frozen=True)
 class QuestionCancelCallback:
     request_id: str
 
@@ -624,6 +634,18 @@ def encode_question_option_callback(
     return data
 
 
+def encode_question_done_callback(request_id: str) -> str:
+    data = f"qdone:{request_id}"
+    _validate_callback_data(data)
+    return data
+
+
+def encode_question_custom_callback(request_id: str) -> str:
+    data = f"qcustom:{request_id}"
+    _validate_callback_data(data)
+    return data
+
+
 def encode_question_cancel_callback(request_id: str) -> str:
     data = f"qcancel:{request_id}"
     _validate_callback_data(data)
@@ -708,6 +730,8 @@ def parse_callback_data(
     Union[
         ApprovalCallback,
         QuestionOptionCallback,
+        QuestionDoneCallback,
+        QuestionCustomCallback,
         QuestionCancelCallback,
         ResumeCallback,
         BindCallback,
@@ -744,6 +768,16 @@ def parse_callback_data(
             question_index=int(question_raw),
             option_index=int(option_raw),
         )
+    if data.startswith("qdone:"):
+        _, _, request_id = data.partition(":")
+        if not request_id:
+            return None
+        return QuestionDoneCallback(request_id=request_id)
+    if data.startswith("qcustom:"):
+        _, _, request_id = data.partition(":")
+        if not request_id:
+            return None
+        return QuestionCustomCallback(request_id=request_id)
     if data.startswith("qcancel:"):
         _, _, request_id = data.partition(":")
         if not request_id:
@@ -845,17 +879,36 @@ def build_question_keyboard(
     *,
     question_index: int,
     options: Sequence[str],
+    multiple: bool = False,
+    custom: bool = True,
+    selected_indices: set[int] | None = None,
     include_cancel: bool = True,
 ) -> dict[str, Any]:
-    rows = [
-        [
-            InlineButton(
-                label,
-                encode_question_option_callback(request_id, question_index, index),
-            )
-        ]
-        for index, label in enumerate(options)
-    ]
+    selected = selected_indices or set()
+    rows = []
+    for index, label in enumerate(options):
+        if multiple and index in selected:
+            display_label = f"✓ {label}"
+        else:
+            display_label = label
+        rows.append(
+            [
+                InlineButton(
+                    display_label,
+                    encode_question_option_callback(request_id, question_index, index),
+                )
+            ]
+        )
+    if custom:
+        rows.append(
+            [
+                InlineButton(
+                    "Type your own answer", encode_question_custom_callback(request_id)
+                )
+            ]
+        )
+    if multiple:
+        rows.append([InlineButton("Done", encode_question_done_callback(request_id))])
     if include_cancel:
         rows.append(
             [InlineButton("Cancel", encode_question_cancel_callback(request_id))]

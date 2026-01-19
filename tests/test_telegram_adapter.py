@@ -11,6 +11,8 @@ from codex_autorunner.integrations.telegram.adapter import (
     CompactCallback,
     PageCallback,
     QuestionCancelCallback,
+    QuestionCustomCallback,
+    QuestionDoneCallback,
     QuestionOptionCallback,
     ResumeCallback,
     ReviewCommitCallback,
@@ -35,6 +37,8 @@ from codex_autorunner.integrations.telegram.adapter import (
     encode_compact_callback,
     encode_page_callback,
     encode_question_cancel_callback,
+    encode_question_custom_callback,
+    encode_question_done_callback,
     encode_question_option_callback,
     encode_resume_callback,
     encode_review_commit_callback,
@@ -222,9 +226,59 @@ def test_parse_question_cancel_callback() -> None:
     assert parsed == QuestionCancelCallback(request_id="req:1")
 
 
+def test_encode_parse_question_done_callback() -> None:
+    data = encode_question_done_callback("req:1")
+    parsed = parse_callback_data(data)
+    assert parsed == QuestionDoneCallback(request_id="req:1")
+
+
+def test_encode_parse_question_custom_callback() -> None:
+    data = encode_question_custom_callback("req:1")
+    parsed = parse_callback_data(data)
+    assert parsed == QuestionCustomCallback(request_id="req:1")
+
+
 def test_build_question_keyboard() -> None:
     keyboard = build_question_keyboard("req:1", question_index=0, options=["Yes"])
     assert keyboard["inline_keyboard"][0][0]["callback_data"].startswith("qopt:")
+
+
+def test_build_question_keyboard_multi_select() -> None:
+    keyboard = build_question_keyboard(
+        "req:1",
+        question_index=0,
+        options=["Yes", "No", "Maybe"],
+        multiple=True,
+    )
+    rows = keyboard["inline_keyboard"]
+    assert len(rows) == 6
+    assert "Done" in rows[4][0]["text"]
+
+
+def test_build_question_keyboard_with_custom() -> None:
+    keyboard = build_question_keyboard(
+        "req:1",
+        question_index=0,
+        options=["Yes", "No"],
+        custom=True,
+    )
+    rows = keyboard["inline_keyboard"]
+    assert len(rows) == 4
+    assert "Type your own answer" in rows[2][0]["text"]
+
+
+def test_build_question_keyboard_selected_indices() -> None:
+    keyboard = build_question_keyboard(
+        "req:1",
+        question_index=0,
+        options=["A", "B", "C"],
+        multiple=True,
+        selected_indices={0, 2},
+    )
+    rows = keyboard["inline_keyboard"]
+    assert rows[0][0]["text"] == "✓ A"
+    assert rows[1][0]["text"] == "B"
+    assert rows[2][0]["text"] == "✓ C"
 
 
 def test_parse_update_photo_caption() -> None:

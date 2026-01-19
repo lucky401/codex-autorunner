@@ -10,6 +10,8 @@ from .adapter import (
     ApprovalCallback,
     CancelCallback,
     QuestionCancelCallback,
+    QuestionCustomCallback,
+    QuestionDoneCallback,
     QuestionOptionCallback,
     TelegramUpdate,
     allowlist_allows,
@@ -96,7 +98,14 @@ async def _dispatch_callback(
         return
     parsed = parse_callback_data(callback.data)
     should_bypass_queue = isinstance(
-        parsed, (ApprovalCallback, QuestionOptionCallback, QuestionCancelCallback)
+        parsed,
+        (
+            ApprovalCallback,
+            QuestionOptionCallback,
+            QuestionDoneCallback,
+            QuestionCustomCallback,
+            QuestionCancelCallback,
+        ),
     ) or (isinstance(parsed, CancelCallback) and parsed.kind == "interrupt")
     if context.topic_key:
         if not should_bypass_queue:
