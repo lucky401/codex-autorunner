@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional, Sequence
+from typing import Any, Sequence, Union
 
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ..adapter import (
     QuestionCancelCallback,
+    QuestionCustomCallback,
+    QuestionDoneCallback,
     QuestionOptionCallback,
     TelegramCallbackQuery,
+    TelegramMessage,
     build_question_keyboard,
 )
 from ..config import DEFAULT_APPROVAL_TIMEOUT_SECONDS
@@ -24,7 +27,9 @@ def _extract_question_text(question: dict[str, Any]) -> str:
     return "Question"
 
 
-def _extract_question_options(question: dict[str, Any]) -> list[str]:
+def _extract_question_options(question: dict[str, Any]) -> tuple[list[str], bool, bool]:
+    multiple = bool(question.get("multiple"))
+    custom = question.get("custom", True)
     for key in ("options", "choices"):
         raw = question.get(key)
         if isinstance(raw, list):
@@ -39,8 +44,8 @@ def _extract_question_options(question: dict[str, Any]) -> list[str]:
                         if isinstance(value, str) and value.strip():
                             options.append(value.strip())
                             break
-            return options
-    return []
+            return options, multiple, custom
+    return [], multiple, custom
 
 
 def _format_question_prompt(question: dict[str, Any], *, index: int, total: int) -> str:
@@ -50,6 +55,40 @@ def _format_question_prompt(question: dict[str, Any], *, index: int, total: int)
     else:
         prefix = "Question"
     return f"{prefix}:\n{title}"
+
+
+async def handle_custom_text_input(handlers: Any, message: TelegramMessage) -> bool:
+    text = message.text or ""
+    if not text:
+        return False
+    for request_id, pending in list(handlers._pending_questions.items()):
+        if (
+            pending.awaiting_custom_input
+            and pending.chat_id == message.chat_id
+            and (pending.thread_id is None or pending.thread_id == message.thread_id)
+        ):
+            handlers._pending_questions.pop(request_id, None)
+            if not pending.future.done():
+                pending.future.set_result(text)
+            log_event(
+                handlers._logger,
+                logging.INFO,
+                "telegram.question.custom_input",
+                request_id=request_id,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                text_length=len(text),
+            )
+            if pending.message_id is not None:
+                await handlers._edit_message_text(
+                    pending.chat_id,
+                    pending.message_id,
+                    f"Selected: {text}",
+                    reply_markup={"inline_keyboard": []},
+                )
+            await handlers._delete_message(message.chat_id, message.message_id)
+            return True
+    return False
 
 
 class TelegramQuestionHandlers:
@@ -70,7 +109,7 @@ class TelegramQuestionHandlers:
             return None
         answers: list[list[str]] = []
         for index, question in enumerate(questions):
-            options = _extract_question_options(question)
+            options, multiple, custom = _extract_question_options(question)
             if not options:
                 answers.append([])
                 continue
@@ -79,7 +118,11 @@ class TelegramQuestionHandlers:
             )
             try:
                 keyboard = build_question_keyboard(
-                    request_id, question_index=index, options=options
+                    request_id,
+                    question_index=index,
+                    options=options,
+                    multiple=multiple,
+                    custom=custom,
                 )
             except ValueError:
                 log_event(
@@ -137,7 +180,7 @@ class TelegramQuestionHandlers:
             )
             created_at = now_iso()
             loop = asyncio.get_running_loop()
-            future: asyncio.Future[Optional[int]] = loop.create_future()
+            future: asyncio.Future[Union[list[int], str, None]] = loop.create_future()
             pending = PendingQuestion(
                 request_id=request_id,
                 turn_id=str(turn_id),
@@ -151,11 +194,15 @@ class TelegramQuestionHandlers:
                 prompt=prompt,
                 options=options,
                 future=future,
+                multiple=multiple,
+                custom=custom,
+                selected_indices=set(),
+                awaiting_custom_input=False,
             )
             self._pending_questions[request_id] = pending
             self._touch_cache_timestamp("pending_questions", request_id)
             try:
-                selected_index = await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     future, timeout=DEFAULT_APPROVAL_TIMEOUT_SECONDS
                 )
             except asyncio.TimeoutError:
@@ -181,17 +228,24 @@ class TelegramQuestionHandlers:
             except asyncio.CancelledError:
                 self._pending_questions.pop(request_id, None)
                 raise
-            if selected_index is None:
+            if result is None:
                 return None
-            if selected_index < 0 or selected_index >= len(options):
-                return None
-            answers.append([options[selected_index]])
+            if isinstance(result, str):
+                answers.append([result])
+            else:
+                selected_options = [options[i] for i in result if 0 <= i < len(options)]
+                answers.append(selected_options)
         return answers
 
     async def _handle_question_callback(
         self,
         callback: TelegramCallbackQuery,
-        parsed: QuestionOptionCallback | QuestionCancelCallback,
+        parsed: (
+            QuestionOptionCallback
+            | QuestionDoneCallback
+            | QuestionCustomCallback
+            | QuestionCancelCallback
+        ),
     ) -> None:
         pending = self._pending_questions.get(parsed.request_id)
         if pending is None:
@@ -221,31 +275,115 @@ class TelegramQuestionHandlers:
                     reply_markup={"inline_keyboard": []},
                 )
             return
-        if parsed.question_index != pending.question_index:
-            await self._answer_callback(callback, "Selection expired")
-            return
-        if parsed.option_index < 0 or parsed.option_index >= len(pending.options):
-            await self._answer_callback(callback, "Invalid selection")
-            return
-        self._pending_questions.pop(parsed.request_id, None)
-        if not pending.future.done():
-            pending.future.set_result(parsed.option_index)
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.question.selected",
-            request_id=parsed.request_id,
-            question_index=parsed.question_index,
-            option_index=parsed.option_index,
-            chat_id=callback.chat_id,
-            thread_id=callback.thread_id,
-        )
-        await self._answer_callback(callback, "Selected")
-        if pending.message_id is not None:
-            selection = pending.options[parsed.option_index]
-            await self._edit_message_text(
+        if isinstance(parsed, QuestionCustomCallback):
+            if not pending.custom:
+                await self._answer_callback(callback, "Custom input disabled")
+                return
+            pending.awaiting_custom_input = True
+            await self._answer_callback(callback, "Enter your answer below")
+            await self._send_message(
                 pending.chat_id,
-                pending.message_id,
-                f"Selected: {selection}",
-                reply_markup={"inline_keyboard": []},
+                "Please type your custom answer:",
+                thread_id=pending.thread_id,
             )
+            return
+        if isinstance(parsed, QuestionDoneCallback):
+            if not pending.multiple:
+                await self._answer_callback(callback, "Invalid for single-select")
+                return
+            if not pending.selected_indices:
+                await self._answer_callback(callback, "No selections")
+                return
+            self._pending_questions.pop(parsed.request_id, None)
+            if not pending.future.done():
+                pending.future.set_result(list(pending.selected_indices))
+            selections = ", ".join(pending.options[i] for i in pending.selected_indices)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.question.done",
+                request_id=parsed.request_id,
+                question_index=pending.question_index,
+                selections=selections,
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+            )
+            await self._answer_callback(callback, "Done")
+            if pending.message_id is not None:
+                await self._edit_message_text(
+                    pending.chat_id,
+                    pending.message_id,
+                    f"Selected: {selections}",
+                    reply_markup={"inline_keyboard": []},
+                )
+            return
+        if isinstance(parsed, QuestionOptionCallback):
+            if parsed.question_index != pending.question_index:
+                await self._answer_callback(callback, "Selection expired")
+                return
+            if parsed.option_index < 0 or parsed.option_index >= len(pending.options):
+                await self._answer_callback(callback, "Invalid selection")
+                return
+            if not pending.multiple:
+                self._pending_questions.pop(parsed.request_id, None)
+                if not pending.future.done():
+                    pending.future.set_result([parsed.option_index])
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.question.selected",
+                    request_id=parsed.request_id,
+                    question_index=parsed.question_index,
+                    option_index=parsed.option_index,
+                    chat_id=callback.chat_id,
+                    thread_id=callback.thread_id,
+                )
+                await self._answer_callback(callback, "Selected")
+                if pending.message_id is not None:
+                    selection = pending.options[parsed.option_index]
+                    await self._edit_message_text(
+                        pending.chat_id,
+                        pending.message_id,
+                        f"Selected: {selection}",
+                        reply_markup={"inline_keyboard": []},
+                    )
+                return
+            if parsed.option_index in pending.selected_indices:
+                pending.selected_indices.remove(parsed.option_index)
+                display_msg = "Deselected"
+            else:
+                pending.selected_indices.add(parsed.option_index)
+                display_msg = "Selected"
+            updated_keyboard = build_question_keyboard(
+                parsed.request_id,
+                question_index=pending.question_index,
+                options=pending.options,
+                multiple=pending.multiple,
+                custom=pending.custom,
+                selected_indices=pending.selected_indices,
+                include_cancel=True,
+            )
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.question.toggle",
+                request_id=parsed.request_id,
+                question_index=parsed.question_index,
+                option_index=parsed.option_index,
+                selected=parsed.option_index in pending.selected_indices,
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+            )
+            await self._answer_callback(callback, display_msg)
+            if pending.message_id is not None:
+                selections = ", ".join(
+                    pending.options[i] for i in pending.selected_indices
+                )
+                new_prompt = f"{pending.prompt}\n\nSelected: {selections or 'None'}"
+                await self._edit_message_text(
+                    pending.chat_id,
+                    pending.message_id,
+                    new_prompt,
+                    reply_markup=updated_keyboard,
+                )
+            return

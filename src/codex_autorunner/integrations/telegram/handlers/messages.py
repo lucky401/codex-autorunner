@@ -18,6 +18,7 @@ from ..adapter import (
     parse_command,
 )
 from ..config import TelegramMediaCandidate
+from .questions import handle_custom_text_input
 
 MEDIA_BATCH_WINDOW_SECONDS = 1.0
 IMAGE_CONTENT_TYPES = {
@@ -89,6 +90,11 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
         if placeholder_id is not None:
             await handlers._delete_message(message.chat_id, placeholder_id)
         return
+
+    if trimmed_text and not has_media:
+        custom_handled = await handle_custom_text_input(handlers, message)
+        if custom_handled:
+            return
 
     should_bypass = False
     if trimmed_text:

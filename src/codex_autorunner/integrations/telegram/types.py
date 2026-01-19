@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, Union
 
 from ..app_server.client import ApprovalDecision
 from .helpers import ModelOption
@@ -35,7 +35,11 @@ class PendingQuestion:
     question_index: int
     prompt: str
     options: list[str]
-    future: asyncio.Future[Optional[int]]
+    future: asyncio.Future[Union[list[int], str, None]]
+    multiple: bool = False
+    custom: bool = True
+    selected_indices: set[int] = field(default_factory=set)
+    awaiting_custom_input: bool = False
 
 
 @dataclass
