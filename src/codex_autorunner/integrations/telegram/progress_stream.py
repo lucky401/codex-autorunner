@@ -36,6 +36,7 @@ class ProgressAction:
     text: str
     status: str
     item_id: Optional[str] = None
+    subagent_label: Optional[str] = None
 
 
 @dataclass
@@ -72,12 +73,19 @@ class TurnProgressTracker:
         item_id: Optional[str] = None,
         track_output: bool = False,
         track_thinking: bool = False,
+        subagent_label: Optional[str] = None,
     ) -> None:
         normalized = _normalize_text(text)
         if not normalized:
             return
         self.actions.append(
-            ProgressAction(label=label, text=normalized, status=status, item_id=item_id)
+            ProgressAction(
+                label=label,
+                text=normalized,
+                status=status,
+                item_id=item_id,
+                subagent_label=subagent_label,
+            )
         )
         self.step += 1
         if len(self.actions) > 100:
@@ -113,6 +121,7 @@ class TurnProgressTracker:
         status: str,
         *,
         label: Optional[str] = None,
+        subagent_label: Optional[str] = None,
     ) -> bool:
         if not item_id:
             return False
@@ -120,6 +129,8 @@ class TurnProgressTracker:
             if action.item_id == item_id:
                 if label:
                     action.label = label
+                if subagent_label:
+                    action.subagent_label = subagent_label
                 self.update_action(index, text, status)
                 return True
         return False
@@ -182,15 +193,32 @@ def render_progress_text(
         elif len(actions) > tracker.max_actions:
             actions = actions[-tracker.max_actions :]
     lines = [header]
+    last_subagent_label = None
     for action in actions:
         if action is thinking_action:
-            if len(lines) > 1 and lines[-1] != "":
-                lines.append("")
-            icon = "🧠"
-            lines.append(f"{icon} {action.text}")
+            if action.subagent_label:
+                if last_subagent_label != action.subagent_label:
+                    if len(lines) > 1 and lines[-1] != "":
+                        lines.append("")
+                    lines.append(f"--- {action.subagent_label} ---")
+                    last_subagent_label = action.subagent_label
+                lines.append(f"🧠 {action.text}")
+            else:
+                if len(lines) > 1 and lines[-1] != "":
+                    lines.append("")
+                icon = "🧠"
+                lines.append(f"{icon} {action.text}")
+                last_subagent_label = None
         else:
+            if action.subagent_label and last_subagent_label != action.subagent_label:
+                if len(lines) > 1 and lines[-1] != "":
+                    lines.append("")
+                lines.append(f"--- {action.subagent_label} ---")
+                last_subagent_label = action.subagent_label
             icon = STATUS_ICONS.get(action.status, STATUS_ICONS["running"])
             lines.append(f"{icon} {action.label}: {action.text}")
+            if not action.subagent_label:
+                last_subagent_label = None
     message = "\n".join(lines)
     if len(message) <= max_length:
         return message

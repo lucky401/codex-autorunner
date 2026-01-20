@@ -100,6 +100,7 @@ from ..constants import (
 from ..handlers import messages as message_handlers
 from ..helpers import (
     _approval_age_seconds,
+    _clean_reasoning_artifacts,
     _clear_pending_compact_seed,
     _clear_policy_overrides,
     _coerce_model_options,
@@ -1342,7 +1343,7 @@ class TelegramCommandHandlers:
             outcome.token_usage, outcome.elapsed_seconds
         )
         metrics_mode = self._metrics_mode()
-        response_text = outcome.response
+        response_text = _clean_reasoning_artifacts(outcome.response)
         if metrics and metrics_mode == "append_to_response":
             response_text = f"{response_text}\n\n{metrics}"
         response_sent = await self._deliver_turn_response(
@@ -1987,12 +1988,14 @@ class TelegramCommandHandlers:
                                             label_text,
                                             "update",
                                             label=subagent_label,
+                                            subagent_label=subagent_label,
                                         ):
                                             tracker.add_action(
                                                 subagent_label,
                                                 label_text,
                                                 "update",
                                                 item_id=buffer_key,
+                                                subagent_label=subagent_label,
                                             )
                             elif part_type == "tool":
                                 tool_id = part.get("callID") or part.get("id")
@@ -2109,12 +2112,14 @@ class TelegramCommandHandlers:
                                         label,
                                         mapped_status,
                                         label=subagent_label,
+                                        subagent_label=subagent_label,
                                     ):
                                         tracker.add_action(
                                             subagent_label,
                                             label,
                                             mapped_status,
                                             item_id=scoped_tool_id,
+                                            subagent_label=subagent_label,
                                         )
                             elif part_type == "patch":
                                 patch_id = part.get("id") or part.get("hash")
@@ -6658,12 +6663,14 @@ class TelegramCommandHandlers:
                                         label_text,
                                         "update",
                                         label=subagent_label,
+                                        subagent_label=subagent_label,
                                     ):
                                         tracker.add_action(
                                             subagent_label,
                                             label_text,
                                             "update",
                                             item_id=buffer_key,
+                                            subagent_label=subagent_label,
                                         )
                         elif part_type == "tool":
                             tool_id = part.get("callID") or part.get("id")
@@ -6778,12 +6785,14 @@ class TelegramCommandHandlers:
                                     label,
                                     mapped_status,
                                     label=subagent_label,
+                                    subagent_label=subagent_label,
                                 ):
                                     tracker.add_action(
                                         subagent_label,
                                         label,
                                         mapped_status,
                                         item_id=scoped_tool_id,
+                                        subagent_label=subagent_label,
                                     )
                         elif part_type == "patch":
                             patch_id = part.get("id") or part.get("hash")
@@ -6995,7 +7004,7 @@ class TelegramCommandHandlers:
             token_usage = self._token_usage_by_thread.get(review_session_id)
         metrics = self._format_turn_metrics_text(token_usage, turn_elapsed_seconds)
         metrics_mode = self._metrics_mode()
-        response_text = output or "No response."
+        response_text = _clean_reasoning_artifacts(output) if output else "No response."
         if metrics and metrics_mode == "append_to_response":
             response_text = f"{response_text}\n\n{metrics}"
         response_sent = await self._deliver_turn_response(

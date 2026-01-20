@@ -235,6 +235,7 @@ class TelegramBotService(
         self._token_usage_by_turn: "collections.OrderedDict[str, dict[str, Any]]" = (
             collections.OrderedDict()
         )
+        self._pending_context_usage: dict[str, dict[str, Any]] = {}
         self._outbox_task: Optional[asyncio.Task[None]] = None
         self._cache_cleanup_task: Optional[asyncio.Task[None]] = None
         self._cache_timestamps: dict[str, dict[object, float]] = {}

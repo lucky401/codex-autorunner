@@ -1915,6 +1915,22 @@ def _extract_first_bold_span(text: str) -> Optional[str]:
     return content or None
 
 
+def _clean_reasoning_artifacts(text: str) -> str:
+    import re
+
+    patterns = [
+        r"^(?:Thinking|thinking|Reasoning|reasoning)[:\s]*[^\n]*[\n]*",
+        r"^[^\n]*(?:I['m\s]*(?:thinking|reasoning))[:\s]*[^\n]*[\n]*",
+        r"^(?:<thought>|<thinking>|<reasoning>)",
+        r"^(?:<\/thought>|<\/thinking>|<\/reasoning>)",
+        r"^—\s*(?:thinking|reasoning)[^\n]*[\n]*",
+        r"^\*\*(?:thinking|reasoning)[:\s]*[^\n]*\*\*[\n]*",
+    ]
+    for pattern in patterns:
+        text = re.sub(pattern, "", text, flags=re.MULTILINE | re.IGNORECASE)
+    return text.strip()
+
+
 def _compose_agent_response(
     messages: list[str],
     *,

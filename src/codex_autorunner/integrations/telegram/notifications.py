@@ -228,6 +228,12 @@ class TelegramNotificationHandlers:
             max_output_chars=self._config.progress_stream.max_output_chars,
         )
         self._turn_progress_trackers[turn_key] = tracker
+        turn_id = turn_key[1]
+        if turn_id in self._pending_context_usage:
+            pending_usage = self._pending_context_usage.pop(turn_id)
+            percent = _extract_context_usage_percent(pending_usage)
+            if percent is not None:
+                tracker.set_context_usage_percent(percent)
         self._turn_progress_rendered.pop(turn_key, None)
         self._turn_progress_updated_at.pop(turn_key, None)
         self._touch_cache_timestamp("progress_trackers", turn_key)
@@ -264,6 +270,8 @@ class TelegramNotificationHandlers:
         heartbeat_task = self._turn_progress_heartbeat_tasks.pop(turn_key, None)
         if heartbeat_task and not heartbeat_task.done():
             heartbeat_task.cancel()
+        turn_id = turn_key[1]
+        self._pending_context_usage.pop(turn_id, None)
 
     async def _note_progress_thinking(
         self, turn_id: str, preview: str, *, thread_id: Optional[str] = None
@@ -293,9 +301,13 @@ class TelegramNotificationHandlers:
         if turn_key is None and len(self._turn_contexts) == 1:
             turn_key = next(iter(self._turn_contexts.keys()))
         if turn_key is None:
+            if turn_id:
+                self._pending_context_usage[turn_id] = token_usage
             return
         tracker = self._turn_progress_trackers.get(turn_key)
         if tracker is None:
+            if turn_id:
+                self._pending_context_usage[turn_id] = token_usage
             return
         tracker.set_context_usage_percent(percent)
         await self._schedule_progress_edit(turn_key)
