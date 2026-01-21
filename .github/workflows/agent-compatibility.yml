@@ -1,0 +1,50 @@
+name: agent-compatibility
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    # Allow manual trigger
+  pull_request:
+    paths:
+      - '.github/workflows/agent-compatibility.yml'
+      - 'src/codex_autorunner/agents/**'
+      - 'scripts/check_protocol_drift.py'
+      - 'scripts/update_vendor_codex_schema.py'
+      - 'scripts/update_vendor_opencode_openapi.py'
+      - 'vendor/protocols/**'
+
+jobs:
+  agent-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: pip install -e .[dev]
+
+      - name: Install Codex
+        run: npm install -g @openai/codex
+
+      - name: Install OpenCode
+        run: npm install -g opencode-ai
+
+      - name: Check protocol drift
+        run: python scripts/check_protocol_drift.py
+
+      - name: Summary
+        run: |
+          echo "## Agent Compatibility Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **OS:** ${{ runner.os }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Python:** 3.11" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Protocol drift check: PASSED" >> $GITHUB_STEP_SUMMARY

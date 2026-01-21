@@ -52,7 +52,7 @@ def _iter_provider_models(models_raw: Any) -> list[tuple[str, dict[str, Any]]]:
 
 
 class OpenCodeHarness(AgentHarness):
-    agent_id: AgentId = "opencode"
+    agent_id: AgentId = AgentId("opencode")
     display_name = "OpenCode"
 
     def __init__(self, supervisor: OpenCodeSupervisor) -> None:
@@ -124,7 +124,7 @@ class OpenCodeHarness(AgentHarness):
         session_id = extract_session_id(result) or result.get("id")
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("OpenCode did not return a session id")
-        return ConversationRef(agent="opencode", id=session_id)
+        return ConversationRef(agent=AgentId("opencode"), id=session_id)
 
     async def list_conversations(self, workspace_root: Path) -> list[ConversationRef]:
         client = await self._supervisor.get_client(workspace_root)
@@ -140,7 +140,9 @@ class OpenCodeHarness(AgentHarness):
         for entry in sessions:
             session_id = extract_session_id(entry) or entry.get("id")
             if isinstance(session_id, str) and session_id:
-                conversations.append(ConversationRef(agent="opencode", id=session_id))
+                conversations.append(
+                    ConversationRef(agent=AgentId("opencode"), id=session_id)
+                )
         return conversations
 
     async def resume_conversation(
@@ -152,7 +154,7 @@ class OpenCodeHarness(AgentHarness):
         except Exception:
             result = {}
         session_id = extract_session_id(result) or conversation_id
-        return ConversationRef(agent="opencode", id=session_id)
+        return ConversationRef(agent=AgentId("opencode"), id=session_id)
 
     async def start_turn(
         self,
