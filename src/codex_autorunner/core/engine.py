@@ -1732,6 +1732,10 @@ class Engine:
                     )
                     self.log_line(run_id, "info: opencode fallback message used")
         finally:
+            # Flush buffered reasoning deltas before cleanup, so partial reasoning is still logged
+            # even when the turn is aborted, times out, or is interrupted.
+            for line in self._opencode_event_formatter.flush_all_reasoning():
+                self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
             stop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await stop_task
