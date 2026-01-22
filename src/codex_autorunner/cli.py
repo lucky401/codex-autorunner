@@ -5,6 +5,7 @@ import logging
 import os
 import shlex
 import subprocess
+import uuid
 from pathlib import Path
 from typing import NoReturn, Optional
 
@@ -1159,6 +1160,73 @@ def telegram_health(
         _raise_exit(f"Telegram health check failed: {exc}", cause=exc)
     except Exception as exc:
         _raise_exit(f"Telegram health check failed: {exc}", cause=exc)
+
+
+@app.command()
+def flow(
+    action: str = typer.Argument(..., help="worker"),
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+    run_id: Optional[str] = typer.Option(
+        None, "--run-id", help="Flow run ID (for worker)"
+    ),
+):
+    """Flow runtime commands."""
+    engine = _require_repo_config(repo, hub)
+
+    if action == "worker":
+        if not run_id:
+            _raise_exit("--run-id is required for worker command")
+        try:
+            run_id = str(uuid.UUID(str(run_id)))
+        except ValueError:
+            _raise_exit("Invalid run_id format; must be a UUID")
+
+        from .core.flows import FlowController
+        from .core.flows.models import FlowRunStatus
+        from .flows.pr_flow import build_pr_flow_definition
+
+        db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
+        artifacts_root = engine.repo_root / ".codex-autorunner" / "flows"
+
+        typer.echo(f"Starting flow worker for run {run_id}")
+
+        async def _run_worker():
+            typer.echo(f"Flow worker started for {run_id}")
+            typer.echo(f"DB path: {db_path}")
+            typer.echo(f"Artifacts root: {artifacts_root}")
+
+            controller = FlowController(
+                definition=build_pr_flow_definition(),
+                db_path=db_path,
+                artifacts_root=artifacts_root,
+            )
+            controller.initialize()
+
+            record = controller.get_status(run_id)
+            if not record:
+                typer.echo(f"Flow run {run_id} not found", err=True)
+                raise typer.Exit(code=1)
+
+            if record.status.is_terminal() and record.status not in {
+                FlowRunStatus.STOPPED,
+                FlowRunStatus.FAILED,
+            }:
+                typer.echo(
+                    f"Flow run {run_id} already completed (status={record.status})"
+                )
+                return
+
+            action = (
+                "Resuming" if record.status != FlowRunStatus.PENDING else "Starting"
+            )
+            typer.echo(f"{action} flow run {run_id} from step: {record.current_step}")
+            final_record = await controller.run_flow(run_id)
+            typer.echo(f"Flow run {run_id} finished with status {final_record.status}")
+
+        asyncio.run(_run_worker())
+    else:
+        _raise_exit(f"Unknown action: {action}")
 
 
 if __name__ == "__main__":

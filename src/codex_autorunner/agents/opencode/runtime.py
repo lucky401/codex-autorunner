@@ -677,7 +677,7 @@ async def opencode_missing_env(
         providers = [entry for entry in payload if isinstance(entry, dict)]
     for provider in providers:
         pid = provider.get("id") or provider.get("providerID")
-        if pid != provider_id:
+        if not pid or pid != provider_id:
             continue
         if _provider_has_auth(pid, workspace_root):
             return []
@@ -761,7 +761,7 @@ async def collect_opencode_output_from_events(
     last_usage_total: Optional[int] = None
     last_context_window: Optional[int] = None
     part_types: dict[str, str] = {}
-    seen_question_request_ids: set[tuple[str, str]] = set()
+    seen_question_request_ids: set[tuple[Optional[str], str]] = set()
     logged_permission_errors: set[str] = set()
     normalized_question_policy = _normalize_question_policy(question_policy)
     logger = logging.getLogger(__name__)
