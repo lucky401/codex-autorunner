@@ -28,7 +28,7 @@ function initRepoShell(): void {
       navBar.insertBefore(backBtn, navBar.firstChild);
     }
     const brand = document.querySelector(".nav-brand");
-    if (brand) {
+  if (brand) {
       const repoName = document.createElement("span");
       repoName.className = "nav-repo-name";
       repoName.textContent = REPO_ID;
@@ -36,12 +36,12 @@ function initRepoShell(): void {
     }
   }
 
-  registerTab("dashboard", "Dashboard");
-  registerTab("messages", "Messages", { hidden: true });
-  registerTab("docs", "Docs");
-  registerTab("runs", "Runs");
+  const defaultTab = REPO_ID ? "tickets" : "analytics";
+
   registerTab("tickets", "Tickets");
-  registerTab("logs", "Logs");
+  registerTab("messages", "Inbox");
+  registerTab("analytics", "Analytics");
+  registerTab("docs", "Docs");
   registerTab("terminal", "Terminal");
 
   const initializedTabs = new Set<string>();
@@ -51,12 +51,14 @@ function initRepoShell(): void {
       initDocs();
     } else if (tabId === "messages") {
       initMessages();
-    } else if (tabId === "logs") {
+    } else if (tabId === "analytics") {
+      initDashboard();
+      initGitHub();
+      void loadState({ notify: false }).catch(() => {});
+      initRuns();
       initLogs();
     } else if (tabId === "tickets") {
       initTicketFlow();
-    } else if (tabId === "runs") {
-      initRuns();
     }
     initializedTabs.add(tabId);
   };
@@ -68,7 +70,7 @@ function initRepoShell(): void {
     lazyInit(tabId as string);
   });
 
-  initTabs();
+  initTabs(defaultTab);
   const activePanel = document.querySelector(".panel.active") as HTMLElement;
   if (activePanel?.id) {
     lazyInit(activePanel.id);
@@ -81,14 +83,10 @@ function initRepoShell(): void {
     },
     { once: true }
   );
-  initDashboard();
   initMessageBell();
   initLiveUpdates();
   initRepoSettingsPanel();
-  initGitHub();
   initMobileCompact();
-
-  loadState();
 
   const repoShell = document.getElementById("repo-shell");
   if (repoShell?.hasAttribute("inert")) {
