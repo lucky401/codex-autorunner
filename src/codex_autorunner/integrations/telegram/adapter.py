@@ -751,12 +751,6 @@ def encode_page_callback(kind: str, page: int) -> str:
     return data
 
 
-def encode_pr_flow_start_callback(slug: str, number: int) -> str:
-    data = f"pr_flow_start:{slug}#{number}"
-    _validate_callback_data(data)
-    return data
-
-
 def encode_compact_callback(action: str) -> str:
     data = f"compact:{action}"
     _validate_callback_data(data)
