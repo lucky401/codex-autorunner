@@ -756,17 +756,7 @@ export class TerminalManager {
   }
 
   async _loadTerminalIdleTimeout() {
-    try {
-      const data = await api(CONSTANTS.API.STATE_ENDPOINT) as unknown;
-      if (
-        data &&
-        typeof data === "object" && data !== null && "terminal_idle_timeout_seconds" in data
-      ) {
-        this.terminalIdleTimeoutSeconds = (data as any).terminal_idle_timeout_seconds;
-      }
-    } catch (_err) {
-      // ignore
-    }
+    // State endpoint removed - terminal idle timeout no longer loaded from /api/state
   }
 
   _getSessionStorageKey() {

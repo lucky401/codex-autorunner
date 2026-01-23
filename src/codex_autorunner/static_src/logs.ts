@@ -1,6 +1,5 @@
-import { api, flash, streamEvents, getUrlParams, updateUrlParams } from "./utils.js";
+import { flash, getUrlParams } from "./utils.js";
 import { publish, subscribe } from "./bus.js";
-import { saveToCache, loadFromCache } from "./cache.js";
 import { CONSTANTS } from "./constants.js";
 
 const logRunIdInput = document.getElementById("log-run-id") as HTMLInputElement | null;
@@ -16,14 +15,12 @@ const analyticsLogsToggle = document.getElementById("analytics-logs-toggle") as 
 
 let stopLogStream: (() => void) | null = null;
 let lastKnownRunId: number | null = null;
-let rawLogLines: string[] = [];
+const rawLogLines: string[] = [];
 let autoScrollEnabled = true;
 let renderedStartIndex = 0;
-let renderedEndIndex = 0;
 let isViewingTail = true;
 let renderState: RenderState | null = null;
-let logContexts: LogContextState[] = [];
-let logContextState: LogContextState = { inPromptBlock: false, inDiffBlock: false };
+const logContexts: LogContextState[] = [];
 
 const DOC_CHAT_META_RE = /doc-chat id=[a-f0-9]+ (result=|exit_code=)/i;
 
@@ -162,7 +159,7 @@ function setLastClassificationType(type: string | null): void {
   lastClassificationType = type;
 }
 
-function isSummaryMode(): boolean {
+function _isSummaryMode(): boolean {
   return !showSummaryToggle || showSummaryToggle.checked;
 }
 
@@ -224,11 +221,6 @@ interface LogContextState {
   inDiffBlock: boolean;
 }
 
-function resetLogContexts(): void {
-  logContexts = [];
-  logContextState = { inPromptBlock: false, inDiffBlock: false };
-}
-
 function initLogsToggle(): void {
   if (!analyticsLogs) return;
   const update = (): void => {
@@ -239,28 +231,6 @@ function initLogsToggle(): void {
   };
   analyticsLogs.addEventListener("toggle", update);
   update();
-}
-
-function updateLogContextForLine(line: string): void {
-  logContexts.push({ ...logContextState });
-  const classification = classifyLine(line, logContextState);
-  if (classification.startDiff) {
-    logContextState.inDiffBlock = true;
-  }
-  if (classification.resetDiff) {
-    logContextState.inDiffBlock = false;
-  }
-  if (classification.type === "prompt-marker") {
-    logContextState.inPromptBlock = true;
-    logContextState.inDiffBlock = false;
-  } else if (classification.type === "prompt-marker-end") {
-    logContextState.inPromptBlock = false;
-  }
-}
-
-function rebuildLogContexts(): void {
-  resetLogContexts();
-  rawLogLines.forEach((line) => updateLogContextForLine(line));
 }
 
 function finalizePromptBlock(): void {
@@ -372,20 +342,6 @@ function appendRenderedLine(line: string, output: HTMLElement): void {
   output.appendChild(div);
 }
 
-function trimLogBuffer(): void {
-  const maxLines = CONSTANTS.UI.MAX_LOG_LINES_IN_MEMORY;
-  if (!maxLines || rawLogLines.length <= maxLines) return;
-  const overflow = rawLogLines.length - maxLines;
-  rawLogLines = rawLogLines.slice(overflow);
-  if (logContexts.length > overflow) {
-    logContexts = logContexts.slice(overflow);
-  } else {
-    logContexts = [];
-  }
-  renderedStartIndex = Math.max(0, renderedStartIndex - overflow);
-  renderedEndIndex = Math.max(0, renderedEndIndex - overflow);
-}
-
 function updateLoadOlderButton(): void {
   if (!loadOlderButton) return;
   if (renderedStartIndex > 0) {
@@ -416,16 +372,6 @@ function applyLogUrlState(): void {
   }
 }
 
-function syncLogUrlState(): void {
-  const runId = logRunIdInput?.value?.trim() || "";
-  const tail = logTailInput?.value?.trim() || "";
-  updateUrlParams({
-    run: runId || null,
-    tail: runId ? null : tail || null,
-    summary: showSummaryToggle?.checked ? null : "0",
-  });
-}
-
 interface RenderLogWindowOptions {
   startIndex?: number | null;
   followTail?: boolean;
@@ -441,7 +387,6 @@ function renderLogWindow({ startIndex = null, followTail = true }: RenderLogWind
     output.textContent = "(empty log)";
     output.dataset.isPlaceholder = "true";
     renderedStartIndex = 0;
-    renderedEndIndex = 0;
     isViewingTail = true;
     updateLoadOlderButton();
     return;
@@ -469,7 +414,7 @@ function renderLogWindow({ startIndex = null, followTail = true }: RenderLogWind
     }
   }
 
-  const showSummary = isSummaryMode();
+  const showSummary = _isSummaryMode();
 
   for (let i = windowStart; i < windowEnd; i += 1) {
     const line = rawLogLines[i];
@@ -501,79 +446,12 @@ function renderLogWindow({ startIndex = null, followTail = true }: RenderLogWind
   finalizePromptBlock();
 
   renderedStartIndex = windowStart;
-  renderedEndIndex = windowEnd;
   isViewingTail = followTail && windowEnd === endIndex;
   updateLoadOlderButton();
 
   if (isViewingTail) {
     scrollLogsToBottom(true);
   }
-}
-
-function appendLogLine(line: string): void {
-  const output = document.getElementById("log-output");
-  if (!output) return;
-  if (output.dataset.isPlaceholder === "true") {
-    output.innerHTML = "";
-    delete output.dataset.isPlaceholder;
-    rawLogLines = [];
-    resetRenderState();
-    resetLogContexts();
-    renderedStartIndex = 0;
-    renderedEndIndex = 0;
-    isViewingTail = true;
-  }
-
-  rawLogLines.push(line);
-  updateLogContextForLine(line);
-  trimLogBuffer();
-
-  if (!isViewingTail) {
-    publish("logs:line", line);
-    updateLoadOlderButton();
-    return;
-  }
-
-  const classification = classifyLine(line, renderState || { inPromptBlock: false, inDiffBlock: false });
-  const showSummary = isSummaryMode();
-
-  setLastClassificationType(classification.type);
-
-  if (showSummary && classification.priority > 2) {
-    if (renderState) {
-      if (classification.type === "prompt-marker-end") {
-        renderState.inPromptBlock = false;
-        renderState.inDiffBlock = false;
-      } else if (classification.type === "prompt-marker") {
-        renderState.inPromptBlock = true;
-        renderState.inDiffBlock = false;
-      }
-    }
-    renderedEndIndex = rawLogLines.length;
-    if (output.childElementCount > CONSTANTS.UI.MAX_LOG_LINES_IN_DOM) {
-      output.firstElementChild?.remove();
-    }
-    renderedStartIndex = Math.max(
-      0,
-      renderedEndIndex - output.childElementCount
-    );
-    updateLoadOlderButton();
-    publish("logs:line", line);
-    return;
-  }
-
-  appendRenderedLine(line, output);
-  renderedEndIndex = rawLogLines.length;
-  if (output.childElementCount > CONSTANTS.UI.MAX_LOG_LINES_IN_DOM) {
-    output.firstElementChild?.remove();
-  }
-  renderedStartIndex = Math.max(
-    0,
-    renderedEndIndex - output.childElementCount
-  );
-  updateLoadOlderButton();
-  publish("logs:line", line);
-  scrollLogsToBottom();
 }
 
 function scrollLogsToBottom(force = false): void {
@@ -609,56 +487,7 @@ function setLogStreamButton(active: boolean): void {
 }
 
 async function loadLogs(): Promise<void> {
-  syncLogUrlState();
-  const runId = logRunIdInput?.value || "";
-  const tail = logTailInput?.value || "200";
-  const params = new URLSearchParams();
-  if (runId) {
-    params.set("run_id", runId);
-  } else if (tail) {
-    params.set("tail", tail);
-  }
-  const path = params.toString()
-    ? `/api/logs?${params.toString()}`
-    : "/api/logs";
-  try {
-    const data = await api(path);
-    const text = typeof data === "string" ? data : (data as { log?: string }).log || "";
-    const output = document.getElementById("log-output");
-    if (!output) return;
-
-    if (text) {
-      rawLogLines = text.split("\n");
-      trimLogBuffer();
-      rebuildLogContexts();
-      delete output.dataset.isPlaceholder;
-      isViewingTail = true;
-      renderLogs();
-
-      if (!runId) {
-        const lines = rawLogLines.slice(-200);
-        saveToCache("logs:tail", lines.join("\n"));
-      }
-    } else {
-      output.textContent = "(empty log)";
-      output.dataset.isPlaceholder = "true";
-      rawLogLines = [];
-      resetRenderState();
-      resetLogContexts();
-      renderedStartIndex = 0;
-      renderedEndIndex = 0;
-      isViewingTail = true;
-      updateLoadOlderButton();
-      if (!runId) {
-        saveToCache("logs:tail", "");
-      }
-    }
-
-    flash("Logs loaded", "success");
-    publish("logs:loaded", { runId, tail, text });
-  } catch (err) {
-    flash((err as Error).message || "Failed to load logs", "error");
-  }
+  flash("Log loading via /api/logs endpoint is no longer available", "error");
 }
 
 function stopLogStreaming(): void {
@@ -671,36 +500,7 @@ function stopLogStreaming(): void {
 }
 
 function startLogStreaming(): void {
-  if (stopLogStream) return;
-  const output = document.getElementById("log-output");
-  if (!output) return;
-  output.textContent = "(listening...)";
-  output.dataset.isPlaceholder = "true";
-  rawLogLines = [];
-  resetRenderState();
-  resetLogContexts();
-  renderedStartIndex = 0;
-  renderedEndIndex = 0;
-  isViewingTail = true;
-  updateLoadOlderButton();
-
-  stopLogStream = streamEvents("/api/logs/stream", {
-    onMessage: (data) => {
-      appendLogLine(data || "");
-    },
-    onError: (err) => {
-      flash(err.message || "Stream error", "error");
-      stopLogStreaming();
-    },
-    onFinish: () => {
-      stopLogStream = null;
-      setLogStreamButton(false);
-      publish("logs:streaming", false);
-    },
-  });
-  setLogStreamButton(true);
-  publish("logs:streaming", true);
-  flash("Streaming logs…", "info");
+  flash("Log streaming via /api/logs/stream endpoint is no longer available", "error");
 }
 
 function syncRunIdPlaceholder(state: { last_run_id?: number } | null): void {
@@ -746,12 +546,7 @@ export function initLogs(): void {
   if (showRunToggle) {
     showRunToggle.addEventListener("change", renderLogs);
   }
-  if (showSummaryToggle) {
-    showSummaryToggle.addEventListener("change", () => {
-      syncLogUrlState();
-      renderLogs();
-    });
-  }
+
 
   if (jumpBottomButton) {
     jumpBottomButton.addEventListener("click", () => {
@@ -783,21 +578,7 @@ export function initLogs(): void {
     output.addEventListener("scroll", updateJumpButtonVisibility);
   }
 
-  const cachedLogs = loadFromCache("logs:tail");
-  if (cachedLogs) {
-    const output = document.getElementById("log-output");
-    if (output) {
-      rawLogLines = (cachedLogs as string).split("\n");
-      if (rawLogLines.length > 0) {
-        trimLogBuffer();
-        rebuildLogContexts();
-        delete output.dataset.isPlaceholder;
-        isViewingTail = true;
-        renderLogs();
-        scrollLogsToBottom(true);
-      }
-    }
-  }
+  
 
   loadLogs();
 }
