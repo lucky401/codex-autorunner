@@ -836,6 +836,11 @@ class TelegramStateStore:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, func, *args)
 
+    def _ensure_connection(self) -> sqlite3.Connection:
+        # Backwards-compatible helper used by older call sites.
+        # _connection_sync() remains the single source of truth for opening the DB.
+        return self._connection_sync()
+
     def _connection_sync(self) -> sqlite3.Connection:
         if self._connection is None:
             conn = connect_sqlite(self._path)
