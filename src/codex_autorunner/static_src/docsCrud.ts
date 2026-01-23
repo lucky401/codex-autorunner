@@ -1,5 +1,4 @@
 import { api, confirmModal, flash, getUrlParams, updateUrlParams } from "./utils.js";
-import { loadState } from "./state.js";
 import { publish } from "./bus.js";
 import { renderTodoPreview } from "./todoPreview.js";
 import {
@@ -241,7 +240,7 @@ export async function saveDoc(): Promise<void> {
     publish("docs:updated", { kind: getActiveDoc(), content });
     if (getActiveDoc() === "todo") {
       renderTodoPreview(content);
-      await loadState({ notify: false });
+      // await loadState({ notify: false }); // Removed - state.ts was deleted
     }
   } catch (err) {
     const error = err as Error;

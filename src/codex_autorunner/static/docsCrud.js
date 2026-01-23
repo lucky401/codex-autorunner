@@ -212,6 +212,7 @@ export async function saveDoc() {
         publish("docs:updated", { kind: getActiveDoc(), content });
         if (getActiveDoc() === "todo") {
             renderTodoPreview(content);
+            // await loadState({ notify: false }); // Removed - state.ts was deleted
         }
     }
     catch (err) {

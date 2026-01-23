@@ -31,6 +31,7 @@ export async function applyDocUpdateFromChat(kind, content, { force = false } = 
     publish("docs:updated", { kind, content });
     if (kind === "todo") {
         renderTodoPreview(content);
+        // loadState({ notify: false }).catch(() => {}); // Removed - state.ts was deleted
     }
     return true;
 }
@@ -56,4 +57,5 @@ export function applySpecIngestDocs(payload) {
     publish("docs:updated", { kind: "opinions", content: docsState.docsCache.opinions });
     publish("docs:updated", { kind: "spec", content: docsState.docsCache.spec });
     publish("docs:updated", { kind: "summary", content: docsState.docsCache.summary });
+    // loadState({ notify: false }).catch(() => {}); // Removed - state.ts was deleted
 }

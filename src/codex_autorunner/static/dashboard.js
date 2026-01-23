@@ -1,4 +1,4 @@
-import { api, flash, statusPill, confirmModal, openModal } from "./utils.js";
+import { api, flash, confirmModal, openModal } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { saveToCache, loadFromCache } from "./cache.js";
 import { renderTodoPreview } from "./todoPreview.js";
@@ -648,6 +648,7 @@ function openSummaryDoc() {
 export function initDashboard() {
     initSettings();
     initUsageChartControls();
+    // initReview(); // Removed - review.ts was deleted
     subscribe("todo:invalidate", () => {
         void loadTodoPreview({ silent: true });
     });
