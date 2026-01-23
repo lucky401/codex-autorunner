@@ -5,6 +5,14 @@ from typing import Any, AsyncGenerator, Dict, Optional
 from ...agents.opencode.client import OpenCodeClient
 from ...agents.opencode.events import SSEEvent
 from .agent_backend import AgentBackend, AgentEvent, AgentEventType, now_iso
+from .run_event import (
+    Completed,
+    Failed,
+    OutputDelta,
+    RunEvent,
+    Started,
+    ToolCall,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -68,6 +76,38 @@ class OpenCodeBackend(AgentBackend):
         async for event in self._yield_events_until_completion():
             yield event
 
+    async def run_turn_events(
+        self, session_id: str, message: str
+    ) -> AsyncGenerator[RunEvent, None]:
+        if session_id:
+            self._session_id = session_id
+        if not self._session_id:
+            self._session_id = await self.start_session(target={}, context={})
+
+        _logger.info("Running turn events on session %s", self._session_id)
+
+        yield Started(timestamp=now_iso(), session_id=self._session_id)
+
+        yield OutputDelta(
+            timestamp=now_iso(), content=message, delta_type="user_message"
+        )
+
+        await self._client.send_message(
+            self._session_id,
+            message=message,
+            agent=self._agent,
+            model=self._model,
+        )
+
+        self._message_count += 1
+
+        try:
+            async for run_event in self._yield_run_events_until_completion():
+                yield run_event
+        except Exception as e:
+            _logger.error("Error during turn execution: %s", e)
+            yield Failed(timestamp=now_iso(), error_message=str(e))
+
     async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
         if session_id:
             self._session_id = session_id
@@ -112,6 +152,64 @@ class OpenCodeBackend(AgentBackend):
         except Exception as e:
             _logger.warning("Error in event collection: %s", e)
             yield AgentEvent.error(error_message=str(e))
+
+    async def _yield_run_events_until_completion(
+        self,
+    ) -> AsyncGenerator[RunEvent, None]:
+        try:
+            async for sse in self._client.stream_events(directory=None):
+                for run_event in self._convert_sse_to_run_event(sse):
+                    yield run_event
+                    if isinstance(run_event, (Completed, Failed)):
+                        if isinstance(run_event, Completed):
+                            self._final_messages.append(run_event.final_message)
+                        return
+        except Exception as e:
+            _logger.warning("Error in run event collection: %s", e)
+            yield Failed(timestamp=now_iso(), error_message=str(e))
+
+    def _convert_sse_to_run_event(self, sse: SSEEvent) -> list[RunEvent]:
+        events: list[RunEvent] = []
+
+        try:
+            payload = json.loads(sse.data) if sse.data else {}
+        except json.JSONDecodeError:
+            return events
+
+        payload_type = payload.get("type", "")
+
+        if payload_type == "textDelta":
+            text = payload.get("text", "")
+            events.append(
+                OutputDelta(
+                    timestamp=now_iso(), content=text, delta_type="assistant_stream"
+                )
+            )
+
+        elif payload_type == "toolCall":
+            tool_name = payload.get("toolName", "")
+            tool_input = payload.get("toolInput", {})
+            events.append(
+                ToolCall(
+                    timestamp=now_iso(), tool_name=tool_name, tool_input=tool_input
+                )
+            )
+
+        elif payload_type == "toolCallEnd":
+            pass
+
+        elif payload_type == "messageEnd":
+            final_message = payload.get("message", "")
+            events.append(Completed(timestamp=now_iso(), final_message=final_message))
+
+        elif payload_type == "error":
+            error_message = payload.get("message", "Unknown error")
+            events.append(Failed(timestamp=now_iso(), error_message=error_message))
+
+        elif payload_type == "sessionEnd":
+            events.append(Completed(timestamp=now_iso(), final_message=""))
+
+        return events
 
     def _convert_sse_to_agent_event(self, sse: SSEEvent) -> list[AgentEvent]:
         events: list[AgentEvent] = []

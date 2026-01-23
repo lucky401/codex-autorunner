@@ -41,6 +41,7 @@ class TelegramMessageTransport:
         message_id: int,
         text: str,
         *,
+        message_thread_id: Optional[int] = None,
         reply_markup: Optional[dict[str, Any]] = None,
     ) -> bool:
         try:
@@ -49,6 +50,7 @@ class TelegramMessageTransport:
                 chat_id,
                 message_id,
                 payload_text,
+                message_thread_id=message_thread_id,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
             )
@@ -56,11 +58,17 @@ class TelegramMessageTransport:
             return False
         return True
 
-    async def _delete_message(self, chat_id: int, message_id: Optional[int]) -> bool:
+    async def _delete_message(
+        self, chat_id: int, message_id: Optional[int], thread_id: Optional[int] = None
+    ) -> bool:
         if message_id is None:
             return False
         try:
-            return bool(await self._bot.delete_message(chat_id, message_id))
+            return bool(
+                await self._bot.delete_message(
+                    chat_id, message_id, message_thread_id=thread_id
+                )
+            )
         except Exception:
             return False
 
@@ -77,6 +85,7 @@ class TelegramMessageTransport:
             callback.chat_id,
             callback.message_id,
             text,
+            message_thread_id=callback.thread_id,
             reply_markup=reply_markup,
         )
 
@@ -385,7 +394,13 @@ class TelegramMessageTransport:
         if callback is None:
             return
         try:
-            await self._bot.answer_callback_query(callback.callback_id, text=text)
+            await self._bot.answer_callback_query(
+                callback.callback_id,
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+                message_id=callback.message_id,
+                text=text,
+            )
         except Exception as exc:
             log_event(
                 self._logger,
@@ -393,6 +408,7 @@ class TelegramMessageTransport:
                 "telegram.answer_callback.failed",
                 chat_id=callback.chat_id,
                 thread_id=callback.thread_id,
+                message_id=callback.message_id,
                 callback_id=callback.callback_id,
                 exc=exc,
             )

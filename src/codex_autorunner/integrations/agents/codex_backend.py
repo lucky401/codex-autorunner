@@ -4,7 +4,15 @@ from typing import Any, AsyncGenerator, Dict, Optional, Union
 
 from ...core.circuit_breaker import CircuitBreaker
 from ...integrations.app_server.client import CodexAppServerClient
-from .agent_backend import AgentBackend, AgentEvent
+from .agent_backend import AgentBackend, AgentEvent, now_iso
+from .run_event import (
+    Completed,
+    Failed,
+    OutputDelta,
+    RunEvent,
+    Started,
+    ToolCall,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -99,6 +107,58 @@ class CodexAppServerBackend(AgentBackend):
             final_message="\n".join(result.agent_messages)
         )
 
+    async def run_turn_events(
+        self, session_id: str, message: str
+    ) -> AsyncGenerator[RunEvent, None]:
+        client = await self._ensure_client()
+
+        if session_id:
+            self._thread_id = session_id
+
+        if not self._thread_id:
+            actual_session_id = await self.start_session(target={}, context={})
+        else:
+            actual_session_id = self._thread_id
+
+        _logger.info(
+            "Running turn events on thread %s with message: %s",
+            actual_session_id or "unknown",
+            message[:100],
+        )
+
+        yield Started(timestamp=now_iso(), session_id=actual_session_id)
+
+        yield OutputDelta(
+            timestamp=now_iso(), content=message, delta_type="user_message"
+        )
+
+        handle = await client.turn_start(
+            actual_session_id if actual_session_id else "default",
+            text=message,
+            approval_policy=self._approval_policy,
+            sandbox_policy=self._sandbox_policy,
+        )
+
+        try:
+            result = await handle.wait(timeout=600.0)
+
+            for msg in result.agent_messages:
+                yield OutputDelta(
+                    timestamp=now_iso(), content=msg, delta_type="assistant_message"
+                )
+
+            for event_data in result.raw_events:
+                run_event = self._map_to_run_event(event_data)
+                if run_event:
+                    yield run_event
+
+            yield Completed(
+                timestamp=now_iso(), final_message="\n".join(result.agent_messages)
+            )
+        except Exception as e:
+            _logger.error("Error during turn execution: %s", e)
+            yield Failed(timestamp=now_iso(), error_message=str(e))
+
     async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
         if False:
             yield AgentEvent.stream_delta(content="", delta_type="noop")
@@ -139,6 +199,33 @@ class CodexAppServerBackend(AgentBackend):
         if method == "turn/streamDelta":
             content = notification.get("params", {}).get("delta", "")
             _logger.info("Stream delta: %s", content[:100])
+
+    def _map_to_run_event(self, event_data: Dict[str, Any]) -> Optional[RunEvent]:
+        method = event_data.get("method", "")
+
+        if method == "turn/streamDelta":
+            content = event_data.get("params", {}).get("delta", "")
+            return OutputDelta(
+                timestamp=now_iso(), content=content, delta_type="assistant_stream"
+            )
+
+        if method == "item/toolCall/start":
+            params = event_data.get("params", {})
+            return ToolCall(
+                timestamp=now_iso(),
+                tool_name=params.get("name", ""),
+                tool_input=params.get("input", {}),
+            )
+
+        if method == "item/toolCall/end":
+            return None
+
+        if method == "turn/error":
+            params = event_data.get("params", {})
+            error_message = params.get("message", "Unknown error")
+            return Failed(timestamp=now_iso(), error_message=error_message)
+
+        return None
 
     def _parse_raw_event(self, event_data: Dict[str, Any]) -> AgentEvent:
         method = event_data.get("method", "")
