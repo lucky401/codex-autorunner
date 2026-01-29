@@ -3,13 +3,14 @@ import json
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
 
-from ..integrations.app_server.client import (
-    _extract_thread_id,
-    _extract_thread_id_for_turn,
-    _extract_turn_id,
-)
+if TYPE_CHECKING:
+    from ..integrations.app_server.client import (
+        _extract_thread_id,
+        _extract_thread_id_for_turn,
+        _extract_turn_id,
+    )
 
 TurnKey = tuple[str, str]
 
@@ -141,6 +142,12 @@ class AppServerEventBuffer:
     def _extract_turn_ids(
         self, message: Dict[str, Any]
     ) -> tuple[Optional[str], Optional[str]]:
+        from ..integrations.app_server.client import (
+            _extract_thread_id,
+            _extract_thread_id_for_turn,
+            _extract_turn_id,
+        )
+
         params_raw = message.get("params")
         params: Dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
         turn_id = _extract_turn_id(params) or _extract_turn_id(message)

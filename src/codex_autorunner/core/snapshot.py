@@ -6,10 +6,14 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
 
-from ..integrations.app_server.client import CodexAppServerError
-from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+if TYPE_CHECKING:
+    from ..integrations.app_server.client import CodexAppServerError
+    from ..integrations.app_server.supervisor import (
+        WorkspaceAppServerSupervisor,
+    )
+
 from .app_server_prompts import build_app_server_snapshot_prompt
 from .app_server_threads import (
     AppServerThreadRegistry,
@@ -451,7 +455,7 @@ class SnapshotService:
         self,
         engine: Engine,
         *,
-        app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None,
+        app_server_supervisor: Optional["WorkspaceAppServerSupervisor"] = None,
         app_server_threads: Optional[AppServerThreadRegistry] = None,
     ) -> None:
         self.engine = engine
@@ -470,7 +474,11 @@ class SnapshotService:
                 self._lock = asyncio.Lock()
         return self._lock
 
-    def _ensure_app_server(self) -> WorkspaceAppServerSupervisor:
+    def _ensure_app_server(self) -> "WorkspaceAppServerSupervisor":
+        from ..integrations.app_server.supervisor import (
+            WorkspaceAppServerSupervisor,
+        )
+
         if self._app_server_supervisor is None:
             raise SnapshotError("App-server backend is not configured")
         return self._app_server_supervisor
@@ -478,6 +486,8 @@ class SnapshotService:
     async def generate_snapshot(
         self,
     ) -> SnapshotResult:
+        from ..integrations.app_server.client import CodexAppServerError
+
         lock = self._ensure_lock()
         if lock.locked():
             raise SnapshotError("Snapshot generation already running")

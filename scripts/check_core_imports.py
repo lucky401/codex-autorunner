@@ -13,9 +13,37 @@ from pathlib import Path
 from typing import Set, Tuple
 
 
+def is_inside_type_checking(node: ast.AST, tree: ast.AST) -> bool:
+    """
+    Check if a node is inside a TYPE_CHECKING block.
+
+    This allows imports inside `if TYPE_CHECKING:` blocks which are only used for
+    type annotations and don't create runtime dependencies.
+    """
+    parent_map = {}
+
+    def build_parent_map(n: ast.AST, parent: ast.AST | None = None):
+        parent_map[n] = parent
+        for child in ast.iter_child_nodes(n):
+            build_parent_map(child, n)
+
+    build_parent_map(tree)
+
+    current = node
+    while current is not None:
+        parent = parent_map.get(current)
+        if isinstance(parent, ast.If):
+            # Check if this is an `if TYPE_CHECKING:` block
+            if isinstance(parent.test, ast.Name) and parent.test.id == "TYPE_CHECKING":
+                return True
+        current = parent
+    return False
+
+
 def get_imports(filepath: Path, package_root: Path) -> Set[Tuple[str, int]]:
     """
     Extract all import statements from a Python file and convert relative imports to absolute.
+    Imports inside TYPE_CHECKING blocks are excluded.
     """
     imports = set()
 
@@ -40,6 +68,10 @@ def get_imports(filepath: Path, package_root: Path) -> Set[Tuple[str, int]]:
         return imports
 
     for node in ast.walk(tree):
+        # Skip imports inside TYPE_CHECKING blocks
+        if is_inside_type_checking(node, tree):
+            continue
+
         if isinstance(node, ast.Import):
             for alias in node.names:
                 imports.add((alias.name, node.lineno))

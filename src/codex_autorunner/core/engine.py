@@ -16,38 +16,39 @@ from typing import IO, TYPE_CHECKING, Any, Iterator, Optional
 
 import yaml
 
-from ..integrations.agents import (
-    AgentBackend,
-    CodexAdapterOrchestrator,
-    OpenCodeAdapterOrchestrator,
-    RunEvent,
-)
+from ..integrations.agents import AgentBackend, RunEvent
 from ..manifest import MANIFEST_VERSION
 from .about_car import ensure_about_car_file
 
 # TODO: Remove these imports and refactor Engine to use AgentBackend interface
 # These imports are temporary to maintain backward compatibility while refactoring
-from ..agents.opencode.logging import OpenCodeEventFormatter
-from ..agents.opencode.runtime import (
-    OpenCodeTurnOutput,
-    build_turn_id,
-    collect_opencode_output,
-    extract_session_id,
-    map_approval_policy_to_permission,
-    opencode_missing_env,
-    parse_message_response,
-    split_model_id,
-)
-from ..agents.opencode.supervisor import OpenCodeSupervisor, OpenCodeSupervisorError
-from ..agents.registry import validate_agent_id
-from ..integrations.app_server.client import (
-    CodexAppServerError,
-    _extract_thread_id,
-    _extract_thread_id_for_turn,
-    _extract_turn_id,
-)
-from ..integrations.app_server.env import build_app_server_env
-from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+if TYPE_CHECKING:
+    from ..agents.opencode.logging import OpenCodeEventFormatter
+    from ..agents.opencode.runtime import (
+        OpenCodeTurnOutput,
+        build_turn_id,
+        collect_opencode_output,
+        extract_session_id,
+        map_approval_policy_to_permission,
+        opencode_missing_env,
+        parse_message_response,
+        split_model_id,
+    )
+    from ..agents.opencode.supervisor import (
+        OpenCodeSupervisor,
+        OpenCodeSupervisorError,
+    )
+    from ..agents.registry import validate_agent_id
+    from ..integrations.app_server.client import (
+        CodexAppServerError,
+        _extract_thread_id,
+        _extract_thread_id_for_turn,
+        _extract_turn_id,
+    )
+    from ..integrations.app_server.env import build_app_server_env
+    from ..integrations.app_server.supervisor import (
+        WorkspaceAppServerSupervisor,
+    )
 from .adapter_utils import handle_agent_output
 from .app_server_events import AppServerEventBuffer
 from .app_server_logging import AppServerEventFormatter
@@ -132,6 +133,11 @@ class Engine:
         config: Optional[RepoConfig] = None,
         hub_path: Optional[Path] = None,
     ):
+        from ..agents.opencode.logging import OpenCodeEventFormatter
+        from ..integrations.app_server.supervisor import (
+            WorkspaceAppServerSupervisor,
+        )
+
         if config is None:
             config = load_repo_config(repo_root, hub_path=hub_path)
         self.config = config
@@ -149,12 +155,12 @@ class Engine:
             default_app_server_threads_path(self.repo_root)
         )
         self._app_server_threads_lock = threading.Lock()
-        self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+        self._app_server_supervisor: Optional["WorkspaceAppServerSupervisor"] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
         self._app_server_event_formatter = AppServerEventFormatter()
         self._app_server_events = AppServerEventBuffer()
         self._opencode_event_formatter = OpenCodeEventFormatter()
-        self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
+        self._opencode_supervisor: Optional["OpenCodeSupervisor"] = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
         self._last_telemetry_update_time: float = 0.0
@@ -323,6 +329,8 @@ class Engine:
         5. Update state to 'idle' or 'error'
         6. Commit if successful and auto-commit is enabled
         """
+        from ..agents.registry import validate_agent_id
+
         try:
             todo_before = self.docs.read_doc("todo")
         except (FileNotFoundError, OSError) as exc:
@@ -792,6 +800,12 @@ class Engine:
             self._last_telemetry_update_time = now
 
     async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
+        from ..integrations.app_server.client import (
+            _extract_thread_id,
+            _extract_thread_id_for_turn,
+            _extract_turn_id,
+        )
+
         if not isinstance(message, dict):
             return
         method = message.get("method")
@@ -1183,6 +1197,8 @@ class Engine:
         external_stop_flag: Optional[threading.Event] = None,
         reuse_supervisor: bool = True,
     ) -> int:
+        from ..integrations.app_server.client import CodexAppServerError
+
         config = self.config
         if not config.app_server.command:
             self.log_line(
@@ -1194,6 +1210,8 @@ class Engine:
         def _env_builder(
             workspace_root: Path, _workspace_id: str, state_dir: Path
         ) -> dict[str, str]:
+            from ..integrations.app_server.env import build_app_server_env
+
             state_dir.mkdir(parents=True, exist_ok=True)
             return build_app_server_env(
                 config.app_server.command,
@@ -1363,7 +1381,11 @@ class Engine:
 
     def _build_app_server_supervisor(
         self, env_builder: Any
-    ) -> WorkspaceAppServerSupervisor:
+    ) -> "WorkspaceAppServerSupervisor":
+        from ..integrations.app_server.supervisor import (
+            WorkspaceAppServerSupervisor,
+        )
+
         config = self.config.app_server
         return WorkspaceAppServerSupervisor(
             config.command,
@@ -1381,7 +1403,11 @@ class Engine:
 
     def _ensure_app_server_supervisor(
         self, env_builder: Any
-    ) -> WorkspaceAppServerSupervisor:
+    ) -> "WorkspaceAppServerSupervisor":
+        from ..integrations.app_server.supervisor import (
+            WorkspaceAppServerSupervisor,
+        )
+
         if self._app_server_supervisor is None:
             self._app_server_supervisor = self._build_app_server_supervisor(env_builder)
         return self._app_server_supervisor
@@ -1398,7 +1424,10 @@ class Engine:
                 "app-server supervisor close failed: %s", exc
             )
 
-    def _build_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
+    def _build_opencode_supervisor(self) -> Optional["OpenCodeSupervisor"]:
+        from ..agents.opencode.supervisor import OpenCodeSupervisor
+        from .utils import build_opencode_supervisor
+
         config = self.config.app_server
         opencode_command = self.config.agent_serve_command("opencode")
         opencode_binary = None
@@ -1431,7 +1460,9 @@ class Engine:
 
         return supervisor
 
-    def _ensure_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
+    def _ensure_opencode_supervisor(self) -> Optional["OpenCodeSupervisor"]:
+        from ..agents.opencode.supervisor import OpenCodeSupervisor
+
         if self._opencode_supervisor is None:
             self._opencode_supervisor = self._build_opencode_supervisor()
         return self._opencode_supervisor
@@ -1464,8 +1495,10 @@ class Engine:
         *,
         timeout: Optional[float],
         external_stop_flag: Optional[threading.Event],
-        supervisor: Optional[WorkspaceAppServerSupervisor] = None,
+        supervisor: Optional["WorkspaceAppServerSupervisor"] = None,
     ) -> tuple[Any, bool]:
+        from ..integrations.app_server.client import CodexAppServerError
+
         stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
         turn_task = asyncio.create_task(handle.wait(timeout=None))
         timeout_task: Optional[asyncio.Task] = (
@@ -1543,6 +1576,18 @@ class Engine:
         reasoning: Optional[str],
         external_stop_flag: Optional[threading.Event] = None,
     ) -> int:
+        from ..agents.opencode.runtime import (
+            OpenCodeTurnOutput,
+            build_turn_id,
+            collect_opencode_output,
+            extract_session_id,
+            map_approval_policy_to_permission,
+            opencode_missing_env,
+            parse_message_response,
+            split_model_id,
+        )
+        from ..agents.opencode.supervisor import OpenCodeSupervisorError
+
         supervisor = self._ensure_opencode_supervisor()
         if supervisor is None:
             self.log_line(

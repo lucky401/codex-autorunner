@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Awaitable,
@@ -21,20 +22,22 @@ from typing import (
     Tuple,
 )
 
-from ..agents.opencode.runtime import (
-    PERMISSION_ALLOW,
-    OpenCodeTurnOutput,
-    build_turn_id,
-    collect_opencode_output,
-    extract_session_id,
-    opencode_missing_env,
-    parse_message_response,
-    split_model_id,
-)
-from ..agents.opencode.supervisor import OpenCodeSupervisor
-from ..agents.registry import validate_agent_id
-from ..integrations.app_server.client import CodexAppServerError
-from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+if TYPE_CHECKING:
+    from ..agents.opencode.runtime import (
+        PERMISSION_ALLOW,
+        OpenCodeTurnOutput,
+        build_turn_id,
+        collect_opencode_output,
+        extract_session_id,
+        opencode_missing_env,
+        parse_message_response,
+        split_model_id,
+    )
+    from ..agents.opencode.supervisor import OpenCodeSupervisor
+    from ..agents.registry import validate_agent_id
+    from ..integrations.app_server.client import CodexAppServerError
+    from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+
 from .app_server_events import AppServerEventBuffer, format_sse
 from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_doc_chat_prompt
@@ -164,10 +167,10 @@ class DocChatService:
         self,
         engine: Engine,
         *,
-        app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None,
+        app_server_supervisor: Optional["WorkspaceAppServerSupervisor"] = None,
         app_server_threads: Optional[AppServerThreadRegistry] = None,
         app_server_events: Optional[AppServerEventBuffer] = None,
-        opencode_supervisor: Optional[OpenCodeSupervisor] = None,
+        opencode_supervisor: Optional["OpenCodeSupervisor"] = None,
         env: Optional[MutableMapping[str, str]] = None,
     ):
         self.engine = engine
@@ -224,6 +227,8 @@ class DocChatService:
         return active
 
     async def _interrupt_turn(self, active: ActiveDocChatTurn) -> None:
+        from ..integrations.app_server.client import CodexAppServerError
+
         if active.interrupt_sent:
             return
         active.interrupt_sent = True
@@ -551,17 +556,23 @@ class DocChatService:
             context_doc=request.context_doc,
         )
 
-    def _ensure_app_server(self) -> WorkspaceAppServerSupervisor:
+    def _ensure_app_server(self) -> "WorkspaceAppServerSupervisor":
+        from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+
         if self._app_server_supervisor is None:
             raise DocChatError("App-server backend is not configured")
         return self._app_server_supervisor
 
-    def _ensure_opencode(self) -> OpenCodeSupervisor:
+    def _ensure_opencode(self) -> "OpenCodeSupervisor":
+        from ..agents.opencode.supervisor import OpenCodeSupervisor
+
         if self._opencode_supervisor is None:
             raise DocChatError("OpenCode backend is not configured")
         return self._opencode_supervisor
 
     def _thread_key(self, agent: Optional[str]) -> str:
+        from ..agents.registry import validate_agent_id
+
         try:
             agent_id = validate_agent_id(agent or "")
         except ValueError:
@@ -569,6 +580,8 @@ class DocChatService:
         return DOC_CHAT_OPENCODE_KEY if agent_id == "opencode" else DOC_CHAT_KEY
 
     def _legacy_thread_id(self, agent: Optional[str]) -> Optional[str]:
+        from ..agents.registry import validate_agent_id
+
         try:
             agent_id = validate_agent_id(agent or "")
         except ValueError:
@@ -838,6 +851,8 @@ class DocChatService:
         *,
         on_turn_start: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ) -> dict:
+        from ..integrations.app_server.client import CodexAppServerError
+
         chat_id = self._chat_id()
         started_at = time.time()
         doc_pointer = self._doc_pointer(request.targets)
@@ -1044,6 +1059,17 @@ class DocChatService:
         *,
         on_turn_start: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ) -> dict:
+        from ..agents.opencode.runtime import (
+            PERMISSION_ALLOW,
+            OpenCodeTurnOutput,
+            build_turn_id,
+            collect_opencode_output,
+            extract_session_id,
+            opencode_missing_env,
+            parse_message_response,
+            split_model_id,
+        )
+
         chat_id = self._chat_id()
         started_at = time.time()
         doc_pointer = self._doc_pointer(request.targets)
@@ -1373,6 +1399,8 @@ class DocChatService:
         *,
         on_turn_start: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ) -> dict:
+        from ..agents.registry import validate_agent_id
+
         try:
             agent_id = validate_agent_id(request.agent or "")
         except ValueError:
