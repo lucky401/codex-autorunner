@@ -10,7 +10,9 @@ import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
-from ..agents.opencode.supervisor import OpenCodeSupervisor
+from ...agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
+from ...agents.opencode.supervisor import OpenCodeSupervisor
+from ...agents.registry import has_capability, validate_agent_id
 from .config import RepoConfig
 from .engine import Engine
 from .locks import FileLock, FileLockBusy, FileLockError, process_alive, read_lock_info
@@ -643,8 +645,6 @@ class ReviewService:
     def _initialize_state(
         self, *, payload: dict[str, Any], prompt_kind: str = "code"
     ) -> dict[str, Any]:
-        from ..agents.registry import has_capability, validate_agent_id
-
         config = self._repo_config()
         review_cfg = config.raw.get("review") or {}
         state = _default_state()
@@ -786,11 +786,6 @@ class ReviewService:
             if codex_result.errors:
                 raise ReviewError(f"Codex review failed: {codex_result.errors[0]}")
         else:
-            from ..agents.opencode.run_prompt import (
-                OpenCodeRunConfig,
-                run_opencode_prompt,
-            )
-
             if self._opencode_supervisor is None:
                 raise ReviewError("OpenCode backend is not configured")
 

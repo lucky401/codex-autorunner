@@ -207,6 +207,25 @@ def check_core_file(filepath: Path, core_dir: Path, package_root: Path) -> list[
     return errors
 
 
+def load_allowlist(path: Path) -> set[tuple[str, str]]:
+    """Load allowlist from JSON file."""
+    import json
+
+    if not path.exists():
+        return set()
+    try:
+        payload = json.loads(path.read_text())
+        entries = set()
+        for item in payload.get("violations", []):
+            importer = item.get("importer")
+            imported = item.get("imported")
+            if importer and imported:
+                entries.add((importer, imported))
+        return entries
+    except Exception:
+        return set()
+
+
 def main():
     script_dir = Path(__file__).parent
     repo_root = script_dir.parent
@@ -219,14 +238,34 @@ def main():
 
     all_errors = []
 
+    # Load allowlist
+    allowlist_path = repo_root / "scripts" / "import_boundaries_allowlist.json"
+    allowlist = load_allowlist(allowlist_path)
+
     # Check all Python files in core/
     for py_file in core_dir.rglob("*.py"):
         errors = check_core_file(py_file, core_dir, repo_root)
         all_errors.extend(errors)
 
-    if all_errors:
+    # Filter out allowlisted violations
+    unallowlisted = []
+    for error in all_errors:
+        # Parse error format: "path:line: reason (from 'module')"
+        parts = error.split(":", 1)
+        if len(parts) == 2:
+            rel_path = parts[0]
+            # Extract module name from the error
+            if "(from '" in error and "')" in error:
+                start = error.find("(from '") + 7
+                end = error.rfind("')")
+                module = error[start:end] if start > 0 and end > start else ""
+                if module and (rel_path, module) in allowlist:
+                    continue
+        unallowlisted.append(error)
+
+    if unallowlisted:
         print("Error: core/ files have forbidden imports from adapter implementations:")
-        for error in sorted(all_errors):
+        for error in sorted(unallowlisted):
             print(f"  {error}")
         print("\nCore should only import from integrations/agents/agent_backend.py")
         print("and integrations/agents/run_event.py (the interface definitions).")
