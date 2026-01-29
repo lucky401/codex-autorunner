@@ -12,10 +12,21 @@ from collections import Counter
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import IO, Any, Iterator, Optional
+from typing import IO, TYPE_CHECKING, Any, Iterator, Optional
 
 import yaml
 
+from ..integrations.agents import (
+    AgentBackend,
+    CodexAdapterOrchestrator,
+    OpenCodeAdapterOrchestrator,
+    RunEvent,
+)
+from ..manifest import MANIFEST_VERSION
+from .about_car import ensure_about_car_file
+
+# TODO: Remove these imports and refactor Engine to use AgentBackend interface
+# These imports are temporary to maintain backward compatibility while refactoring
 from ..agents.opencode.logging import OpenCodeEventFormatter
 from ..agents.opencode.runtime import (
     OpenCodeTurnOutput,
@@ -37,8 +48,6 @@ from ..integrations.app_server.client import (
 )
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
-from ..manifest import MANIFEST_VERSION
-from .about_car import ensure_about_car_file
 from .adapter_utils import handle_agent_output
 from .app_server_events import AppServerEventBuffer
 from .app_server_logging import AppServerEventFormatter
