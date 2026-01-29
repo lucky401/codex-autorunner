@@ -4,7 +4,7 @@
     {
       "importer": "src/codex_autorunner/core/engine.py",
       "imported": "codex_autorunner.integrations.agents.backend_orchestrator",
-      "reason": "Engine uses BackendOrchestrator for protocol-agnostic backend management."
+      "reason": "Engine uses BackendOrchestrator for protocol-agnostic backend management (merged from origin/main)."
     },
     {
       "importer": "src/codex_autorunner/core/hub.py",
