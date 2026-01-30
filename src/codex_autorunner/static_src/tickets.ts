@@ -1256,7 +1256,22 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
     const ticketEngine = (latest?.state as Record<string, unknown> | undefined)?.ticket_engine as
       | Record<string, unknown>
       | undefined;
-    currentActiveTicket = (ticketEngine?.current_ticket as string) || null;
+    // FIX: Only update currentActiveTicket from API if it's not null,
+    // or if the flow is no longer running. This prevents stale API data
+    // from clearing the real-time state from the event stream.
+    const apiActiveTicket = (ticketEngine?.current_ticket as string) || null;
+    const isFlowActive = latest?.status === "running" || latest?.status === "pending";
+
+    if (!isFlowActive) {
+      // Terminal state - trust the API
+      currentActiveTicket = apiActiveTicket;
+    } else if (apiActiveTicket) {
+      // API has a specific ticket - trust it
+      currentActiveTicket = apiActiveTicket;
+    } else {
+      // Flow is active but API says null - preserve existing currentActiveTicket
+      // (which was likely set by a real-time event stream 'step_progress' event)
+    }
     const ticketTurns = (ticketEngine?.ticket_turns as number) ?? null;
     const totalTurns = (ticketEngine?.total_turns as number) ?? null;
 

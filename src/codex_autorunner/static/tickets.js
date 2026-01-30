@@ -1072,7 +1072,23 @@ async function loadTicketFlow(ctx) {
         currentFlowStatus = latest?.status || null;
         // Extract ticket engine state
         const ticketEngine = latest?.state?.ticket_engine;
-        currentActiveTicket = ticketEngine?.current_ticket || null;
+        // FIX: Only update currentActiveTicket from API if it's not null,
+        // or if the flow is no longer running. This prevents stale API data
+        // from clearing the real-time state from the event stream.
+        const apiActiveTicket = ticketEngine?.current_ticket || null;
+        const isFlowActive = latest?.status === "running" || latest?.status === "pending";
+        if (!isFlowActive) {
+            // Terminal state - trust the API
+            currentActiveTicket = apiActiveTicket;
+        }
+        else if (apiActiveTicket) {
+            // API has a specific ticket - trust it
+            currentActiveTicket = apiActiveTicket;
+        }
+        else {
+            // Flow is active but API says null - preserve existing currentActiveTicket
+            // (which was likely set by a real-time event stream 'step_progress' event)
+        }
         const ticketTurns = ticketEngine?.ticket_turns ?? null;
         const totalTurns = ticketEngine?.total_turns ?? null;
         if (status)
