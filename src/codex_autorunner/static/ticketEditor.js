@@ -30,6 +30,68 @@ const state = {
 // Autosave debounce timer
 const AUTOSAVE_DELAY_MS = 1000;
 let ticketDocEditor = null;
+let ticketNavCache = [];
+function isTypingTarget(target) {
+    if (!(target instanceof HTMLElement))
+        return false;
+    const tag = target.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
+async function fetchTicketList() {
+    const data = (await api("/api/flows/ticket_flow/tickets"));
+    const list = (data?.tickets || []).filter((ticket) => typeof ticket.index === "number");
+    list.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+    return list;
+}
+async function updateTicketNavButtons() {
+    const { prevBtn, nextBtn } = els();
+    if (!prevBtn || !nextBtn)
+        return;
+    if (state.mode !== "edit" || state.ticketIndex == null) {
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+        return;
+    }
+    try {
+        const list = await fetchTicketList();
+        ticketNavCache = list;
+    }
+    catch {
+        // If fetch fails, fall back to the last known list.
+    }
+    const list = ticketNavCache;
+    if (!list.length) {
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+        return;
+    }
+    const idx = list.findIndex((ticket) => ticket.index === state.ticketIndex);
+    const hasPrev = idx > 0;
+    const hasNext = idx >= 0 && idx < list.length - 1;
+    prevBtn.disabled = !hasPrev;
+    nextBtn.disabled = !hasNext;
+}
+async function navigateTicket(delta) {
+    if (state.mode !== "edit" || state.ticketIndex == null)
+        return;
+    await performAutosave();
+    let list = ticketNavCache;
+    if (!list.length) {
+        try {
+            list = await fetchTicketList();
+            ticketNavCache = list;
+        }
+        catch {
+            return;
+        }
+    }
+    const idx = list.findIndex((ticket) => ticket.index === state.ticketIndex);
+    const target = idx >= 0 ? list[idx + delta] : null;
+    if (target && target.index != null) {
+        openTicketEditor(target);
+    }
+    void updateTicketNavButtons();
+}
 function els() {
     return {
         modal: document.getElementById("ticket-editor-modal"),
@@ -40,6 +102,8 @@ function els() {
         newBtn: document.getElementById("ticket-new-btn"),
         insertCheckboxBtn: document.getElementById("ticket-insert-checkbox"),
         undoBtn: document.getElementById("ticket-undo-btn"),
+        prevBtn: document.getElementById("ticket-nav-prev"),
+        nextBtn: document.getElementById("ticket-nav-next"),
         autosaveStatus: document.getElementById("ticket-autosave-status"),
         // Frontmatter form elements
         fmAgent: document.getElementById("ticket-fm-agent"),
@@ -532,6 +596,10 @@ export function openTicketEditor(ticket) {
     if (ticket?.index != null) {
         updateUrlParams({ ticket: ticket.index });
     }
+    if (ticket?.path) {
+        publish("ticket-editor:opened", { path: ticket.path, index: ticket.index ?? null });
+    }
+    void updateTicketNavButtons();
     // Focus on title field for new tickets, body for existing
     if (state.mode === "create" && fmTitle) {
         fmTitle.focus();
@@ -568,6 +636,7 @@ export function closeTicketEditor() {
     ticketDocEditor = null;
     // Clear ticket from URL
     updateUrlParams({ ticket: null });
+    void updateTicketNavButtons();
     // Reset chat state
     resetTicketChatState();
     setTicketIndex(null);
@@ -620,7 +689,7 @@ export async function deleteTicket() {
  * Initialize the ticket editor - wire up event listeners
  */
 export function initTicketEditor() {
-    const { modal, content, deleteBtn, closeBtn, newBtn, insertCheckboxBtn, undoBtn, fmAgent, fmModel, fmReasoning, fmDone, fmTitle, chatInput, chatSendBtn, chatCancelBtn, patchApplyBtn, patchDiscardBtn, agentSelect, modelSelect, reasoningSelect, } = els();
+    const { modal, content, deleteBtn, closeBtn, newBtn, insertCheckboxBtn, undoBtn, prevBtn, nextBtn, fmAgent, fmModel, fmReasoning, fmDone, fmTitle, chatInput, chatSendBtn, chatCancelBtn, patchApplyBtn, patchDiscardBtn, agentSelect, modelSelect, reasoningSelect, } = els();
     if (!modal)
         return;
     // Prevent double initialization
@@ -648,6 +717,10 @@ export function initTicketEditor() {
         insertCheckboxBtn.addEventListener("click", insertCheckbox);
     if (undoBtn)
         undoBtn.addEventListener("click", undoChange);
+    if (prevBtn)
+        prevBtn.addEventListener("click", () => void navigateTicket(-1));
+    if (nextBtn)
+        nextBtn.addEventListener("click", () => void navigateTicket(1));
     // Autosave on content changes
     if (content) {
         content.addEventListener("input", onContentChange);
@@ -719,6 +792,19 @@ export function initTicketEditor() {
             e.preventDefault();
             undoChange();
         }
+    });
+    // Alt+Left / Alt+Right navigates between tickets when editor is open
+    document.addEventListener("keydown", (e) => {
+        if (!state.isOpen)
+            return;
+        if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey)
+            return;
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight")
+            return;
+        if (isTypingTarget(e.target))
+            return;
+        e.preventDefault();
+        void navigateTicket(e.key === "ArrowLeft" ? -1 : 1);
     });
     // Enter key creates new TODO checkbox when on a checkbox line
     if (content) {

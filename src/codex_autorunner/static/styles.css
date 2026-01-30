@@ -9499,6 +9499,25 @@ button.loading::after {
   flex-shrink: 0;
 }
 
+.ticket-header-actions .ticket-nav-btn {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: var(--radius);
+}
+
+.ticket-header-actions .ticket-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+}
+
 .ticket-header-row .ticket-fm-select {
   padding: 5px 8px;
   font-size: 11px;
