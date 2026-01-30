@@ -600,12 +600,9 @@ export function openTicketEditor(ticket) {
         publish("ticket-editor:opened", { path: ticket.path, index: ticket.index ?? null });
     }
     void updateTicketNavButtons();
-    // Focus on title field for new tickets, body for existing
+    // Focus on title field for new tickets
     if (state.mode === "create" && fmTitle) {
         fmTitle.focus();
-    }
-    else {
-        content.focus();
     }
 }
 /**

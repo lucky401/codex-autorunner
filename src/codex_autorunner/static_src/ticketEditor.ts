@@ -728,11 +728,9 @@ export function openTicketEditor(ticket?: TicketData): void {
 
   void updateTicketNavButtons();
 
-  // Focus on title field for new tickets, body for existing
+  // Focus on title field for new tickets
   if (state.mode === "create" && fmTitle) {
     fmTitle.focus();
-  } else {
-    content.focus();
   }
 }
 
