@@ -261,42 +261,51 @@ async function handleSystemUpdate(btnId: string, targetSelectId: string | null):
   }
 }
 
-function initRepoSettingsModal(): void {
-  const settingsBtn = document.getElementById("repo-settings") as HTMLButtonElement | null;
+let repoSettingsCloseModal: (() => void) | null = null;
+
+function hideRepoSettingsModal(): void {
+  if (repoSettingsCloseModal) {
+    const close = repoSettingsCloseModal;
+    repoSettingsCloseModal = null;
+    close();
+  }
+}
+
+export function openRepoSettings(triggerEl?: HTMLElement | null): void {
   const modal = document.getElementById("repo-settings-modal");
   const closeBtn = document.getElementById("repo-settings-close");
   const updateBtn = document.getElementById("repo-update-btn") as HTMLButtonElement | null;
+  if (!modal) return;
+
+  hideRepoSettingsModal();
+  repoSettingsCloseModal = openModal(modal, {
+    initialFocus: closeBtn || updateBtn || modal,
+    returnFocusTo: triggerEl || null,
+    onRequestClose: hideRepoSettingsModal,
+  });
+  // Trigger settings refresh when modal opens
+  const { refreshSettings } = window.__CAR_SETTINGS || {};
+  if (typeof refreshSettings === "function") {
+    refreshSettings();
+  }
+}
+
+function initRepoSettingsModal(): void {
+  const settingsBtn = document.getElementById("repo-settings") as HTMLButtonElement | null;
+  const closeBtn = document.getElementById("repo-settings-close");
+  const updateBtn = document.getElementById("repo-update-btn") as HTMLButtonElement | null;
   const updateTarget = document.getElementById("repo-update-target") as HTMLSelectElement | null;
-  let closeModal: (() => void) | null = null;
 
-  const hideModal = () => {
-    if (closeModal) {
-      const close = closeModal;
-      closeModal = null;
-      close();
-    }
-  };
-
-  if (settingsBtn && modal) {
+  // If the gear button exists in HTML, wire it up (backwards compatibility)
+  if (settingsBtn) {
     settingsBtn.addEventListener("click", () => {
-      const triggerEl = document.activeElement;
-      hideModal();
-      closeModal = openModal(modal, {
-        initialFocus: closeBtn || updateBtn || modal,
-        returnFocusTo: triggerEl as HTMLElement | null,
-        onRequestClose: hideModal,
-      });
-      // Trigger settings refresh when modal opens
-      const { refreshSettings } = window.__CAR_SETTINGS || {};
-      if (typeof refreshSettings === "function") {
-        refreshSettings();
-      }
+      openRepoSettings(settingsBtn);
     });
   }
 
-  if (closeBtn && modal) {
+  if (closeBtn) {
     closeBtn.addEventListener("click", () => {
-      hideModal();
+      hideRepoSettingsModal();
     });
   }
 

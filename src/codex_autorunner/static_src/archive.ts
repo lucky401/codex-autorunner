@@ -14,6 +14,7 @@ let initialized = false;
 let snapshots: ArchiveSnapshotSummary[] = [];
 let selected: ArchiveSnapshotSummary | null = null;
 let activeSnapshotKey = "";
+let activeSubTab: "snapshot" | "files" = "snapshot";
 
 const listEl = document.getElementById("archive-snapshot-list");
 const detailEl = document.getElementById("archive-snapshot-detail");
@@ -271,6 +272,45 @@ function renderArtifactSection(
       </div>
     </div>
   `;
+}
+
+function renderSubTabs(): string {
+  return `
+    <div class="archive-subtabs">
+      <button class="archive-subtab${activeSubTab === "snapshot" ? " active" : ""}" data-subtab="snapshot">Snapshot</button>
+      <button class="archive-subtab${activeSubTab === "files" ? " active" : ""}" data-subtab="files">Files</button>
+    </div>
+  `;
+}
+
+function switchSubTab(tab: "snapshot" | "files"): void {
+  activeSubTab = tab;
+  // Update tab button states
+  const tabBtns = document.querySelectorAll(".archive-subtab");
+  tabBtns.forEach((btn) => {
+    const btnTab = (btn as HTMLElement).dataset.subtab;
+    btn.classList.toggle("active", btnTab === tab);
+  });
+  // Update content visibility
+  const snapshotContent = document.getElementById("archive-tab-snapshot");
+  const filesContent = document.getElementById("archive-tab-files");
+  snapshotContent?.classList.toggle("active", tab === "snapshot");
+  filesContent?.classList.toggle("active", tab === "files");
+}
+
+function wireSubTabs(): void {
+  const container = document.querySelector(".archive-subtabs");
+  if (!container) return;
+  container.addEventListener("click", (e) => {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    const btn = target.closest(".archive-subtab") as HTMLElement | null;
+    if (!btn) return;
+    const tab = btn.dataset.subtab as "snapshot" | "files" | undefined;
+    if (tab && (tab === "snapshot" || tab === "files")) {
+      switchSubTab(tab);
+    }
+  });
 }
 
 function renderFileSection(): string {
@@ -698,12 +738,18 @@ async function loadSnapshotDetail(target: ArchiveSnapshotSummary): Promise<void>
         </div>
         <span class="pill pill-idle" id="archive-detail-status">${escapeHtml(summary.status || "unknown")}</span>
       </div>
-      ${renderSummaryGrid(summary, meta)}
-      ${renderArtifactSection(summary, meta)}
-      ${renderFileSection()}
+      ${renderSubTabs()}
+      <div id="archive-tab-snapshot" class="archive-tab-content archive-tab-snapshot${activeSubTab === "snapshot" ? " active" : ""}">
+        ${renderSummaryGrid(summary, meta)}
+        ${renderArtifactSection(summary, meta)}
+      </div>
+      <div id="archive-tab-files" class="archive-tab-content archive-tab-files${activeSubTab === "files" ? " active" : ""}">
+        ${renderFileSection()}
+      </div>
     `;
     const statusEl = document.getElementById("archive-detail-status");
     if (statusEl) statusPill(statusEl, summary.status || "unknown");
+    wireSubTabs();
     initArchiveFileViewer(summary);
     wireArchivePathButtons(document.getElementById("archive-artifact-actions"));
     void loadArtifactListings(summary);

@@ -97,9 +97,6 @@
       <div class="tabs">
         <!-- Tabs will be injected here by tabs.js -->
       </div>
-      <div class="nav-actions">
-        <button class="ghost sm icon-btn" id="repo-settings" title="Settings">⚙</button>
-      </div>
     </nav>
     <main>
       <div class="doc-banner hidden" id="repo-health-banner">
@@ -312,14 +309,16 @@
             <button class="ghost sm" id="workspace-upload" title="Upload to current folder">Upload</button>
             <button class="ghost sm" id="workspace-new-folder" title="Create folder">New Folder</button>
             <button class="ghost sm" id="workspace-new-file" title="Create markdown file">New File</button>
-            <button class="ghost sm hidden" id="workspace-generate-tickets" title="Generate tickets from spec">Generate tickets</button>
+            <button class="ghost sm hidden" id="workspace-generate-tickets" title="Generate tickets from spec">Generate
+              tickets</button>
             <button class="ghost sm" id="workspace-reload">Reload</button>
             <button class="primary sm" id="workspace-save">Save</button>
           </div>
         </div>
         <div class="workspace-path-row">
           <nav class="workspace-breadcrumbs" id="workspace-breadcrumbs"></nav>
-          <button class="ghost sm workspace-download-all-btn" id="workspace-download-all" title="Download all as ZIP">⬇</button>
+          <button class="ghost sm workspace-download-all-btn" id="workspace-download-all"
+            title="Download all as ZIP">⬇</button>
         </div>
         <div class="workspace-grid">
           <aside class="workspace-file-browser">
@@ -424,7 +423,8 @@
             <button class="ghost sm" id="ticket-flow-stop">Stop</button>
             <button class="ghost sm" id="ticket-flow-resume">Resume</button>
             <button class="ghost sm ticket-desktop-only" id="ticket-flow-restart" style="display:none;">Restart</button>
-            <button class="ghost sm ticket-desktop-only" id="ticket-flow-archive" style="display:none;">Archive Flow</button>
+            <button class="ghost sm ticket-desktop-only" id="ticket-flow-archive" style="display:none;">Archive
+              Flow</button>
             <button class="ghost sm icon-btn" id="ticket-flow-refresh" title="Refresh ticket flow">↻</button>
             <!-- Overflow menu for mobile -->
             <div class="ticket-overflow-menu">
@@ -432,10 +432,12 @@
               <div class="ticket-overflow-dropdown hidden" id="ticket-overflow-dropdown">
                 <button class="ticket-overflow-item" id="ticket-overflow-new">+ New Ticket</button>
                 <button class="ticket-overflow-item" id="ticket-overflow-restart" style="display:none;">Restart</button>
-                <button class="ticket-overflow-item" id="ticket-overflow-archive" style="display:none;">Archive Flow</button>
+                <button class="ticket-overflow-item" id="ticket-overflow-archive" style="display:none;">Archive
+                  Flow</button>
               </div>
             </div>
-            <button class="ghost sm ticket-desktop-only" id="ticket-new-btn" title="Create new ticket">+ New Ticket</button>
+            <button class="ghost sm ticket-desktop-only" id="ticket-new-btn" title="Create new ticket">+ New
+              Ticket</button>
           </div>
           <div class="ticket-flow-meta" id="ticket-flow-meta">
             <button class="ticket-meta-toggle" id="ticket-meta-toggle" title="Toggle details">
@@ -466,14 +468,18 @@
               <div>
                 <span class="muted">Last activity</span>
                 <span class="ticket-mono" id="ticket-flow-last-activity">–</span>
-                <span class="pill pill-warn pill-small ticket-flow-pill" id="ticket-flow-stale" style="display:none;">stale</span>
-                <button class="ghost sm ticket-flow-action" id="ticket-flow-reconnect" style="display:none;">Reconnect</button>
+                <span class="pill pill-warn pill-small ticket-flow-pill" id="ticket-flow-stale"
+                  style="display:none;">stale</span>
+                <button class="ghost sm ticket-flow-action" id="ticket-flow-reconnect"
+                  style="display:none;">Reconnect</button>
               </div>
               <div>
                 <span class="muted">Worker</span>
                 <span class="ticket-mono" id="ticket-flow-worker">–</span>
-                <span class="pill pill-error pill-small ticket-flow-pill" id="ticket-flow-worker-pill" style="display:none;">dead</span>
-                <button class="ghost sm ticket-flow-action" id="ticket-flow-recover" style="display:none;">Recover</button>
+                <span class="pill pill-error pill-small ticket-flow-pill" id="ticket-flow-worker-pill"
+                  style="display:none;">dead</span>
+                <button class="ghost sm ticket-flow-action" id="ticket-flow-recover"
+                  style="display:none;">Recover</button>
               </div>
             </div>
           </div>
@@ -513,14 +519,17 @@
               <div class="ticket-panel-header">
                 <span class="muted">Dispatch history</span>
                 <span class="muted small" id="ticket-dispatch-note">–</span>
-                <button class="ticket-panel-toggle" id="dispatch-panel-toggle" aria-label="Toggle dispatch panel" title="Collapse/expand panel">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <button class="ticket-panel-toggle" id="dispatch-panel-toggle" aria-label="Toggle dispatch panel"
+                  title="Collapse/expand panel">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                    stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
                   </svg>
                 </button>
               </div>
               <div class="dispatch-mini-list" id="dispatch-mini-list"></div>
-              <div class="ticket-list" id="ticket-dispatch-history">No dispatches yet. Agent messages will appear here.</div>
+              <div class="ticket-list" id="ticket-dispatch-history">No dispatches yet. Agent messages will appear here.
+              </div>
             </div>
           </div>
         </div>
@@ -890,8 +899,8 @@
   </div>
   <!-- File Picker Modal -->
   <div class="modal-overlay file-picker-modal" hidden="" id="file-picker-modal">
-    <div aria-labelledby="file-picker-modal-title" aria-modal="true"
-      class="modal-dialog file-picker-dialog" role="dialog" tabindex="-1">
+    <div aria-labelledby="file-picker-modal-title" aria-modal="true" class="modal-dialog file-picker-dialog"
+      role="dialog" tabindex="-1">
       <div class="file-picker-header">
         <span class="file-picker-title" id="file-picker-modal-title">Select File</span>
         <button class="file-picker-close" id="file-picker-close" aria-label="Close">&times;</button>

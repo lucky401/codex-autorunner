@@ -1,13 +1,13 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { REPO_ID, HUB_BASE } from "./env.js";
 import { initHub } from "./hub.js";
-import { initTabs, registerTab } from "./tabs.js";
+import { initTabs, registerTab, registerHamburgerAction } from "./tabs.js";
 import { initTerminal } from "./terminal.js";
 import { initTicketFlow } from "./tickets.js";
 import { initMessages, initMessageBell } from "./messages.js";
 import { initMobileCompact } from "./mobileCompact.js";
 import { subscribe } from "./bus.js";
-import { initRepoSettingsPanel } from "./settings.js";
+import { initRepoSettingsPanel, openRepoSettings } from "./settings.js";
 import { flash } from "./utils.js";
 import { initLiveUpdates } from "./liveUpdates.js";
 import { initHealthGate } from "./health.js";
@@ -37,10 +37,13 @@ async function initRepoShell() {
     const defaultTab = REPO_ID ? "tickets" : "analytics";
     registerTab("tickets", "Tickets");
     registerTab("inbox", "Inbox");
-    registerTab("analytics", "Analytics");
-    registerTab("archive", "Archive");
     registerTab("workspace", "Workspace");
     registerTab("terminal", "Terminal");
+    // Menu tabs (shown in hamburger menu)
+    registerTab("analytics", "Analytics", { menuTab: true, icon: "📊" });
+    registerTab("archive", "Archive", { menuTab: true, icon: "📦" });
+    // Settings action in hamburger menu
+    registerHamburgerAction("settings", "Settings", "⚙", () => openRepoSettings());
     const initializedTabs = new Set();
     const lazyInit = (tabId) => {
         if (initializedTabs.has(tabId))
