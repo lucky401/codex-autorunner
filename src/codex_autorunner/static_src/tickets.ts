@@ -85,7 +85,25 @@ type DispatchEntry = {
   } | null;
   errors?: string[];
   attachments?: DispatchAttachment[];
+  created_at?: string | null;
 };
+
+function formatDispatchTime(ts?: string | null): string {
+  if (!ts) return "";
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSecs = Math.floor(diffMs / 1000);
+  if (diffSecs < 60) return "now";
+  const diffMins = Math.floor(diffSecs / 60);
+  if (diffMins < 60) return `${diffMins}m`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d`;
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
 
 type TicketListPayload = {
   ticket_dir?: string;
@@ -869,6 +887,7 @@ function els(): {
   workerStatus: HTMLElement | null;
   workerPill: HTMLElement | null;
   recoverBtn: HTMLButtonElement | null;
+  metaDetails: HTMLElement | null;
   dir: HTMLElement | null;
   tickets: HTMLElement | null;
   history: HTMLElement | null;
@@ -898,6 +917,7 @@ function els(): {
     workerStatus: document.getElementById("ticket-flow-worker"),
     workerPill: document.getElementById("ticket-flow-worker-pill"),
     recoverBtn: document.getElementById("ticket-flow-recover") as HTMLButtonElement | null,
+    metaDetails: document.getElementById("ticket-meta-details"),
     dir: document.getElementById("ticket-flow-dir"),
     tickets: document.getElementById("ticket-flow-tickets"),
     history: document.getElementById("ticket-dispatch-history"),
@@ -964,6 +984,7 @@ function updateScrollFade(): void {
     }
   });
 }
+
 
 function truncate(text: string, max = 100): string {
   if (text.length <= max) return text;
@@ -1192,6 +1213,15 @@ function renderDispatchHistory(
         ticketLabel.title = ticketId;
         head.appendChild(ticketLabel);
       }
+    }
+    
+    // Add timestamp
+    const timeAgo = formatDispatchTime(entry.created_at);
+    if (timeAgo) {
+      const timeLabel = document.createElement("span");
+      timeLabel.className = "dispatch-time";
+      timeLabel.textContent = timeAgo;
+      head.appendChild(timeLabel);
     }
     
     container.appendChild(head);

@@ -11,6 +11,28 @@ import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "
 import { refreshBell, renderMarkdown } from "./messages.js";
 import { preserveScroll } from "./preserve.js";
 import { createSmartRefresh } from "./smartRefresh.js";
+function formatDispatchTime(ts) {
+    if (!ts)
+        return "";
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime()))
+        return "";
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffSecs = Math.floor(diffMs / 1000);
+    if (diffSecs < 60)
+        return "now";
+    const diffMins = Math.floor(diffSecs / 60);
+    if (diffMins < 60)
+        return `${diffMins}m`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24)
+        return `${diffHours}h`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7)
+        return `${diffDays}d`;
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
 let currentRunId = null;
 let ticketsExist = false;
 let currentActiveTicket = null;
@@ -719,6 +741,7 @@ function els() {
         workerStatus: document.getElementById("ticket-flow-worker"),
         workerPill: document.getElementById("ticket-flow-worker-pill"),
         recoverBtn: document.getElementById("ticket-flow-recover"),
+        metaDetails: document.getElementById("ticket-meta-details"),
         dir: document.getElementById("ticket-flow-dir"),
         tickets: document.getElementById("ticket-flow-tickets"),
         history: document.getElementById("ticket-dispatch-history"),
@@ -986,6 +1009,14 @@ function renderDispatchHistory(runId, data) {
                 ticketLabel.title = ticketId;
                 head.appendChild(ticketLabel);
             }
+        }
+        // Add timestamp
+        const timeAgo = formatDispatchTime(entry.created_at);
+        if (timeAgo) {
+            const timeLabel = document.createElement("span");
+            timeLabel.className = "dispatch-time";
+            timeLabel.textContent = timeAgo;
+            head.appendChild(timeLabel);
         }
         container.appendChild(head);
         if (entry.errors && entry.errors.length) {

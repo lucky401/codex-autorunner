@@ -245,6 +245,10 @@
               <div class="messages-main">
                 <div class="messages-detail-header mobile-only">
                   <button class="messages-back-btn" id="messages-back-btn">← Back</button>
+                  <div class="messages-detail-meta" id="messages-detail-meta">
+                    <span class="messages-detail-status pill pill-small pill-idle" id="messages-detail-status">–</span>
+                    <span class="messages-detail-counts muted" id="messages-detail-counts">–</span>
+                  </div>
                 </div>
                 <div class="messages-thread-detail" id="messages-thread-detail">
                   <div class="messages-empty-state">
@@ -435,32 +439,28 @@
               Ticket</button>
           </div>
           <div class="ticket-flow-meta" id="ticket-flow-meta">
-            <button class="ticket-meta-toggle" id="ticket-meta-toggle" title="Toggle details">
-              <span class="ticket-meta-summary" id="ticket-meta-summary">–</span>
-              <span class="ticket-meta-arrow">▾</span>
-            </button>
             <div class="ticket-meta-details" id="ticket-meta-details">
-              <div>
+              <div class="ticket-meta-secondary">
                 <span class="muted">Current ticket</span>
                 <span class="ticket-mono" id="ticket-flow-current">–</span>
               </div>
-              <div>
+              <div class="ticket-meta-secondary">
                 <span class="muted">Turn</span>
                 <span class="ticket-mono" id="ticket-flow-turn">–</span>
               </div>
-              <div>
+              <div class="ticket-meta-secondary">
                 <span class="muted">Elapsed</span>
                 <span class="ticket-mono" id="ticket-flow-elapsed">–</span>
               </div>
-              <div>
+              <div class="ticket-meta-secondary">
                 <span class="muted">Progress</span>
                 <span class="ticket-mono" id="ticket-flow-progress">–</span>
               </div>
-              <div>
+              <div class="ticket-meta-secondary">
                 <span class="muted">Reason</span>
                 <span class="ticket-mono ticket-flow-reason" id="ticket-flow-reason">–</span>
               </div>
-              <div>
+              <div class="ticket-meta-critical">
                 <span class="muted">Last activity</span>
                 <span class="ticket-mono" id="ticket-flow-last-activity">–</span>
                 <span class="pill pill-warn pill-small ticket-flow-pill" id="ticket-flow-stale"
@@ -468,7 +468,7 @@
                 <button class="ghost sm ticket-flow-action" id="ticket-flow-reconnect"
                   style="display:none;">Reconnect</button>
               </div>
-              <div>
+              <div class="ticket-meta-critical">
                 <span class="muted">Worker</span>
                 <span class="ticket-mono" id="ticket-flow-worker">–</span>
                 <span class="pill pill-error pill-small ticket-flow-pill" id="ticket-flow-worker-pill"
@@ -589,7 +589,7 @@
               <div class="ticket-chat-panel">
                 <div class="ticket-chat-compose">
                   <div class="ticket-chat-agent-controls">
-                    <select id="ticket-chat-agent-select" title="Agent"></select>
+                    <select class="mobile-hide-empty" id="ticket-chat-agent-select" title="Agent"></select>
                     <select id="ticket-chat-model-select" title="Model"></select>
                     <select id="ticket-chat-reasoning-select" title="Reasoning"></select>
                   </div>

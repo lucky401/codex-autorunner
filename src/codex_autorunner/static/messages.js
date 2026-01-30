@@ -106,6 +106,44 @@ export function initMessageBell() {
         }
     });
 }
+function formatRelativeTime(ts) {
+    if (!ts)
+        return "";
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime()))
+        return "";
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffSecs = Math.floor(diffMs / 1000);
+    if (diffSecs < 60)
+        return "just now";
+    const diffMins = Math.floor(diffSecs / 60);
+    if (diffMins < 60)
+        return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24)
+        return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7)
+        return `${diffDays}d ago`;
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+function getStatusPillClass(status) {
+    switch (status) {
+        case "paused":
+            return "pill-action";
+        case "running":
+        case "pending":
+            return "pill-success";
+        case "completed":
+            return "pill-idle";
+        case "failed":
+        case "stopped":
+            return "pill-error";
+        default:
+            return "pill-idle";
+    }
+}
 function renderThreadItem(thread) {
     const latestDispatch = thread.latest?.dispatch;
     const isHandoff = latestDispatch?.is_handoff || latestDispatch?.mode === "pause";
@@ -122,12 +160,26 @@ function renderThreadItem(thread) {
     const indicator = hasUnrepliedHandoff ? `<span class="messages-thread-indicator" title="Action required"></span>` : "";
     const dispatches = thread.dispatch_count ?? 0;
     const replies = thread.reply_count ?? 0;
-    const metaLine = `${dispatches} dispatch${dispatches !== 1 ? "es" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
+    // Format timestamp for last dispatch
+    const lastTs = thread.latest?.created_at;
+    const timeAgo = formatRelativeTime(lastTs);
+    // Status badge
+    const status = thread.status || "idle";
+    const statusClass = getStatusPillClass(status);
+    const statusLabel = status === "paused" && hasUnrepliedHandoff ? "action" : status;
+    // Build meta line with timestamp
+    const countPart = `${dispatches} dispatch${dispatches !== 1 ? "es" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
     return `
     <button class="messages-thread${isActive ? " active" : ""}" data-run-id="${escapeHtml(thread.run_id)}">
-      <div class="messages-thread-title">${indicator}${escapeHtml(title)}</div>
+      <div class="messages-thread-header">
+        <div class="messages-thread-title">${indicator}${escapeHtml(title)}</div>
+        <span class="pill pill-small ${statusClass}">${escapeHtml(statusLabel)}</span>
+      </div>
       <div class="messages-thread-subtitle muted">${escapeHtml(subtitle)}</div>
-      <div class="messages-thread-meta-line">${escapeHtml(metaLine)}</div>
+      <div class="messages-thread-meta-line">
+        <span class="messages-thread-counts">${escapeHtml(countPart)}</span>
+        ${timeAgo ? `<span class="messages-thread-time">${escapeHtml(timeAgo)}</span>` : ""}
+      </div>
     </button>
   `;
 }
@@ -542,6 +594,17 @@ function isAtBottom(el) {
     const threshold = 8;
     return el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
 }
+function updateMobileDetailHeader(status, dispatchCount, replyCount) {
+    const statusEl = document.getElementById("messages-detail-status");
+    const countsEl = document.getElementById("messages-detail-counts");
+    if (statusEl) {
+        statusEl.className = `messages-detail-status pill pill-small ${getStatusPillClass(status)}`;
+        statusEl.textContent = status || "idle";
+    }
+    if (countsEl) {
+        countsEl.textContent = `${dispatchCount}D · ${replyCount}R`;
+    }
+}
 function renderThreadDetail(detail, runId, ctx) {
     if (!detailEl)
         return;
@@ -553,6 +616,8 @@ function renderThreadDetail(detail, runId, ctx) {
     const replyCount = detail.reply_count ?? replyHistory.length;
     const ticketState = detail.ticket_state;
     const turns = ticketState?.total_turns ?? null;
+    // Update mobile header metadata
+    updateMobileDetailHeader(runStatus, dispatchCount, replyCount);
     // Truncate run ID for display
     const shortRunId = runId.length > 12 ? runId.slice(0, 8) + "…" : runId;
     // Build compact stats line
