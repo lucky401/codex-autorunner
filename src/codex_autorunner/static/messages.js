@@ -153,14 +153,42 @@ export function renderMarkdown(body) {
         codeBlocks.push(`<pre class="md-code"><code>${code}</code></pre>`);
         return placeholder;
     });
-    // Inline code
-    text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+    // Extract inline code to avoid linking inside it
+    const inlineCode = [];
+    text = text.replace(/`([^`]+)`/g, (_m, code) => {
+        const placeholder = `@@INLINECODE_${inlineCode.length}@@`;
+        inlineCode.push(`<code>${code}</code>`);
+        return placeholder;
+    });
     // Bold and italic (simple, non-nested)
     text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     text = text.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-    // Links [text](url) only for http/https
+    // Extract markdown links [text](url) to avoid double-linking
+    const links = [];
     text = text.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, (_m, label, url) => {
-        return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`;
+        const placeholder = `@@LINK_${links.length}@@`;
+        // Note: label and url are already escaped because text is escaped.
+        links.push(`<a href="${url}" target="_blank" rel="noopener">${label}</a>`);
+        return placeholder;
+    });
+    // Auto-link raw URLs
+    text = text.replace(/(https?:\/\/[^\s]+)/g, (url) => {
+        let cleanUrl = url;
+        let suffix = "";
+        const trailing = /[.,;!?)]$/;
+        while (trailing.test(cleanUrl)) {
+            suffix = cleanUrl.slice(-1) + suffix;
+            cleanUrl = cleanUrl.slice(0, -1);
+        }
+        return `<a href="${cleanUrl}" target="_blank" rel="noopener">${cleanUrl}</a>${suffix}`;
+    });
+    // Restore markdown links
+    text = text.replace(/@@LINK_(\d+)@@/g, (_m, id) => {
+        return links[Number(id)] ?? "";
+    });
+    // Restore inline code
+    text = text.replace(/@@INLINECODE_(\d+)@@/g, (_m, id) => {
+        return inlineCode[Number(id)] ?? "";
     });
     // Lists (skip placeholders so code fences remain untouched)
     const lines = text.split(/\n/);
