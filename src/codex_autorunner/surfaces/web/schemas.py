@@ -66,6 +66,39 @@ class WorkspaceUploadResponse(ResponseModel):
     uploaded: List[WorkspaceUploadedItem]
 
 
+class ArchiveSnapshotSummary(ResponseModel):
+    snapshot_id: str
+    worktree_repo_id: str
+    created_at: Optional[str] = None
+    status: Optional[str] = None
+    branch: Optional[str] = None
+    head_sha: Optional[str] = None
+    note: Optional[str] = None
+    summary: Optional[Dict[str, Any]] = None
+
+
+class ArchiveSnapshotsResponse(ResponseModel):
+    snapshots: List[ArchiveSnapshotSummary]
+
+
+class ArchiveSnapshotDetailResponse(ResponseModel):
+    snapshot: ArchiveSnapshotSummary
+    meta: Optional[Dict[str, Any]] = None
+
+
+class ArchiveTreeNode(ResponseModel):
+    path: str
+    name: str
+    type: Literal["file", "folder"]
+    size_bytes: Optional[int] = None
+    mtime: Optional[float] = None
+
+
+class ArchiveTreeResponse(ResponseModel):
+    path: str
+    nodes: List[ArchiveTreeNode]
+
+
 class SpecIngestTicketsResponse(ResponseModel):
     status: str
     created: int
@@ -117,6 +150,13 @@ class HubCleanupWorktreeRequest(Payload):
     )
     delete_branch: bool = False
     delete_remote: bool = False
+    archive: bool = True
+    force_archive: bool = Field(
+        default=False, validation_alias=AliasChoices("force_archive", "forceArchive")
+    )
+    archive_note: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
+    )
 
 
 class AppServerThreadResetRequest(Payload):
