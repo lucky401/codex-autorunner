@@ -54,20 +54,25 @@ Mapping the conceptual layers to the codebase:
 - **Control Plane**: `.codex-autorunner/` (files), `tickets/` (python).
 - **Adapters**: `src/codex_autorunner/integrations/` (GitHub, Telegram, App Server).
 - **Surfaces**:
-  - **CLI**: `src/codex_autorunner/cli.py` (Typer wrapper).
+  - **Hub**: Supervises multiple repos/worktrees (primary interface for users).
   - **Server/UI**: `src/codex_autorunner/server.py` (FastAPI), `static/`.
-  - **Hub**: Supervises multiple repos/worktrees.
+  - **CLI**: `src/codex_autorunner/cli.py` (Typer wrapper).
 
 ## Data Layout & Config
-- **Repo Root**:
+- **Hub Root** (primary):
   - `codex-autorunner.yml`: Defaults (committed).
   - `codex-autorunner.override.yml`: Local overrides (gitignored).
+  - `.codex-autorunner/`: Hub state.
+    - `manifest.yml`: Lists managed repositories.
+    - `hub_state.json`, `config.yml`, logs.
+  - `repos/`: Managed repositories (default location).
+- **Per-Repo** (under hub, or standalone for CAR development):
   - `.codex-autorunner/`: Canonical runtime state.
     - `tickets/`: Required (`TICKET-###.md`).
     - `workspace/`: Optional context (`active_context.md`, `decisions.md`, `spec.md`).
     - `config.yml`: Generated config.
     - `state.sqlite3`, logs, lock.
-- **Global Root** (cross-repo only):
+- **Global Root** (cross-repo caches):
   - `~/.codex-autorunner/`: update cache, update status/lock, shared app-server workspaces.
 - **Config Precedence**: Built-ins < `codex-autorunner.yml` < override < `.codex-autorunner/config.yml` < env.
 
