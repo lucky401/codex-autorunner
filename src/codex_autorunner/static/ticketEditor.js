@@ -571,6 +571,8 @@ export function closeTicketEditor() {
     // Reset chat state
     resetTicketChatState();
     setTicketIndex(null);
+    // Notify that editor was closed (for selection state cleanup)
+    publish("ticket-editor:closed", {});
 }
 /**
  * Save the current ticket (triggers immediate autosave)

@@ -1776,6 +1776,26 @@ button.icon-btn {
   min-height: 0;
   container-type: inline-size;
   container-name: ticket-panel;
+  position: relative;
+}
+
+/* Scroll fade indicator - shows when content is scrollable */
+.ticket-card .ticket-panel::after {
+  content: "";
+  position: absolute;
+  bottom: 10px; /* Match panel padding */
+  left: 10px;
+  right: 16px; /* Leave room for scrollbar */
+  height: 32px;
+  background: linear-gradient(to bottom, transparent, rgba(26, 33, 48, 0.95));
+  border-radius: 0 0 8px 8px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.ticket-card .ticket-panel.has-scroll-bottom::after {
+  opacity: 1;
 }
 
 .ticket-card .ticket-panel-header {
@@ -1786,6 +1806,30 @@ button.icon-btn {
   padding: 2px 2px 6px 2px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   margin-bottom: 2px;
+}
+
+/* Ticket progress bar */
+.ticket-progress-bar {
+  height: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+  margin: 4px 0 6px 0;
+  flex-shrink: 0;
+}
+
+.ticket-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3fb950, #58d66a);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+
+/* Hide progress bar when empty (0 tickets) */
+.ticket-progress-bar:empty,
+.ticket-progress-bar.hidden {
+  display: none;
 }
 
 .ticket-card .ticket-list {
@@ -1960,8 +2004,24 @@ button.icon-btn {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  min-height: 0;
-  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+  min-height: 56px; /* Consistent height for visual rhythm with body preview */
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.ticket-card .ticket-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.ticket-card .ticket-item.selected {
+  border-color: var(--accent, #6f89ff);
+  background: rgba(111, 137, 255, 0.08);
+  box-shadow: 0 0 0 1px rgba(111, 137, 255, 0.3);
+}
+
+.ticket-card .ticket-item.selected:hover {
+  background: rgba(111, 137, 255, 0.12);
 }
 
 .ticket-card .ticket-item.done {
@@ -2128,10 +2188,18 @@ button.icon-btn {
   line-height: 1.4;
   max-height: 2.8em;
   /* ~2 lines */
+  min-height: 1.4em; /* Reserve space for at least 1 line */
   overflow: hidden;
   word-break: break-word;
   -webkit-mask-image: linear-gradient(to bottom, black 50%, transparent 100%);
   mask-image: linear-gradient(to bottom, black 50%, transparent 100%);
+}
+
+/* Empty body placeholder */
+.ticket-card .ticket-item .ticket-body:empty::before {
+  content: "No description";
+  color: rgba(144, 152, 168, 0.5);
+  font-style: italic;
 }
 
 /* Compact mode when panel is narrow */
@@ -9195,6 +9263,10 @@ button.loading::after {
 .messages-markdown ul {
   margin: 0 0 6px 16px;
   padding: 0;
+}
+
+.messages-markdown li {
+  margin: 0;
 }
 
 .messages-markdown code {

@@ -14,6 +14,7 @@ let currentRunId = null;
 let ticketsExist = false;
 let currentActiveTicket = null;
 let currentFlowStatus = null;
+let selectedTicketPath = null;
 let elapsedTimerId = null;
 let flowStartedAt = null;
 let eventSource = null;
@@ -692,6 +693,49 @@ function setButtonsDisabled(disabled) {
             btn.disabled = disabled;
     });
 }
+/**
+ * Updates the selected class on ticket items based on selectedTicketPath.
+ */
+function updateSelectedTicket(path) {
+    selectedTicketPath = path;
+    const ticketList = document.getElementById("ticket-flow-tickets");
+    if (!ticketList)
+        return;
+    const items = ticketList.querySelectorAll(".ticket-item");
+    items.forEach((item) => {
+        const ticketPath = item.getAttribute("data-ticket-path");
+        if (ticketPath === path) {
+            item.classList.add("selected");
+        }
+        else {
+            item.classList.remove("selected");
+        }
+    });
+}
+/**
+ * Updates the scroll fade indicator on ticket panels.
+ * Adds 'has-scroll-bottom' class when content is scrollable and not at bottom.
+ */
+function updateScrollFade() {
+    const ticketList = document.getElementById("ticket-flow-tickets");
+    const dispatchHistory = document.getElementById("ticket-dispatch-history");
+    [ticketList, dispatchHistory].forEach((list) => {
+        if (!list)
+            return;
+        const panel = list.closest(".ticket-panel");
+        if (!panel)
+            return;
+        // Check if scrollable and not scrolled to bottom
+        const hasScrollableContent = list.scrollHeight > list.clientHeight;
+        const isNotAtBottom = list.scrollTop + list.clientHeight < list.scrollHeight - 10;
+        if (hasScrollableContent && isNotAtBottom) {
+            panel.classList.add("has-scroll-bottom");
+        }
+        else {
+            panel.classList.remove("has-scroll-bottom");
+        }
+    });
+}
 function truncate(text, max = 100) {
     if (text.length <= max)
         return text;
@@ -707,6 +751,21 @@ function renderTickets(data) {
     tickets.innerHTML = "";
     const list = (data?.tickets || []);
     ticketsExist = list.length > 0;
+    // Update progress bar
+    const progressBar = document.getElementById("ticket-progress-bar");
+    const progressFill = document.getElementById("ticket-progress-fill");
+    if (progressBar && progressFill) {
+        if (list.length === 0) {
+            progressBar.classList.add("hidden");
+        }
+        else {
+            progressBar.classList.remove("hidden");
+            const doneCount = list.filter((t) => Boolean((t.frontmatter || {})?.done)).length;
+            const percent = Math.round((doneCount / list.length) * 100);
+            progressFill.style.width = `${percent}%`;
+            progressBar.title = `${doneCount} of ${list.length} tickets done`;
+        }
+    }
     if (!list.length) {
         tickets.textContent = "No tickets found. Start the ticket flow to create TICKET-001.md.";
         return;
@@ -719,10 +778,12 @@ function renderTickets(data) {
         const isActive = Boolean(currentActiveTicket &&
             ticket.path === currentActiveTicket &&
             isFlowActiveStatus(currentFlowStatus));
-        item.className = `ticket-item ${done ? "done" : ""} ${isActive ? "active" : ""} clickable`;
+        item.className = `ticket-item ${done ? "done" : ""} ${isActive ? "active" : ""} ${selectedTicketPath === ticket.path ? "selected" : ""} clickable`;
         item.title = "Click to edit";
+        item.setAttribute("data-ticket-path", ticket.path || "");
         // Make ticket item clickable to open editor
         item.addEventListener("click", () => {
+            updateSelectedTicket(ticket.path || null);
             openTicketEditor(ticket);
         });
         const head = document.createElement("div");
@@ -795,6 +856,8 @@ function renderTickets(data) {
         }
         tickets.appendChild(item);
     });
+    // Update scroll fade indicator after rendering
+    updateScrollFade();
 }
 function renderDispatchHistory(runId, data) {
     const { history, dispatchNote } = els();
@@ -916,6 +979,8 @@ function renderDispatchHistory(runId, data) {
         }
         history.appendChild(container);
     });
+    // Update scroll fade indicator after rendering
+    updateScrollFade();
 }
 const MAX_REASON_LENGTH = 60;
 /**
@@ -1626,6 +1691,14 @@ export function initTicketFlow() {
     initLiveOutputPanel();
     // Initialize dispatch panel toggle for medium screens
     initDispatchPanelToggle();
+    // Set up scroll listeners for fade indicator
+    const ticketList = document.getElementById("ticket-flow-tickets");
+    const dispatchHistory = document.getElementById("ticket-dispatch-history");
+    [ticketList, dispatchHistory].forEach((el) => {
+        if (el) {
+            el.addEventListener("scroll", updateScrollFade, { passive: true });
+        }
+    });
     const newThreadBtn = document.getElementById("ticket-chat-new-thread");
     if (newThreadBtn) {
         newThreadBtn.addEventListener("click", async () => {
@@ -1655,6 +1728,10 @@ export function initTicketFlow() {
     // Refresh ticket list when tickets are updated (from editor)
     subscribe("tickets:updated", () => {
         void loadTicketFiles();
+    });
+    // Clear selection when editor is closed
+    subscribe("ticket-editor:closed", () => {
+        updateSelectedTicket(null);
     });
     // Handle browser navigation (back/forward)
     window.addEventListener("popstate", () => {

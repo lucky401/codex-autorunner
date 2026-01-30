@@ -693,6 +693,9 @@ export function closeTicketEditor(): void {
   // Reset chat state
   resetTicketChatState();
   setTicketIndex(null);
+  
+  // Notify that editor was closed (for selection state cleanup)
+  publish("ticket-editor:closed", {});
 }
 
 /**

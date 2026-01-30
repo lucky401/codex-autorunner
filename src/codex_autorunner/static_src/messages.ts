@@ -271,25 +271,28 @@ export function renderMarkdown(body?: string | null): string {
     }
     if (/^[-*]\s+/.test(line)) {
       if (!inList) {
-        out.push("<ul>");
+        out.push("", "<ul>");
         inList = true;
       }
       out.push(`<li>${line.replace(/^[-*]\s+/, "")}</li>`);
     } else {
       if (inList) {
-        out.push("</ul>");
+        out.push("</ul>", "");
         inList = false;
       }
       out.push(line);
     }
   });
-  if (inList) out.push("</ul>");
+  if (inList) out.push("</ul>", "");
 
   // Paragraphs and placeholder restoration
   const joined = out.join("\n");
   return joined
     .split(/\n\n+/)
     .map((block) => {
+      if (block.trim().startsWith("<ul>")) {
+        return block;
+      }
       const match = block.match(/^@@CODEBLOCK_(\d+)@@$/);
       if (match) {
         const idx = Number(match[1]);
