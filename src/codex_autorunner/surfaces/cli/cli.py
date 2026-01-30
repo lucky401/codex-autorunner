@@ -1138,8 +1138,8 @@ def flow(
 
         from ...core.flows import FlowController, FlowStore
         from ...core.flows.models import FlowRunStatus
-        from ...integrations.agents import AgentPool
-        from ...integrations.agents.ticket_flow import build_ticket_flow_definition
+        from ...flows.ticket_flow.definition import build_ticket_flow_definition
+        from ...tickets import AgentPool
 
         db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
         artifacts_root = engine.repo_root / ".codex-autorunner" / "flows"
