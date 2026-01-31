@@ -489,23 +489,29 @@ function renderDispatch(entry, isLatest, runStatus, isLastInTimeline = false) {
     const modePill = dispatch?.mode ? ` <span class="pill pill-small ${modeClass}">${escapeHtml(modeLabel)}</span>` : "";
     const body = dispatch?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(dispatch.body)}</div>` : "";
     const ts = entry.created_at ? formatTimestamp(entry.created_at) : "";
+    const collapseTitle = isCollapsed ? "Click to expand" : "Click to collapse";
     return `
     <div class="messages-entry${dispatchTypeClass ? " " + dispatchTypeClass : ""}${isCollapsed ? " collapsed" : ""}" 
          data-seq="${entry.seq}" 
          data-type="dispatch" 
          data-created="${escapeHtml(entry.created_at || "")}">
-      <div class="messages-entry-header">
-        <button class="messages-collapse-btn" aria-label="${isCollapsed ? "Expand dispatch" : "Collapse dispatch"}" aria-expanded="${String(!isCollapsed)}">
-          ${isCollapsed ? "▶" : "▼"}
-        </button>
-        <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
-        <span class="messages-entry-title">${escapeHtml(title)}</span>
-        ${modePill}
-        <span class="messages-entry-time">${escapeHtml(ts)}</span>
-      </div>
-      <div class="messages-entry-body">
-        ${body}
-        ${renderFiles(entry.files)}
+      <div class="messages-collapse-bar" 
+           role="button" 
+           tabindex="0" 
+           title="${collapseTitle}"
+           aria-label="${isCollapsed ? "Expand dispatch" : "Collapse dispatch"}" 
+           aria-expanded="${String(!isCollapsed)}"></div>
+      <div class="messages-content-wrapper">
+        <div class="messages-entry-header">
+          <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
+          <span class="messages-entry-title">${escapeHtml(title)}</span>
+          ${modePill}
+          <span class="messages-entry-time">${escapeHtml(ts)}</span>
+        </div>
+        <div class="messages-entry-body">
+          ${body}
+          ${renderFiles(entry.files)}
+        </div>
       </div>
     </div>
   `;
@@ -520,15 +526,25 @@ function renderReply(entry, parentSeq) {
         : "";
     return `
     <div class="messages-entry messages-entry-reply" data-seq="${entry.seq}" data-type="reply" data-created="${escapeHtml(entry.created_at || "")}">
-      ${replyIndicator}
-      <div class="messages-entry-header">
-        <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
-        <span class="messages-entry-title">${escapeHtml(title)}</span>
-        <span class="pill pill-small pill-idle">you</span>
-        <span class="messages-entry-time">${escapeHtml(ts)}</span>
+      <div class="messages-collapse-bar" 
+           role="button" 
+           tabindex="0" 
+           title="Click to collapse"
+           aria-label="Collapse reply" 
+           aria-expanded="true"></div>
+      <div class="messages-content-wrapper">
+        ${replyIndicator}
+        <div class="messages-entry-header">
+          <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
+          <span class="messages-entry-title">${escapeHtml(title)}</span>
+          <span class="pill pill-small pill-idle">you</span>
+          <span class="messages-entry-time">${escapeHtml(ts)}</span>
+        </div>
+        <div class="messages-entry-body">
+          ${body}
+          ${renderFiles(entry.files)}
+        </div>
       </div>
-      ${body}
-      ${renderFiles(entry.files)}
     </div>
   `;
 }
@@ -641,19 +657,52 @@ function updateMobileDetailHeader(status, dispatchCount, replyCount) {
 function attachCollapseHandlers() {
     if (!detailEl)
         return;
-    const collapseButtons = detailEl.querySelectorAll(".messages-collapse-btn");
-    collapseButtons.forEach((btn) => {
-        // Remove existing listeners by cloning the button
-        const newBtn = btn.cloneNode(true);
-        btn.parentNode?.replaceChild(newBtn, btn);
-        newBtn.addEventListener("click", (e) => {
+    // Helper to toggle collapse state
+    const toggleEntry = (entry, bar) => {
+        const isNowCollapsed = entry.classList.toggle("collapsed");
+        bar.title = isNowCollapsed ? "Click to expand" : "Click to collapse";
+        bar.setAttribute("aria-expanded", String(!isNowCollapsed));
+        bar.setAttribute("aria-label", isNowCollapsed ? "Expand dispatch" : "Collapse dispatch");
+    };
+    // Attach handlers to collapse bars
+    const collapseBars = detailEl.querySelectorAll(".messages-collapse-bar");
+    collapseBars.forEach((bar) => {
+        // Remove existing listeners by cloning
+        const newBar = bar.cloneNode(true);
+        bar.parentNode?.replaceChild(newBar, bar);
+        newBar.addEventListener("click", (e) => {
             e.stopPropagation();
-            const entry = newBtn.closest(".messages-entry");
+            const entry = newBar.closest(".messages-entry");
             if (entry) {
-                const isNowCollapsed = entry.classList.toggle("collapsed");
-                newBtn.innerHTML = isNowCollapsed ? "▶" : "▼";
-                newBtn.setAttribute("aria-expanded", String(!isNowCollapsed));
-                newBtn.setAttribute("aria-label", isNowCollapsed ? "Expand dispatch" : "Collapse dispatch");
+                toggleEntry(entry, newBar);
+            }
+        });
+        // Keyboard support
+        newBar.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                const entry = newBar.closest(".messages-entry");
+                if (entry) {
+                    toggleEntry(entry, newBar);
+                }
+            }
+        });
+    });
+    // Also make headers clickable for collapse
+    const headers = detailEl.querySelectorAll(".messages-entry-header");
+    headers.forEach((header) => {
+        // Remove existing listeners by cloning
+        const newHeader = header.cloneNode(true);
+        header.parentNode?.replaceChild(newHeader, header);
+        newHeader.addEventListener("click", (e) => {
+            // Don't toggle if clicking on a link
+            if (e.target.closest("a"))
+                return;
+            e.stopPropagation();
+            const entry = newHeader.closest(".messages-entry");
+            const bar = entry?.querySelector(".messages-collapse-bar");
+            if (entry && bar) {
+                toggleEntry(entry, bar);
             }
         });
     });

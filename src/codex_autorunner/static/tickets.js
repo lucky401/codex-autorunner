@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal, inputModal, setButtonLoading, } from "./utils.js";
-import { activateTab } from "./tabs.js";
+// Note: activateTab removed - header now used for collapse, not inbox navigation
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
@@ -984,40 +984,48 @@ function renderDispatchHistory(runId, data) {
         const isCollapsed = !isLast;
         const container = document.createElement("div");
         container.className = `dispatch-item${isTurnSummary ? " turn-summary" : ""}${isHandoff ? " pause" : ""}${isNotify ? " notify" : ""}${isCollapsed ? " collapsed" : ""}`;
+        // Reddit-style thin collapse bar on the left
+        const collapseBar = document.createElement("div");
+        collapseBar.className = "dispatch-collapse-bar";
+        collapseBar.title = isCollapsed ? "Click to expand" : "Click to collapse";
+        collapseBar.setAttribute("role", "button");
+        collapseBar.setAttribute("tabindex", "0");
+        collapseBar.setAttribute("aria-label", isCollapsed ? "Expand dispatch" : "Collapse dispatch");
+        collapseBar.setAttribute("aria-expanded", String(!isCollapsed));
+        const toggleCollapse = () => {
+            container.classList.toggle("collapsed");
+            const isNowCollapsed = container.classList.contains("collapsed");
+            collapseBar.title = isNowCollapsed ? "Click to expand" : "Click to collapse";
+            collapseBar.setAttribute("aria-expanded", String(!isNowCollapsed));
+            collapseBar.setAttribute("aria-label", isNowCollapsed ? "Expand dispatch" : "Collapse dispatch");
+        };
+        collapseBar.addEventListener("click", (e) => {
+            e.stopPropagation();
+            toggleCollapse();
+        });
+        collapseBar.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleCollapse();
+            }
+        });
+        // Content wrapper for header and body
+        const contentWrapper = document.createElement("div");
+        contentWrapper.className = "dispatch-content-wrapper";
         // Create collapsible structure
         const header = document.createElement("div");
         header.className = "dispatch-header";
-        // Collapse toggle button (left side)
-        const collapseBtn = document.createElement("button");
-        collapseBtn.className = "dispatch-collapse-btn";
-        collapseBtn.innerHTML = isCollapsed ? "▶" : "▼";
-        collapseBtn.setAttribute("aria-label", isCollapsed ? "Expand dispatch" : "Collapse dispatch");
-        collapseBtn.setAttribute("aria-expanded", String(!isCollapsed));
-        collapseBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            container.classList.toggle("collapsed");
-            const isNowCollapsed = container.classList.contains("collapsed");
-            collapseBtn.innerHTML = isNowCollapsed ? "▶" : "▼";
-            collapseBtn.setAttribute("aria-expanded", String(!isNowCollapsed));
-            collapseBtn.setAttribute("aria-label", isNowCollapsed ? "Expand dispatch" : "Collapse dispatch");
+        // Make header clickable to toggle collapse
+        header.addEventListener("click", (e) => {
+            // Don't toggle if clicking on a link or navigating to inbox
+            if (e.target.closest("a"))
+                return;
+            toggleCollapse();
         });
-        // Header content area (clickable for navigation)
+        // Header content area
         const headerContent = document.createElement("div");
         headerContent.className = "dispatch-header-content";
-        headerContent.title = isTurnSummary ? "Agent turn output" : "Click to view in Inbox";
-        // Add click handler to navigate to inbox (skip for turn summaries)
-        if (!isTurnSummary) {
-            headerContent.addEventListener("click", () => {
-                if (runId) {
-                    // Update URL with run_id so inbox tab loads the right thread
-                    const url = new URL(window.location.href);
-                    url.searchParams.set("run_id", runId);
-                    window.history.replaceState({}, "", url.toString());
-                    // Switch to inbox tab
-                    activateTab("inbox");
-                }
-            });
-        }
+        headerContent.title = isTurnSummary ? "Agent turn output" : "Click header to expand/collapse";
         // Determine mode label
         let modeLabel;
         if (isTurnSummary) {
@@ -1039,8 +1047,9 @@ function renderDispatchHistory(runId, data) {
         mode.textContent = modeLabel;
         head.append(seq, mode);
         headerContent.appendChild(head);
-        header.append(collapseBtn, headerContent);
-        container.appendChild(header);
+        header.appendChild(headerContent);
+        contentWrapper.appendChild(header);
+        container.append(collapseBar, contentWrapper);
         // Add diff stats if present (for turn summaries)
         const diffStats = dispatch?.extra?.diff_stats;
         if (diffStats && (diffStats.insertions || diffStats.deletions)) {
@@ -1113,7 +1122,7 @@ function renderDispatchHistory(runId, data) {
             });
             bodyWrapper.appendChild(wrap);
         }
-        container.appendChild(bodyWrapper);
+        contentWrapper.appendChild(bodyWrapper);
         history.appendChild(container);
     });
     // Update scroll fade indicator after rendering

@@ -1929,6 +1929,9 @@ button.icon-btn {
   border-radius: 8px;
   cursor: default;
   transition: background 0.15s ease, border-color 0.15s ease;
+  position: relative;
+  display: flex;
+  flex-direction: row;
 }
 
 .dispatch-item:hover {
@@ -1936,54 +1939,73 @@ button.icon-btn {
   border-color: var(--accent);
 }
 
+/* Reddit-style thin collapse bar on the left */
+.dispatch-collapse-bar {
+  flex-shrink: 0;
+  width: 4px;
+  min-height: 100%;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 8px 0 0 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, width 0.1s ease;
+  position: relative;
+}
+
+.dispatch-collapse-bar:hover {
+  background: var(--accent);
+  width: 6px;
+}
+
+.dispatch-collapse-bar:active {
+  background: var(--accent-hover, var(--accent));
+}
+
+/* Collapsed state - bar is dimmer */
+.dispatch-item.collapsed .dispatch-collapse-bar {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dispatch-item.collapsed .dispatch-collapse-bar:hover {
+  background: var(--accent);
+  width: 6px;
+}
+
+/* Dispatch content wrapper */
+.dispatch-content-wrapper {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* Dispatch header */
 .dispatch-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 6px;
   padding: 8px 10px;
   border-bottom: 1px solid transparent;
   transition: border-color 0.15s ease;
+  cursor: pointer;
+}
+
+.dispatch-header:hover {
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .dispatch-item.collapsed .dispatch-header {
   border-bottom: none;
 }
 
-/* Collapse toggle button */
+/* Hide old collapse button - replaced by bar */
 .dispatch-collapse-btn {
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 4px;
-  color: var(--text);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  line-height: 1;
-  transition: background 0.15s ease, border-color 0.15s ease;
-  margin-top: 2px;
-}
-
-.dispatch-collapse-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
-  border-color: var(--accent);
-}
-
-.dispatch-collapse-btn:active {
-  transform: scale(0.95);
+  display: none;
 }
 
 /* Header content area */
 .dispatch-header-content {
   flex: 1;
   min-width: 0;
-  cursor: pointer;
 }
 
 .dispatch-item.turn-summary .dispatch-header-content {
@@ -2089,6 +2111,14 @@ button.icon-btn {
   border-color: rgba(63, 185, 80, 0.5);
 }
 
+.dispatch-item.turn-summary .dispatch-collapse-bar {
+  background: rgba(63, 185, 80, 0.5);
+}
+
+.dispatch-item.turn-summary .dispatch-collapse-bar:hover {
+  background: rgba(63, 185, 80, 0.8);
+}
+
 .dispatch-item .turn-summary-badge {
   background: rgba(63, 185, 80, 0.25);
   color: #8dc896;
@@ -2105,6 +2135,14 @@ button.icon-btn {
   border-color: rgba(248, 81, 73, 0.5);
 }
 
+.dispatch-item.pause .dispatch-collapse-bar {
+  background: rgba(248, 81, 73, 0.5);
+}
+
+.dispatch-item.pause .dispatch-collapse-bar:hover {
+  background: rgba(248, 81, 73, 0.8);
+}
+
 /* Notify dispatch styling - orange */
 .dispatch-item.notify {
   background: rgba(255, 163, 68, 0.06);
@@ -2114,6 +2152,14 @@ button.icon-btn {
 .dispatch-item.notify:hover {
   background: rgba(255, 163, 68, 0.1);
   border-color: rgba(255, 163, 68, 0.5);
+}
+
+.dispatch-item.notify .dispatch-collapse-bar {
+  background: rgba(255, 163, 68, 0.5);
+}
+
+.dispatch-item.notify .dispatch-collapse-bar:hover {
+  background: rgba(255, 163, 68, 0.8);
 }
 
 /* Ticket reference in dispatch items */
@@ -2580,7 +2626,16 @@ button.icon-btn {
 
   /* Compact dispatch items on mobile */
   .dispatch-item {
-    padding: 8px 10px;
+    padding: 0;
+  }
+  
+  /* Wider collapse bar on mobile for easier touch */
+  .dispatch-collapse-bar {
+    width: 6px;
+  }
+  
+  .dispatch-collapse-bar:hover {
+    width: 8px;
   }
 
   .ticket-dispatch-body {
@@ -9488,39 +9543,56 @@ button.loading::after {
   background: var(--panel);
   margin-top: 10px;
   transition: border-color 0.15s ease, background 0.15s ease;
+  position: relative;
+  display: flex;
+  flex-direction: row;
 }
 
 .messages-entry:first-child {
   margin-top: 0;
 }
 
-/* Collapse button in messages entry */
-.messages-collapse-btn {
+/* Reddit-style thin collapse bar on the left */
+.messages-collapse-bar {
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 4px;
-  color: var(--text);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  line-height: 1;
-  transition: background 0.15s ease, border-color 0.15s ease;
-  margin-top: 2px;
-}
-
-.messages-collapse-btn:hover {
+  width: 4px;
+  min-height: 100%;
   background: rgba(255, 255, 255, 0.15);
-  border-color: var(--accent);
+  border-radius: var(--radius) 0 0 var(--radius);
+  cursor: pointer;
+  transition: background 0.15s ease, width 0.1s ease;
 }
 
-.messages-collapse-btn:active {
-  transform: scale(0.95);
+.messages-collapse-bar:hover {
+  background: var(--accent);
+  width: 6px;
+}
+
+.messages-collapse-bar:active {
+  background: var(--accent-hover, var(--accent));
+}
+
+/* Collapsed state - bar is dimmer */
+.messages-entry.collapsed .messages-collapse-bar {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.messages-entry.collapsed .messages-collapse-bar:hover {
+  background: var(--accent);
+  width: 6px;
+}
+
+/* Messages content wrapper */
+.messages-content-wrapper {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Hide old collapse button - replaced by bar */
+.messages-collapse-btn {
+  display: none;
 }
 
 /* Messages entry body wrapper */
@@ -9535,8 +9607,16 @@ button.loading::after {
 
 .messages-entry.messages-entry-reply {
   margin-left: 20px;
-  border-left: 2px solid rgba(108, 168, 255, 0.4);
   background: rgba(108, 168, 255, 0.04);
+}
+
+/* User reply collapse bar is blue */
+.messages-entry.messages-entry-reply .messages-collapse-bar {
+  background: rgba(108, 168, 255, 0.4);
+}
+
+.messages-entry.messages-entry-reply .messages-collapse-bar:hover {
+  background: rgba(108, 168, 255, 0.7);
 }
 
 /* Pause/handoff dispatch styling - red */
@@ -9550,6 +9630,14 @@ button.loading::after {
   background: rgba(248, 81, 73, 0.08);
 }
 
+.messages-entry.dispatch-pause .messages-collapse-bar {
+  background: rgba(248, 81, 73, 0.5);
+}
+
+.messages-entry.dispatch-pause .messages-collapse-bar:hover {
+  background: rgba(248, 81, 73, 0.8);
+}
+
 /* Notify dispatch styling - orange */
 .messages-entry.dispatch-notify {
   border-color: rgba(255, 163, 68, 0.4);
@@ -9559,6 +9647,14 @@ button.loading::after {
 .messages-entry.dispatch-notify:hover {
   border-color: rgba(255, 163, 68, 0.6);
   background: rgba(255, 163, 68, 0.08);
+}
+
+.messages-entry.dispatch-notify .messages-collapse-bar {
+  background: rgba(255, 163, 68, 0.5);
+}
+
+.messages-entry.dispatch-notify .messages-collapse-bar:hover {
+  background: rgba(255, 163, 68, 0.8);
 }
 
 /* Turn summary dispatch styling - green */
@@ -9572,6 +9668,14 @@ button.loading::after {
   background: rgba(63, 185, 80, 0.08);
 }
 
+.messages-entry.dispatch-turn .messages-collapse-bar {
+  background: rgba(63, 185, 80, 0.5);
+}
+
+.messages-entry.dispatch-turn .messages-collapse-bar:hover {
+  background: rgba(63, 185, 80, 0.8);
+}
+
 .messages-entry-header {
   display: flex;
   align-items: center;
@@ -9580,6 +9684,12 @@ button.loading::after {
   font-size: 12px;
   color: var(--text);
   padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.messages-entry-header:hover {
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .messages-entry-seq {
@@ -10193,6 +10303,15 @@ button.loading::after {
     gap: 0;
     flex: 1;
     min-height: 0;
+  }
+  
+  /* Wider collapse bar on mobile for easier touch */
+  .messages-collapse-bar {
+    width: 6px;
+  }
+  
+  .messages-collapse-bar:hover {
+    width: 8px;
   }
 
   .messages-sidebar {
