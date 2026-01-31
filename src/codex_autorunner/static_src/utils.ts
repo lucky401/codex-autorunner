@@ -358,6 +358,33 @@ const FOCUSABLE_SELECTOR = [
 ].join(",");
 let modalOpenCount = 0;
 
+export function repairModalBackgroundIfStuck(): boolean {
+  // Dev reloads / unexpected errors can leave the app background `inert` even when
+  // no modal is visible. This makes the whole UI feel "unclickable".
+  const openModals = document.querySelectorAll(".modal-overlay:not([hidden])");
+  if (openModals.length > 0) return false;
+
+  let repaired = false;
+  MODAL_BACKGROUND_IDS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.hasAttribute("inert") || el.getAttribute("aria-hidden") === "true") {
+      repaired = true;
+    }
+    el.removeAttribute("aria-hidden");
+    try {
+      (el as HTMLElement).inert = false;
+    } catch (_err) {
+      // ignore
+    }
+    el.removeAttribute("inert");
+  });
+  if (repaired) {
+    modalOpenCount = 0;
+  }
+  return repaired;
+}
+
 function getFocusableElements(container: HTMLElement): HTMLElement[] {
   if (!container || !container.querySelectorAll) return [];
   return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR)).filter(

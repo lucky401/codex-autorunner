@@ -394,13 +394,22 @@ class RuntimeContext:
         runs_dir = self.state_root / "runs"
         if not runs_dir.exists():
             return
-
-        for run_dir in sorted(runs_dir.iterdir(), key=lambda p: int(p.name)):
+        # Historical runs are stored under numeric directories like `runs/123/`.
+        # Be defensive: other artifacts (UUID directories, stray files) can exist and
+        # should not break reconciliation.
+        parsed: list[tuple[int, Path]] = []
+        try:
+            entries = list(runs_dir.iterdir())
+        except OSError:
+            return
+        for entry in entries:
             try:
-                run_id = int(run_dir.name)
-                self._merge_run_index_entry(run_id, {})
-            except (ValueError, OSError):
+                run_id = int(entry.name)
+            except ValueError:
                 continue
+            parsed.append((run_id, entry))
+        for run_id, _ in sorted(parsed, key=lambda pair: pair[0]):
+            self._merge_run_index_entry(run_id, {})
 
     def _merge_run_index_entry(self, run_id: int, extra: dict[str, Any]) -> None:
         """Merge extra data into run index entry."""

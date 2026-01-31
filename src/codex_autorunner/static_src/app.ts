@@ -7,7 +7,7 @@ import { initMessages, initMessageBell } from "./messages.js";
 import { initMobileCompact } from "./mobileCompact.js";
 import { subscribe } from "./bus.js";
 import { initRepoSettingsPanel, openRepoSettings } from "./settings.js";
-import { flash } from "./utils.js";
+import { flash, repairModalBackgroundIfStuck } from "./utils.js";
 import { initLiveUpdates } from "./liveUpdates.js";
 import { initHealthGate } from "./health.js";
 import { initWorkspace } from "./workspace.js";
@@ -119,12 +119,16 @@ async function initRepoShell(): Promise<void> {
   if (repoShell?.hasAttribute("inert")) {
     const openModals = document.querySelectorAll(".modal-overlay:not([hidden])");
     const count = openModals.length;
-    flash(
-      count
-        ? `UI inert: ${count} modal${count === 1 ? "" : "s"} open`
-        : "UI inert but no modal is visible",
-      "error"
-    );
+    if (!count && repairModalBackgroundIfStuck()) {
+      flash("Recovered from stuck modal state (UI was inert).", "info");
+    } else {
+      flash(
+        count
+          ? `UI inert: ${count} modal${count === 1 ? "" : "s"} open`
+          : "UI inert but no modal is visible",
+        "error"
+      );
+    }
   }
 }
 
