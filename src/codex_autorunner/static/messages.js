@@ -453,9 +453,11 @@ function renderFiles(files) {
         .join("");
     return `<ul class="messages-files">${items}</ul>`;
 }
-function renderDispatch(entry, isLatest, runStatus) {
+function renderDispatch(entry, isLatest, runStatus, isLastInTimeline = false) {
     const dispatch = entry.dispatch;
     const isHandoff = dispatch?.is_handoff || dispatch?.mode === "pause";
+    const isNotify = dispatch?.mode === "notify";
+    const isTurnSummary = dispatch?.mode === "turn_summary" || dispatch?.extra?.is_turn_summary;
     const title = dispatch?.title || (isHandoff ? "Handoff" : "Agent update");
     let modeClass = "pill-info";
     let modeLabel = "INFO";
@@ -471,19 +473,40 @@ function renderDispatch(entry, isLatest, runStatus) {
             modeLabel = "HANDOFF";
         }
     }
+    // Determine dispatch type for color coding
+    let dispatchTypeClass = "";
+    if (isHandoff) {
+        dispatchTypeClass = "dispatch-pause";
+    }
+    else if (isNotify) {
+        dispatchTypeClass = "dispatch-notify";
+    }
+    else if (isTurnSummary) {
+        dispatchTypeClass = "dispatch-turn";
+    }
+    // Collapse all but the last dispatch in the timeline
+    const isCollapsed = !isLastInTimeline;
     const modePill = dispatch?.mode ? ` <span class="pill pill-small ${modeClass}">${escapeHtml(modeLabel)}</span>` : "";
     const body = dispatch?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(dispatch.body)}</div>` : "";
     const ts = entry.created_at ? formatTimestamp(entry.created_at) : "";
     return `
-    <div class="messages-entry" data-seq="${entry.seq}" data-type="dispatch" data-created="${escapeHtml(entry.created_at || "")}">
+    <div class="messages-entry${dispatchTypeClass ? " " + dispatchTypeClass : ""}${isCollapsed ? " collapsed" : ""}" 
+         data-seq="${entry.seq}" 
+         data-type="dispatch" 
+         data-created="${escapeHtml(entry.created_at || "")}">
       <div class="messages-entry-header">
+        <button class="messages-collapse-btn" aria-label="${isCollapsed ? "Expand dispatch" : "Collapse dispatch"}" aria-expanded="${String(!isCollapsed)}">
+          ${isCollapsed ? "▶" : "▼"}
+        </button>
         <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
         <span class="messages-entry-title">${escapeHtml(title)}</span>
         ${modePill}
         <span class="messages-entry-time">${escapeHtml(ts)}</span>
       </div>
-      ${body}
-      ${renderFiles(entry.files)}
+      <div class="messages-entry-body">
+        ${body}
+        ${renderFiles(entry.files)}
+      </div>
     </div>
   `;
 }
@@ -539,14 +562,24 @@ function buildThreadedTimeline(dispatches, replies, runStatus) {
         }
         return a.seq - b.seq;
     });
+    // Count total dispatches in the sorted timeline
+    let dispatchCount = 0;
+    timeline.forEach((entry) => {
+        if (entry.type === "dispatch") {
+            dispatchCount++;
+        }
+    });
     // Render timeline, associating replies with preceding dispatches
     let lastDispatchSeq;
+    let currentDispatchIndex = 0;
     const rendered = [];
     timeline.forEach((entry) => {
         if (entry.type === "dispatch" && entry.dispatch) {
             lastDispatchSeq = entry.dispatch.seq;
             const isLatest = entry.dispatch.seq === maxDispatchSeq;
-            rendered.push(renderDispatch(entry.dispatch, isLatest, runStatus));
+            const isLastInTimeline = currentDispatchIndex === dispatchCount - 1;
+            rendered.push(renderDispatch(entry.dispatch, isLatest, runStatus, isLastInTimeline));
+            currentDispatchIndex++;
         }
         else if (entry.type === "reply" && entry.reply) {
             rendered.push(renderReply(entry.reply, lastDispatchSeq));
@@ -605,6 +638,26 @@ function updateMobileDetailHeader(status, dispatchCount, replyCount) {
         countsEl.textContent = `${dispatchCount}D · ${replyCount}R`;
     }
 }
+function attachCollapseHandlers() {
+    if (!detailEl)
+        return;
+    const collapseButtons = detailEl.querySelectorAll(".messages-collapse-btn");
+    collapseButtons.forEach((btn) => {
+        // Remove existing listeners by cloning the button
+        const newBtn = btn.cloneNode(true);
+        btn.parentNode?.replaceChild(newBtn, btn);
+        newBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const entry = newBtn.closest(".messages-entry");
+            if (entry) {
+                const isNowCollapsed = entry.classList.toggle("collapsed");
+                newBtn.innerHTML = isNowCollapsed ? "▶" : "▼";
+                newBtn.setAttribute("aria-expanded", String(!isNowCollapsed));
+                newBtn.setAttribute("aria-label", isNowCollapsed ? "Expand dispatch" : "Collapse dispatch");
+            }
+        });
+    });
+}
 function renderThreadDetail(detail, runId, ctx) {
     if (!detailEl)
         return;
@@ -646,10 +699,14 @@ function renderThreadDetail(detail, runId, ctx) {
     };
     const preserve = ctx.reason === "background" && detailEl.scrollHeight > 0 && !isAtBottom(detailEl);
     if (preserve) {
-        preserveScroll(detailEl, renderDetail, { restoreOnNextFrame: true });
+        preserveScroll(detailEl, () => {
+            renderDetail();
+            attachCollapseHandlers();
+        }, { restoreOnNextFrame: true });
     }
     else {
         renderDetail();
+        attachCollapseHandlers();
     }
     // Only show reply box for paused runs - replies to other states won't be seen
     const replyBoxEl = document.querySelector(".messages-reply-box");

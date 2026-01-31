@@ -1923,11 +1923,11 @@ button.icon-btn {
 /* Compact dispatch items that don't stack */
 .dispatch-item {
   flex-shrink: 0;
-  padding: 10px 12px;
+  padding: 0;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border);
   border-radius: 8px;
-  cursor: pointer;
+  cursor: default;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
@@ -1936,12 +1936,75 @@ button.icon-btn {
   border-color: var(--accent);
 }
 
+/* Dispatch header */
+.dispatch-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.15s ease;
+}
+
+.dispatch-item.collapsed .dispatch-header {
+  border-bottom: none;
+}
+
+/* Collapse toggle button */
+.dispatch-collapse-btn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  margin-top: 2px;
+}
+
+.dispatch-collapse-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: var(--accent);
+}
+
+.dispatch-collapse-btn:active {
+  transform: scale(0.95);
+}
+
+/* Header content area */
+.dispatch-header-content {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.dispatch-item.turn-summary .dispatch-header-content {
+  cursor: default;
+}
+
 .dispatch-item-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 0;
   flex-wrap: wrap;
+}
+
+/* Dispatch body wrapper */
+.dispatch-body-wrapper {
+  padding: 0 10px 10px 10px;
+}
+
+.dispatch-item.collapsed .dispatch-body-wrapper {
+  display: none;
 }
 
 .dispatch-item .ticket-name {
@@ -2029,6 +2092,28 @@ button.icon-btn {
 .dispatch-item .turn-summary-badge {
   background: rgba(63, 185, 80, 0.25);
   color: #8dc896;
+}
+
+/* Pause/handoff dispatch styling - red */
+.dispatch-item.pause {
+  background: rgba(248, 81, 73, 0.06);
+  border-color: rgba(248, 81, 73, 0.3);
+}
+
+.dispatch-item.pause:hover {
+  background: rgba(248, 81, 73, 0.1);
+  border-color: rgba(248, 81, 73, 0.5);
+}
+
+/* Notify dispatch styling - orange */
+.dispatch-item.notify {
+  background: rgba(255, 163, 68, 0.06);
+  border-color: rgba(255, 163, 68, 0.3);
+}
+
+.dispatch-item.notify:hover {
+  background: rgba(255, 163, 68, 0.1);
+  border-color: rgba(255, 163, 68, 0.5);
 }
 
 /* Ticket reference in dispatch items */
@@ -9399,19 +9484,92 @@ button.loading::after {
 .messages-entry {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: 0;
   background: var(--panel);
   margin-top: 10px;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .messages-entry:first-child {
   margin-top: 0;
 }
 
+/* Collapse button in messages entry */
+.messages-collapse-btn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  margin-top: 2px;
+}
+
+.messages-collapse-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: var(--accent);
+}
+
+.messages-collapse-btn:active {
+  transform: scale(0.95);
+}
+
+/* Messages entry body wrapper */
+.messages-entry-body {
+  padding: 0 12px 10px 12px;
+  margin-top: 8px;
+}
+
+.messages-entry.collapsed .messages-entry-body {
+  display: none;
+}
+
 .messages-entry.messages-entry-reply {
   margin-left: 20px;
   border-left: 2px solid rgba(108, 168, 255, 0.4);
   background: rgba(108, 168, 255, 0.04);
+}
+
+/* Pause/handoff dispatch styling - red */
+.messages-entry.dispatch-pause {
+  border-color: rgba(248, 81, 73, 0.4);
+  background: rgba(248, 81, 73, 0.04);
+}
+
+.messages-entry.dispatch-pause:hover {
+  border-color: rgba(248, 81, 73, 0.6);
+  background: rgba(248, 81, 73, 0.08);
+}
+
+/* Notify dispatch styling - orange */
+.messages-entry.dispatch-notify {
+  border-color: rgba(255, 163, 68, 0.4);
+  background: rgba(255, 163, 68, 0.04);
+}
+
+.messages-entry.dispatch-notify:hover {
+  border-color: rgba(255, 163, 68, 0.6);
+  background: rgba(255, 163, 68, 0.08);
+}
+
+/* Turn summary dispatch styling - green */
+.messages-entry.dispatch-turn {
+  border-color: rgba(63, 185, 80, 0.4);
+  background: rgba(63, 185, 80, 0.04);
+}
+
+.messages-entry.dispatch-turn:hover {
+  border-color: rgba(63, 185, 80, 0.6);
+  background: rgba(63, 185, 80, 0.08);
 }
 
 .messages-entry-header {
@@ -9421,6 +9579,7 @@ button.loading::after {
   font-weight: 500;
   font-size: 12px;
   color: var(--text);
+  padding: 8px 12px;
 }
 
 .messages-entry-seq {
@@ -9459,7 +9618,7 @@ button.loading::after {
   background: transparent;
   border: none;
   padding: 0;
-  margin: 10px 0 0;
+  margin: 0;
   color: var(--text);
 }
 

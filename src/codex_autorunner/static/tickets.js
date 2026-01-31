@@ -974,16 +974,40 @@ function renderDispatchHistory(runId, data) {
         dispatchNote.textContent = `Latest #${entries[0]?.seq ?? "–"}`;
     // Also render mini list for collapsed panel view
     renderDispatchMiniList(entries);
-    entries.forEach((entry) => {
+    entries.forEach((entry, index) => {
         const dispatch = entry.dispatch;
         const isTurnSummary = dispatch?.mode === "turn_summary" || dispatch?.extra?.is_turn_summary;
         const isHandoff = dispatch?.mode === "pause";
+        const isNotify = dispatch?.mode === "notify";
+        // Collapse all but the last dispatch by default
+        const isLast = index === entries.length - 1;
+        const isCollapsed = !isLast;
         const container = document.createElement("div");
-        container.className = `dispatch-item${isTurnSummary ? " turn-summary" : ""} clickable`;
-        container.title = isTurnSummary ? "Agent turn output" : "Click to view in Inbox";
+        container.className = `dispatch-item${isTurnSummary ? " turn-summary" : ""}${isHandoff ? " pause" : ""}${isNotify ? " notify" : ""}${isCollapsed ? " collapsed" : ""}`;
+        // Create collapsible structure
+        const header = document.createElement("div");
+        header.className = "dispatch-header";
+        // Collapse toggle button (left side)
+        const collapseBtn = document.createElement("button");
+        collapseBtn.className = "dispatch-collapse-btn";
+        collapseBtn.innerHTML = isCollapsed ? "▶" : "▼";
+        collapseBtn.setAttribute("aria-label", isCollapsed ? "Expand dispatch" : "Collapse dispatch");
+        collapseBtn.setAttribute("aria-expanded", String(!isCollapsed));
+        collapseBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            container.classList.toggle("collapsed");
+            const isNowCollapsed = container.classList.contains("collapsed");
+            collapseBtn.innerHTML = isNowCollapsed ? "▶" : "▼";
+            collapseBtn.setAttribute("aria-expanded", String(!isNowCollapsed));
+            collapseBtn.setAttribute("aria-label", isNowCollapsed ? "Expand dispatch" : "Collapse dispatch");
+        });
+        // Header content area (clickable for navigation)
+        const headerContent = document.createElement("div");
+        headerContent.className = "dispatch-header-content";
+        headerContent.title = isTurnSummary ? "Agent turn output" : "Click to view in Inbox";
         // Add click handler to navigate to inbox (skip for turn summaries)
         if (!isTurnSummary) {
-            container.addEventListener("click", () => {
+            headerContent.addEventListener("click", () => {
                 if (runId) {
                     // Update URL with run_id so inbox tab loads the right thread
                     const url = new URL(window.location.href);
@@ -1014,6 +1038,9 @@ function renderDispatchHistory(runId, data) {
         mode.className = `ticket-agent${isTurnSummary ? " turn-summary-badge" : ""}`;
         mode.textContent = modeLabel;
         head.append(seq, mode);
+        headerContent.appendChild(head);
+        header.append(collapseBtn, headerContent);
+        container.appendChild(header);
         // Add diff stats if present (for turn summaries)
         const diffStats = dispatch?.extra?.diff_stats;
         if (diffStats && (diffStats.insertions || diffStats.deletions)) {
@@ -1046,26 +1073,28 @@ function renderDispatchHistory(runId, data) {
             timeLabel.textContent = timeAgo;
             head.appendChild(timeLabel);
         }
-        container.appendChild(head);
+        // Create collapsible body content
+        const bodyWrapper = document.createElement("div");
+        bodyWrapper.className = "dispatch-body-wrapper";
         if (entry.errors && entry.errors.length) {
             const err = document.createElement("div");
             err.className = "ticket-errors";
             err.textContent = entry.errors.join("; ");
-            container.appendChild(err);
+            bodyWrapper.appendChild(err);
         }
         const title = dispatch?.title;
         if (title) {
             const titleEl = document.createElement("div");
             titleEl.className = "ticket-body ticket-dispatch-title";
             titleEl.textContent = title;
-            container.appendChild(titleEl);
+            bodyWrapper.appendChild(titleEl);
         }
         const bodyText = dispatch?.body;
         if (bodyText) {
             const body = document.createElement("div");
             body.className = "ticket-body ticket-dispatch-body messages-markdown";
             body.innerHTML = renderMarkdown(bodyText);
-            container.appendChild(body);
+            bodyWrapper.appendChild(body);
         }
         const attachments = (entry.attachments || []);
         if (attachments.length) {
@@ -1082,8 +1111,9 @@ function renderDispatchHistory(runId, data) {
                 link.title = att.path || "";
                 wrap.appendChild(link);
             });
-            container.appendChild(wrap);
+            bodyWrapper.appendChild(wrap);
         }
+        container.appendChild(bodyWrapper);
         history.appendChild(container);
     });
     // Update scroll fade indicator after rendering
