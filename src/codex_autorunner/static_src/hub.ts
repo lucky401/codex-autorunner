@@ -12,6 +12,13 @@ import { registerAutoRefresh, type RefreshContext } from "./autoRefresh.js";
 import { HUB_BASE } from "./env.js";
 import { preserveScroll } from "./preserve.js";
 
+interface HubTicketFlow {
+  status: string;
+  done_count: number;
+  total_count: number;
+  current_step: number | null;
+}
+
 interface HubRepo {
   id: string;
   path: string;
@@ -34,6 +41,7 @@ interface HubRepo {
   runner_pid: number | null;
   mounted: boolean;
   mount_error?: string | null;
+  ticket_flow?: HubTicketFlow | null;
 }
 
 interface HubData {
@@ -283,20 +291,12 @@ function formatTokensAxis(val: number | string): string {
   return Math.round(num).toString();
 }
 
-function getRepoUsage(repoId: string): { label: string; meta: string; hasData: boolean } {
+function getRepoUsage(repoId: string): { label: string; hasData: boolean } {
   const usage = hubUsageIndex[repoId];
-  if (!usage) return { label: "—", meta: "", hasData: false };
+  if (!usage) return { label: "—", hasData: false };
   const totals = usage.totals || {};
-  const cached = totals.cached_input_tokens || 0;
-  const input = totals.input_tokens || 0;
-  const cachePercent = input ? Math.round((cached / input) * 100) : 0;
-  const meta =
-    usage.events === undefined
-      ? ""
-      : `${usage.events}ev${input ? ` · ${cachePercent}%↻` : ""}`;
   return {
     label: formatTokensCompact(totals.total_tokens),
-    meta,
     hasData: true,
   };
 }
@@ -1038,12 +1038,28 @@ function renderRepos(repos: HubRepo[]): void {
         <span class="pill pill-small hub-usage-pill">
           ${escapeHtml(usageInfo.label)}
         </span>
-        ${
-          usageInfo.meta
-            ? `<span class="hub-usage-pill-meta">${escapeHtml(usageInfo.meta)}</span>`
-            : ""
-        }
       </div>`;
+
+    // Ticket flow progress line
+    let ticketFlowLine = "";
+    const tf = repo.ticket_flow;
+    if (tf && tf.total_count > 0) {
+      const percent = Math.round((tf.done_count / tf.total_count) * 100);
+      const isActive = tf.status === "running" || tf.status === "paused";
+      const statusSuffix =
+        tf.status === "paused"
+          ? " · paused"
+          : tf.current_step
+          ? ` · step ${tf.current_step}`
+          : "";
+      ticketFlowLine = `
+        <div class="hub-repo-flow-line${isActive ? " active" : ""}">
+          <div class="hub-flow-bar">
+            <div class="hub-flow-fill" style="width:${percent}%"></div>
+          </div>
+          <span class="hub-flow-text">${tf.done_count}/${tf.total_count}${statusSuffix}</span>
+        </div>`;
+    }
 
     card.innerHTML = `
       <div class="hub-repo-row">
@@ -1063,6 +1079,7 @@ function renderRepos(repos: HubRepo[]): void {
             ${infoLine}
           </div>
           ${usageLine}
+          ${ticketFlowLine}
         </div>
         <div class="hub-repo-right">
           ${actions || ""}

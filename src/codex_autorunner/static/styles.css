@@ -1116,6 +1116,45 @@ main {
   white-space: nowrap;
 }
 
+/* Hub ticket flow progress indicator */
+.hub-repo-flow-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.hub-flow-bar {
+  width: 60px;
+  min-width: 60px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.hub-flow-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3fb950, #58d66a);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.hub-repo-flow-line.active .hub-flow-fill {
+  background: linear-gradient(90deg, #58a6ff, #79c0ff);
+}
+
+.hub-flow-text {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.hub-repo-flow-line.active .hub-flow-text {
+  color: var(--text);
+}
+
 .hub-usage-unmatched-note {
   margin-top: 4px;
   padding-left: 2px;

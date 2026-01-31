@@ -36,7 +36,16 @@
       "last_exit_code": {"type": ["null", "integer"]},
       "runner_pid": {"type": ["null", "integer"]},
       "mounted": {"type": "boolean"},
-      "mount_error": {"type": ["null", "string"]}
+      "mount_error": {"type": ["null", "string"]},
+      "ticket_flow": {
+        "type": ["null", "object"],
+        "properties": {
+          "status": {"type": "string"},
+          "done_count": {"type": "integer"},
+          "total_count": {"type": "integer"},
+          "current_step": {"type": ["null", "integer"]}
+        }
+      }
     },
     "required": [
       "id",

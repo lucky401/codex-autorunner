@@ -66,7 +66,7 @@ from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...manifest import load_manifest
-from ...tickets.files import safe_relpath
+from ...tickets.files import list_ticket_paths, safe_relpath, ticket_is_done
 from ...tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService
 from .hub_jobs import HubJobManager
@@ -1323,6 +1323,53 @@ def create_hub_app(
             repo_dict["mounted"] = False
         return repo_dict
 
+    def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict]:
+        """Get ticket flow summary for a repo (status, done/total, step).
+
+        Returns None if no ticket flow exists or repo is not initialized.
+        """
+        db_path = repo_path / ".codex-autorunner" / "flows.db"
+        if not db_path.exists():
+            return None
+        try:
+            config = load_repo_config(repo_path)
+            with FlowStore(db_path, durable=config.durable_writes) as store:
+                # Get the latest ticket_flow run (any status)
+                runs = store.list_flow_runs(flow_type="ticket_flow")
+                if not runs:
+                    return None
+                latest = runs[0]  # Already sorted by created_at DESC
+
+                # Count tickets
+                ticket_dir = repo_path / ".codex-autorunner" / "tickets"
+                total = 0
+                done = 0
+                for path in list_ticket_paths(ticket_dir):
+                    total += 1
+                    try:
+                        if ticket_is_done(path):
+                            done += 1
+                    except Exception:
+                        continue
+
+                if total == 0:
+                    return None
+
+                # Extract current step from ticket_engine state
+                state = latest.state if isinstance(latest.state, dict) else {}
+                engine = state.get("ticket_engine") if isinstance(state, dict) else {}
+                engine = engine if isinstance(engine, dict) else {}
+                current_step = engine.get("total_turns")
+
+                return {
+                    "status": latest.status.value,
+                    "done_count": done,
+                    "total_count": total,
+                    "current_step": current_step,
+                }
+        except Exception:
+            return None
+
     initial_snapshots = context.supervisor.scan()
     for snap in initial_snapshots:
         if snap.initialized and snap.exists_on_disk:
@@ -1604,11 +1651,18 @@ def create_hub_app(
         safe_log(app.state.logger, logging.INFO, "Hub list_repos")
         snapshots = await asyncio.to_thread(context.supervisor.list_repos)
         await _refresh_mounts(snapshots)
+
+        def _enrich_repo(snap):
+            repo_dict = _add_mount_info(snap.to_dict(context.config.root))
+            if snap.initialized and snap.exists_on_disk:
+                repo_dict["ticket_flow"] = _get_ticket_flow_summary(snap.path)
+            else:
+                repo_dict["ticket_flow"] = None
+            return repo_dict
+
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
-            "repos": [
-                _add_mount_info(repo.to_dict(context.config.root)) for repo in snapshots
-            ],
+            "repos": [_enrich_repo(snap) for snap in snapshots],
         }
 
     @app.get("/hub/version")
@@ -1620,11 +1674,18 @@ def create_hub_app(
         safe_log(app.state.logger, logging.INFO, "Hub scan_repos")
         snapshots = await asyncio.to_thread(context.supervisor.scan)
         await _refresh_mounts(snapshots)
+
+        def _enrich_repo(snap):
+            repo_dict = _add_mount_info(snap.to_dict(context.config.root))
+            if snap.initialized and snap.exists_on_disk:
+                repo_dict["ticket_flow"] = _get_ticket_flow_summary(snap.path)
+            else:
+                repo_dict["ticket_flow"] = None
+            return repo_dict
+
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
-            "repos": [
-                _add_mount_info(repo.to_dict(context.config.root)) for repo in snapshots
-            ],
+            "repos": [_enrich_repo(snap) for snap in snapshots],
         }
 
     @app.post("/hub/jobs/scan", response_model=HubJobResponse)
