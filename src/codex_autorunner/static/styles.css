@@ -1444,6 +1444,7 @@ button {
 }
 
 @media (pointer: coarse) {
+
   button,
   .tab,
   .ticket-fm-toggle,
@@ -2046,6 +2047,36 @@ button.icon-btn {
   margin-left: auto;
   white-space: nowrap;
   margin-left: auto;
+}
+
+/* Diff stats in dispatch items (GitHub-style +/- indicators) */
+.dispatch-diff-stats {
+  display: inline-flex;
+  gap: 4px;
+  font-family: 'JetBrains Mono', 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.dispatch-diff-stats .diff-add {
+  color: #3fb950;
+}
+
+.dispatch-diff-stats .diff-del {
+  color: #f85149;
+}
+
+/* Diff stats in analytics metrics */
+.diff-stats-metric {
+  font-family: 'JetBrains Mono', 'SF Mono', Monaco, monospace;
+}
+
+.diff-stats-metric .diff-add {
+  color: #3fb950;
+}
+
+.diff-stats-metric .diff-del {
+  color: #f85149;
 }
 
 
@@ -6621,7 +6652,7 @@ button.loading::after {
     background: linear-gradient(to top, var(--panel) 0%, rgba(16, 19, 28, 0.98) 100%);
     border-top: 1px solid var(--border);
     box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
-    z-index: 100;
+    z-index: 1900;
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     transition: transform 0.18s ease;
@@ -10980,7 +11011,7 @@ button.loading::after {
   border-radius: var(--radius);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   padding: 4px;
-  z-index: 2000;
+  z-index: 3000;
   opacity: 0;
   visibility: hidden;
   transform: translateY(-5px);
@@ -11040,7 +11071,8 @@ button.loading::after {
 /* Mobile hamburger menu - bottom sheet style */
 @media (max-width: 640px) {
   .hamburger-wrapper {
-    position: static;
+    position: relative;
+    z-index: 2002;
   }
 
   .hamburger-btn {
@@ -11086,7 +11118,7 @@ button.loading::after {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.5);
-    z-index: 1999;
+    z-index: 2999;
     opacity: 0;
     visibility: hidden;
     transition: opacity 0.15s ease, visibility 0.15s ease;

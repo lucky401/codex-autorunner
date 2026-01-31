@@ -105,6 +105,19 @@ function formatDispatchTime(ts?: string | null): string {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+/**
+ * Format a number for compact display (e.g., 1200 -> "1.2k").
+ */
+function formatNumber(n: number): string {
+  if (n >= 1000000) {
+    return `${(n / 1000000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (n >= 1000) {
+    return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  return n.toString();
+}
+
 type TicketListPayload = {
   ticket_dir?: string;
   tickets?: TicketFile[];
@@ -899,9 +912,14 @@ function els(): {
   resumeBtn: HTMLButtonElement | null;
   refreshBtn: HTMLButtonElement | null;
   stopBtn: HTMLButtonElement | null;
-  restartBtn: HTMLButtonElement | null;
-  archiveBtn: HTMLButtonElement | null;
-} {
+    restartBtn: HTMLButtonElement | null;
+    archiveBtn: HTMLButtonElement | null;
+    overflowToggle: HTMLButtonElement | null;
+    overflowDropdown: HTMLElement | null;
+    overflowNew: HTMLButtonElement | null;
+    overflowRestart: HTMLButtonElement | null;
+    overflowArchive: HTMLButtonElement | null;
+  } {
   return {
     card: document.getElementById("ticket-card"),
     status: document.getElementById("ticket-flow-status"),
@@ -931,6 +949,11 @@ function els(): {
     stopBtn: document.getElementById("ticket-flow-stop") as HTMLButtonElement | null,
     restartBtn: document.getElementById("ticket-flow-restart") as HTMLButtonElement | null,
     archiveBtn: document.getElementById("ticket-flow-archive") as HTMLButtonElement | null,
+    overflowToggle: document.getElementById("ticket-overflow-toggle") as HTMLButtonElement | null,
+    overflowDropdown: document.getElementById("ticket-overflow-dropdown"),
+    overflowNew: document.getElementById("ticket-overflow-new") as HTMLButtonElement | null,
+    overflowRestart: document.getElementById("ticket-overflow-restart") as HTMLButtonElement | null,
+    overflowArchive: document.getElementById("ticket-overflow-archive") as HTMLButtonElement | null,
   };
 }
 
@@ -1200,6 +1223,18 @@ function renderDispatchHistory(
     mode.className = `ticket-agent${isTurnSummary ? " turn-summary-badge" : ""}`;
     mode.textContent = modeLabel;
     head.append(seq, mode);
+
+    // Add diff stats if present (for turn summaries)
+    const diffStats = dispatch?.extra?.diff_stats as { insertions?: number; deletions?: number; files_changed?: number } | undefined;
+    if (diffStats && (diffStats.insertions || diffStats.deletions)) {
+      const statsEl = document.createElement("span");
+      statsEl.className = "dispatch-diff-stats";
+      const ins = diffStats.insertions || 0;
+      const del = diffStats.deletions || 0;
+      statsEl.innerHTML = `<span class="diff-add">+${formatNumber(ins)}</span><span class="diff-del">-${formatNumber(del)}</span>`;
+      statsEl.title = `${ins} insertions, ${del} deletions${diffStats.files_changed ? `, ${diffStats.files_changed} files` : ""}`;
+      head.appendChild(statsEl);
+    }
     
     // Add ticket reference if present
     const ticketId = dispatch?.extra?.ticket_id as string | undefined;
@@ -1602,7 +1637,7 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
     }
     
     // Show restart button when flow is paused, stopping, or in terminal state (allows starting fresh)
-    const { restartBtn } = els();
+    const { restartBtn, overflowRestart } = els();
     if (restartBtn) {
       const isPaused = latest?.status === "paused";
       const isStopping = latest?.status === "stopping";
@@ -1616,6 +1651,9 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
         Boolean(currentRunId);
       restartBtn.style.display = canRestart ? "" : "none";
       restartBtn.disabled = !canRestart;
+      if (overflowRestart) {
+        overflowRestart.style.display = canRestart ? "" : "none";
+      }
     }
     
     // Show archive button when flow is paused, stopping, or in terminal state and has tickets
@@ -1629,6 +1667,10 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
       const canArchive = (isPaused || isStopping || isTerminal) && ticketsExist && Boolean(currentRunId);
       archiveBtn.style.display = canArchive ? "" : "none";
       archiveBtn.disabled = !canArchive;
+      const { overflowArchive } = els();
+      if (overflowArchive) {
+        overflowArchive.style.display = canArchive ? "" : "none";
+      }
     }
     await loadDispatchHistory(currentRunId, ctx);
   } catch (err) {
@@ -1981,7 +2023,10 @@ async function archiveTicketFlow(): Promise<void> {
     if (resumeBtn) resumeBtn.disabled = true;
     if (stopBtn) stopBtn.disabled = true;
     if (restartBtn) restartBtn.style.display = "none";
+    const { overflowRestart, overflowArchive } = els();
+    if (overflowRestart) overflowRestart.style.display = "none";
     if (archiveBtn) archiveBtn.style.display = "none";
+    if (overflowArchive) overflowArchive.style.display = "none";
 
     // Refresh inbox badge and ticket list (tickets were archived/moved)
     void refreshBell();
@@ -2011,6 +2056,52 @@ export function initTicketFlow(): void {
   if (refreshBtn) refreshBtn.addEventListener("click", () => {
     void loadTicketFlow({ reason: "manual" });
   });
+
+  const { overflowToggle, overflowDropdown, overflowNew, overflowRestart, overflowArchive } = els();
+
+  if (overflowToggle && overflowDropdown) {
+    const toggleMenu = (e: Event) => {
+      e.stopPropagation();
+      const isHidden = overflowDropdown.classList.contains("hidden");
+      overflowDropdown.classList.toggle("hidden", !isHidden);
+    };
+    overflowToggle.addEventListener("click", toggleMenu);
+    overflowToggle.addEventListener("touchend", (e) => {
+      e.preventDefault(); // Prevent ghost click
+      toggleMenu(e);
+    });
+
+    // Close on outside click
+    document.addEventListener("click", (e) => {
+      if (!overflowDropdown.classList.contains("hidden") && 
+          !overflowToggle.contains(e.target as Node) && 
+          !overflowDropdown.contains(e.target as Node)) {
+        overflowDropdown.classList.add("hidden");
+      }
+    });
+  }
+
+  if (overflowNew) {
+    overflowNew.addEventListener("click", () => {
+      const newBtn = document.getElementById("ticket-new-btn");
+      newBtn?.click();
+      overflowDropdown?.classList.add("hidden");
+    });
+  }
+
+  if (overflowRestart) {
+    overflowRestart.addEventListener("click", () => {
+      void restartTicketFlow();
+      overflowDropdown?.classList.add("hidden");
+    });
+  }
+
+  if (overflowArchive) {
+    overflowArchive.addEventListener("click", () => {
+      void archiveTicketFlow();
+      overflowDropdown?.classList.add("hidden");
+    });
+  }
 
   // Initialize reason click handler for modal
   initReasonModal();

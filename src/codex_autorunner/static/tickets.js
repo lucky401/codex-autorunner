@@ -33,6 +33,18 @@ function formatDispatchTime(ts) {
         return `${diffDays}d`;
     return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
+/**
+ * Format a number for compact display (e.g., 1200 -> "1.2k").
+ */
+function formatNumber(n) {
+    if (n >= 1000000) {
+        return `${(n / 1000000).toFixed(1).replace(/\.0$/, "")}M`;
+    }
+    if (n >= 1000) {
+        return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+    }
+    return n.toString();
+}
 let currentRunId = null;
 let ticketsExist = false;
 let currentActiveTicket = null;
@@ -755,6 +767,11 @@ function els() {
         stopBtn: document.getElementById("ticket-flow-stop"),
         restartBtn: document.getElementById("ticket-flow-restart"),
         archiveBtn: document.getElementById("ticket-flow-archive"),
+        overflowToggle: document.getElementById("ticket-overflow-toggle"),
+        overflowDropdown: document.getElementById("ticket-overflow-dropdown"),
+        overflowNew: document.getElementById("ticket-overflow-new"),
+        overflowRestart: document.getElementById("ticket-overflow-restart"),
+        overflowArchive: document.getElementById("ticket-overflow-archive"),
     };
 }
 function setButtonsDisabled(disabled) {
@@ -997,6 +1014,17 @@ function renderDispatchHistory(runId, data) {
         mode.className = `ticket-agent${isTurnSummary ? " turn-summary-badge" : ""}`;
         mode.textContent = modeLabel;
         head.append(seq, mode);
+        // Add diff stats if present (for turn summaries)
+        const diffStats = dispatch?.extra?.diff_stats;
+        if (diffStats && (diffStats.insertions || diffStats.deletions)) {
+            const statsEl = document.createElement("span");
+            statsEl.className = "dispatch-diff-stats";
+            const ins = diffStats.insertions || 0;
+            const del = diffStats.deletions || 0;
+            statsEl.innerHTML = `<span class="diff-add">+${formatNumber(ins)}</span><span class="diff-del">-${formatNumber(del)}</span>`;
+            statsEl.title = `${ins} insertions, ${del} deletions${diffStats.files_changed ? `, ${diffStats.files_changed} files` : ""}`;
+            head.appendChild(statsEl);
+        }
         // Add ticket reference if present
         const ticketId = dispatch?.extra?.ticket_id;
         if (ticketId) {
@@ -1358,7 +1386,7 @@ async function loadTicketFlow(ctx) {
             bootstrapBtn.title = busy ? "Ticket flow in progress" : "";
         }
         // Show restart button when flow is paused, stopping, or in terminal state (allows starting fresh)
-        const { restartBtn } = els();
+        const { restartBtn, overflowRestart } = els();
         if (restartBtn) {
             const isPaused = latest?.status === "paused";
             const isStopping = latest?.status === "stopping";
@@ -1370,6 +1398,9 @@ async function loadTicketFlow(ctx) {
                 Boolean(currentRunId);
             restartBtn.style.display = canRestart ? "" : "none";
             restartBtn.disabled = !canRestart;
+            if (overflowRestart) {
+                overflowRestart.style.display = canRestart ? "" : "none";
+            }
         }
         // Show archive button when flow is paused, stopping, or in terminal state and has tickets
         if (archiveBtn) {
@@ -1381,6 +1412,10 @@ async function loadTicketFlow(ctx) {
             const canArchive = (isPaused || isStopping || isTerminal) && ticketsExist && Boolean(currentRunId);
             archiveBtn.style.display = canArchive ? "" : "none";
             archiveBtn.disabled = !canArchive;
+            const { overflowArchive } = els();
+            if (overflowArchive) {
+                overflowArchive.style.display = canArchive ? "" : "none";
+            }
         }
         await loadDispatchHistory(currentRunId, ctx);
     }
@@ -1748,8 +1783,13 @@ async function archiveTicketFlow() {
             stopBtn.disabled = true;
         if (restartBtn)
             restartBtn.style.display = "none";
+        const { overflowRestart, overflowArchive } = els();
+        if (overflowRestart)
+            overflowRestart.style.display = "none";
         if (archiveBtn)
             archiveBtn.style.display = "none";
+        if (overflowArchive)
+            overflowArchive.style.display = "none";
         // Refresh inbox badge and ticket list (tickets were archived/moved)
         void refreshBell();
         await loadTicketFiles();
@@ -1787,6 +1827,46 @@ export function initTicketFlow() {
         refreshBtn.addEventListener("click", () => {
             void loadTicketFlow({ reason: "manual" });
         });
+    const { overflowToggle, overflowDropdown, overflowNew, overflowRestart, overflowArchive } = els();
+    if (overflowToggle && overflowDropdown) {
+        const toggleMenu = (e) => {
+            e.stopPropagation();
+            const isHidden = overflowDropdown.classList.contains("hidden");
+            overflowDropdown.classList.toggle("hidden", !isHidden);
+        };
+        overflowToggle.addEventListener("click", toggleMenu);
+        overflowToggle.addEventListener("touchend", (e) => {
+            e.preventDefault(); // Prevent ghost click
+            toggleMenu(e);
+        });
+        // Close on outside click
+        document.addEventListener("click", (e) => {
+            if (!overflowDropdown.classList.contains("hidden") &&
+                !overflowToggle.contains(e.target) &&
+                !overflowDropdown.contains(e.target)) {
+                overflowDropdown.classList.add("hidden");
+            }
+        });
+    }
+    if (overflowNew) {
+        overflowNew.addEventListener("click", () => {
+            const newBtn = document.getElementById("ticket-new-btn");
+            newBtn?.click();
+            overflowDropdown?.classList.add("hidden");
+        });
+    }
+    if (overflowRestart) {
+        overflowRestart.addEventListener("click", () => {
+            void restartTicketFlow();
+            overflowDropdown?.classList.add("hidden");
+        });
+    }
+    if (overflowArchive) {
+        overflowArchive.addEventListener("click", () => {
+            void archiveTicketFlow();
+            overflowDropdown?.classList.add("hidden");
+        });
+    }
     // Initialize reason click handler for modal
     initReasonModal();
     // Initialize live output panel
