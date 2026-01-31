@@ -680,6 +680,30 @@ You are the first ticket in a new ticket_flow run.
             "tickets": tickets,
         }
 
+    @router.get("/ticket_flow/tickets/{index}", response_model=TicketResponse)
+    async def get_ticket(index: int):
+        """Fetch a single ticket by index."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        ticket_path = _find_ticket_path_by_index(ticket_dir, index)
+
+        if not ticket_path:
+            raise HTTPException(status_code=404, detail=f"Ticket {index:03d} not found")
+
+        doc, errors = read_ticket(ticket_path)
+        if errors or not doc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to read ticket {index:03d}: {errors}",
+            )
+
+        return TicketResponse(
+            path=safe_relpath(ticket_path, repo_root),
+            index=doc.index,
+            frontmatter=asdict(doc.frontmatter),
+            body=doc.body,
+        )
+
     @router.post("/ticket_flow/tickets", response_model=TicketResponse)
     async def create_ticket(request: TicketCreateRequest):
         """Create a new ticket with auto-generated index."""
