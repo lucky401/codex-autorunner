@@ -979,9 +979,9 @@ function renderDispatchHistory(runId, data) {
         const isTurnSummary = dispatch?.mode === "turn_summary" || dispatch?.extra?.is_turn_summary;
         const isHandoff = dispatch?.mode === "pause";
         const isNotify = dispatch?.mode === "notify";
-        // Collapse all but the last dispatch by default
-        const isLast = index === entries.length - 1;
-        const isCollapsed = !isLast;
+        // Expand only the first (newest) dispatch by default - entries are newest-first
+        const isFirst = index === 0;
+        const isCollapsed = !isFirst;
         const container = document.createElement("div");
         container.className = `dispatch-item${isTurnSummary ? " turn-summary" : ""}${isHandoff ? " pause" : ""}${isNotify ? " notify" : ""}${isCollapsed ? " collapsed" : ""}`;
         // Reddit-style thin collapse bar on the left
