@@ -1,6 +1,8 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
 import { createSmartRefresh } from "./smartRefresh.js";
+import { REPO_ID } from "./env.js";
+const API_PREFIX = REPO_ID ? "/api" : "/hub/pma";
 const STORAGE_KEYS = {
     selected: "car.agent.selected",
     model: (agent) => `car.agent.${agent}.model`,
@@ -92,7 +94,7 @@ async function loadAgents() {
     }
     agentsLoadPromise = (async () => {
         try {
-            const data = await api("/api/agents", { method: "GET" });
+            const data = await api(`${API_PREFIX}/agents`, { method: "GET" });
             const agents = Array.isArray(data?.agents) ? data.agents : [];
             // Only use API response if it contains valid agents
             if (agents.length > 0 && agents.every((a) => a && typeof a.id === "string")) {
@@ -152,7 +154,7 @@ async function loadModelCatalog(agent) {
     if (modelCatalogPromises.has(agent)) {
         return await modelCatalogPromises.get(agent) || null;
     }
-    const promise = api(`/api/agents/${encodeURIComponent(agent)}/models`, {
+    const promise = api(`${API_PREFIX}/agents/${encodeURIComponent(agent)}/models`, {
         method: "GET",
     })
         .then((data) => {

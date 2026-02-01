@@ -7,7 +7,7 @@ import { initMessages, initMessageBell } from "./messages.js";
 import { initMobileCompact } from "./mobileCompact.js";
 import { subscribe } from "./bus.js";
 import { initRepoSettingsPanel, openRepoSettings } from "./settings.js";
-import { flash, repairModalBackgroundIfStuck } from "./utils.js";
+import { flash, repairModalBackgroundIfStuck, updateUrlParams } from "./utils.js";
 import { initLiveUpdates } from "./liveUpdates.js";
 import { initHealthGate } from "./health.js";
 import { initWorkspace } from "./workspace.js";
@@ -29,6 +29,7 @@ function showHubView(): void {
   const pmaShell = document.getElementById("pma-shell");
   if (hubShell) hubShell.classList.remove("hidden");
   if (pmaShell) pmaShell.classList.add("hidden");
+  updateUrlParams({ view: null });
 }
 
 function showPMAView(): void {
@@ -37,6 +38,7 @@ function showPMAView(): void {
   if (hubShell) hubShell.classList.add("hidden");
   if (pmaShell) pmaShell.classList.remove("hidden");
   void initPMAView();
+  updateUrlParams({ view: "pma" });
 }
 
 async function initRepoShell(): Promise<void> {

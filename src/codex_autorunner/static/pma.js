@@ -4,7 +4,7 @@
  */
 import { api, resolvePath, getAuthToken, escapeHtml, flash } from "./utils.js";
 import { createDocChat, } from "./docChatCore.js";
-import { getSelectedAgent, getSelectedModel, getSelectedReasoning, refreshAgentControls } from "./agentControls.js";
+import { getSelectedAgent, getSelectedModel, getSelectedReasoning, refreshAgentControls, initAgentControls } from "./agentControls.js";
 const pmaStyling = {
     eventClass: "chat-event",
     eventTitleClass: "chat-event-title",
@@ -33,33 +33,41 @@ const pmaConfig = {
 };
 let pmaChat = null;
 let currentController = null;
-const elements = {
-    shell: document.getElementById("pma-shell"),
-    input: document.getElementById("pma-chat-input"),
-    sendBtn: document.getElementById("pma-chat-send"),
-    cancelBtn: document.getElementById("pma-chat-cancel"),
-    newThreadBtn: document.getElementById("pma-chat-new-thread"),
-    statusEl: document.getElementById("pma-chat-status"),
-    errorEl: document.getElementById("pma-chat-error"),
-    streamEl: document.getElementById("pma-chat-stream"),
-    eventsMain: document.getElementById("pma-chat-events"),
-    eventsList: document.getElementById("pma-chat-events-list"),
-    eventsToggle: document.getElementById("pma-chat-events-toggle"),
-    messagesEl: document.getElementById("pma-chat-messages"),
-    historyHeader: document.getElementById("pma-chat-history-header"),
-    agentSelect: document.getElementById("pma-chat-agent-select"),
-    modelSelect: document.getElementById("pma-chat-model-select"),
-    reasoningSelect: document.getElementById("pma-chat-reasoning-select"),
-    inboxList: document.getElementById("pma-inbox-list"),
-    inboxRefresh: document.getElementById("pma-inbox-refresh"),
-};
+function getElements() {
+    return {
+        shell: document.getElementById("pma-shell"),
+        input: document.getElementById("pma-chat-input"),
+        sendBtn: document.getElementById("pma-chat-send"),
+        cancelBtn: document.getElementById("pma-chat-cancel"),
+        newThreadBtn: document.getElementById("pma-chat-new-thread"),
+        statusEl: document.getElementById("pma-chat-status"),
+        errorEl: document.getElementById("pma-chat-error"),
+        streamEl: document.getElementById("pma-chat-stream"),
+        eventsMain: document.getElementById("pma-chat-events"),
+        eventsList: document.getElementById("pma-chat-events-list"),
+        eventsToggle: document.getElementById("pma-chat-events-toggle"),
+        messagesEl: document.getElementById("pma-chat-messages"),
+        historyHeader: document.getElementById("pma-chat-history-header"),
+        agentSelect: document.getElementById("pma-chat-agent-select"),
+        modelSelect: document.getElementById("pma-chat-model-select"),
+        reasoningSelect: document.getElementById("pma-chat-reasoning-select"),
+        inboxList: document.getElementById("pma-inbox-list"),
+        inboxRefresh: document.getElementById("pma-inbox-refresh"),
+    };
+}
 const decoder = new TextDecoder();
 async function initPMA() {
+    const elements = getElements();
     if (!elements.shell)
         return;
     pmaChat = createDocChat(pmaConfig);
     pmaChat.setTarget("pma");
     pmaChat.render();
+    initAgentControls({
+        agentSelect: elements.agentSelect,
+        modelSelect: elements.modelSelect,
+        reasoningSelect: elements.reasoningSelect,
+    });
     await refreshAgentControls({ force: true, reason: "initial" });
     await loadPMAInbox();
     attachHandlers();
@@ -69,6 +77,7 @@ async function initPMA() {
     }, 30000);
 }
 async function loadPMAInbox() {
+    const elements = getElements();
     if (!elements.inboxList)
         return;
     try {
@@ -101,6 +110,7 @@ async function loadPMAInbox() {
     }
 }
 async function sendMessage() {
+    const elements = getElements();
     if (!elements.input || !pmaChat)
         return;
     const message = elements.input.value?.trim() || "";
@@ -290,8 +300,24 @@ function handlePMAStreamEvent(event, rawData) {
             pmaChat.renderMessages();
             break;
         }
+        case "update": {
+            const data = typeof parsed === "string" ? {} : parsed;
+            if (data.message) {
+                pmaChat.state.streamText = data.message;
+            }
+            pmaChat.render();
+            break;
+        }
         case "done":
         case "finish": {
+            const responseText = pmaChat.state.streamText;
+            if (responseText && pmaChat.state.messages.length > 0) {
+                const lastMessage = pmaChat.state.messages[pmaChat.state.messages.length - 1];
+                if (lastMessage.role === "user") {
+                    pmaChat.addAssistantMessage(responseText, true);
+                    pmaChat.state.streamText = "";
+                }
+            }
             pmaChat.state.status = "done";
             pmaChat.render();
             pmaChat.renderMessages();
@@ -383,6 +409,7 @@ function resetThread() {
     flash("Thread reset", "info");
 }
 function attachHandlers() {
+    const elements = getElements();
     if (elements.sendBtn) {
         elements.sendBtn.addEventListener("click", () => {
             void sendMessage();

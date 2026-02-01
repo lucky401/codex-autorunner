@@ -8,7 +8,7 @@ import {
   type ChatStyling,
   type DocChatInstance,
 } from "./docChatCore.js";
-import { getSelectedAgent, getSelectedModel, getSelectedReasoning, refreshAgentControls } from "./agentControls.js";
+import { getSelectedAgent, getSelectedModel, getSelectedReasoning, refreshAgentControls, initAgentControls } from "./agentControls.js";
 
 interface PMAInboxItem {
   repo_id: string;
@@ -54,35 +54,44 @@ const pmaConfig: ChatConfig = {
 let pmaChat: DocChatInstance | null = null;
 let currentController: AbortController | null = null;
 
-const elements = {
-  shell: document.getElementById("pma-shell"),
-  input: document.getElementById("pma-chat-input") as HTMLTextAreaElement | null,
-  sendBtn: document.getElementById("pma-chat-send") as HTMLButtonElement | null,
-  cancelBtn: document.getElementById("pma-chat-cancel") as HTMLButtonElement | null,
-  newThreadBtn: document.getElementById("pma-chat-new-thread") as HTMLButtonElement | null,
-  statusEl: document.getElementById("pma-chat-status"),
-  errorEl: document.getElementById("pma-chat-error"),
-  streamEl: document.getElementById("pma-chat-stream"),
-  eventsMain: document.getElementById("pma-chat-events"),
-  eventsList: document.getElementById("pma-chat-events-list"),
-  eventsToggle: document.getElementById("pma-chat-events-toggle") as HTMLButtonElement | null,
-  messagesEl: document.getElementById("pma-chat-messages"),
-  historyHeader: document.getElementById("pma-chat-history-header"),
-  agentSelect: document.getElementById("pma-chat-agent-select") as HTMLSelectElement | null,
-  modelSelect: document.getElementById("pma-chat-model-select") as HTMLSelectElement | null,
-  reasoningSelect: document.getElementById("pma-chat-reasoning-select") as HTMLSelectElement | null,
-  inboxList: document.getElementById("pma-inbox-list"),
-  inboxRefresh: document.getElementById("pma-inbox-refresh") as HTMLButtonElement | null,
-};
+function getElements() {
+  return {
+    shell: document.getElementById("pma-shell"),
+    input: document.getElementById("pma-chat-input") as HTMLTextAreaElement | null,
+    sendBtn: document.getElementById("pma-chat-send") as HTMLButtonElement | null,
+    cancelBtn: document.getElementById("pma-chat-cancel") as HTMLButtonElement | null,
+    newThreadBtn: document.getElementById("pma-chat-new-thread") as HTMLButtonElement | null,
+    statusEl: document.getElementById("pma-chat-status"),
+    errorEl: document.getElementById("pma-chat-error"),
+    streamEl: document.getElementById("pma-chat-stream"),
+    eventsMain: document.getElementById("pma-chat-events"),
+    eventsList: document.getElementById("pma-chat-events-list"),
+    eventsToggle: document.getElementById("pma-chat-events-toggle") as HTMLButtonElement | null,
+    messagesEl: document.getElementById("pma-chat-messages"),
+    historyHeader: document.getElementById("pma-chat-history-header"),
+    agentSelect: document.getElementById("pma-chat-agent-select") as HTMLSelectElement | null,
+    modelSelect: document.getElementById("pma-chat-model-select") as HTMLSelectElement | null,
+    reasoningSelect: document.getElementById("pma-chat-reasoning-select") as HTMLSelectElement | null,
+    inboxList: document.getElementById("pma-inbox-list"),
+    inboxRefresh: document.getElementById("pma-inbox-refresh") as HTMLButtonElement | null,
+  };
+}
 
 const decoder = new TextDecoder();
 
 async function initPMA(): Promise<void> {
+  const elements = getElements();
   if (!elements.shell) return;
 
   pmaChat = createDocChat(pmaConfig);
   pmaChat.setTarget("pma");
   pmaChat.render();
+
+  initAgentControls({
+    agentSelect: elements.agentSelect,
+    modelSelect: elements.modelSelect,
+    reasoningSelect: elements.reasoningSelect,
+  });
 
   await refreshAgentControls({ force: true, reason: "initial" });
   await loadPMAInbox();
@@ -95,6 +104,7 @@ async function initPMA(): Promise<void> {
 }
 
 async function loadPMAInbox(): Promise<void> {
+  const elements = getElements();
   if (!elements.inboxList) return;
 
   try {
@@ -127,6 +137,7 @@ async function loadPMAInbox(): Promise<void> {
 }
 
 async function sendMessage(): Promise<void> {
+  const elements = getElements();
   if (!elements.input || !pmaChat) return;
 
   const message = elements.input.value?.trim() || "";
@@ -333,8 +344,25 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
       break;
     }
 
+    case "update": {
+      const data = typeof parsed === "string" ? {} : (parsed as Record<string, unknown>);
+      if (data.message) {
+        pmaChat!.state.streamText = data.message as string;
+      }
+      pmaChat!.render();
+      break;
+    }
+
     case "done":
     case "finish": {
+      const responseText = pmaChat!.state.streamText;
+      if (responseText && pmaChat!.state.messages.length > 0) {
+        const lastMessage = pmaChat!.state.messages[pmaChat!.state.messages.length - 1];
+        if (lastMessage.role === "user") {
+          pmaChat!.addAssistantMessage(responseText, true);
+          pmaChat!.state.streamText = "";
+        }
+      }
       pmaChat!.state.status = "done";
       pmaChat!.render();
       pmaChat!.renderMessages();
@@ -438,6 +466,7 @@ function resetThread(): void {
 }
 
 function attachHandlers(): void {
+  const elements = getElements();
   if (elements.sendBtn) {
     elements.sendBtn.addEventListener("click", () => {
       void sendMessage();

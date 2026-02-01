@@ -1,3 +1,6 @@
+from unittest.mock import patch
+
+import httpx
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
@@ -9,7 +12,10 @@ def test_hub_snapshot_requires_server(hub_root_only) -> None:
     """Test that car hub snapshot fails gracefully when server is not running."""
     hub_root = hub_root_only
 
-    result = runner.invoke(app, ["hub", "snapshot", "--path", str(hub_root), "--json"])
+    with patch("httpx.request", side_effect=httpx.ConnectError("Connection refused")):
+        result = runner.invoke(
+            app, ["hub", "snapshot", "--path", str(hub_root), "--json"]
+        )
 
     assert result.exit_code == 1
     assert (
