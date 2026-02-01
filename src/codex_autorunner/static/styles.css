@@ -10461,9 +10461,9 @@ button.loading::after {
 .filebox-card {
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
-  padding: 12px;
+  padding: 6px 8px;
   background: var(--panel);
-  margin: 12px 0;
+  margin: 6px 0;
 }
 
 .filebox-header {
@@ -10471,7 +10471,7 @@ button.loading::after {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .filebox-actions {
@@ -10482,50 +10482,91 @@ button.loading::after {
 
 .filebox-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, max-content));
+  gap: 6px;
+  justify-content: start;
 }
 
 .filebox-title {
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--text-muted);
-  margin-bottom: 4px;
+  margin-bottom: 0;
 }
 
 .filebox-list {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
 }
 
 .filebox-item {
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 8px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
   background: var(--bg-subtle);
+  margin: 0;
 }
 
 .filebox-row {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 4px;
 }
 
 .filebox-link {
-  font-weight: 600;
-  word-break: break-all;
+  font-weight: 500;
+  font-size: 10px;
+  color: var(--text);
+  text-decoration: none;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 18px;
+  word-break: normal;
+}
+
+.filebox-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .filebox-meta {
-  margin-top: 4px;
+  display: none;
 }
 
 .filebox-empty {
-  padding: 4px 0;
+  padding: 0;
+  font-size: 10px;
+  line-height: 18px;
+}
+
+button.filebox-delete {
+  width: 12px;
+  height: 12px;
+  min-width: 12px;
+  min-height: 12px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 12px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+button.filebox-delete:hover {
+  color: var(--error);
+  opacity: 1;
 }
 
 /* Archive panel */
@@ -13174,85 +13215,7 @@ button.loading::after {
   color: var(--text);
 }
 
-/* Compact file list */
-.pma-file-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-}
-
-.pma-file-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 6px;
-  height: 20px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 10px;
-  max-width: 140px;
-  margin: 0;
-}
-
-.pma-file-item a {
-  color: var(--text);
-  text-decoration: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 110px;
-  line-height: 18px;
-}
-
-.pma-file-item a:hover {
-  text-decoration: underline;
-  color: var(--accent);
-}
-
-.pma-file-delete {
-  width: 12px;
-  height: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  color: var(--muted);
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  padding: 0;
-  margin-left: 0;
-  opacity: 0.7;
-}
-
-.pma-file-delete:hover {
-  color: var(--error);
-  opacity: 1;
-}
-
 .pma-inbox-list .muted {
   font-size: 11px;
   padding: 4px 0;
-}
-
-/* Hide empty sections if needed, or style empty state */
-.pma-file-list:empty {
-  display: none;
-}
-
-/* PMA Attachments Area */
-.pma-attachments-area {
-  padding: 4px 8px;
-  background: var(--bg-surface);
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-/* Hide empty rows to save space */
-.pma-files-row:has(.pma-file-list:empty) {
-  display: none;
 }
