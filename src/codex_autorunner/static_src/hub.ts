@@ -123,6 +123,7 @@ let lastHubAutoRefreshAt = 0;
 
 const repoListEl = document.getElementById("hub-repo-list");
 const lastScanEl = document.getElementById("hub-last-scan");
+const pmaLastScanEl = document.getElementById("pma-last-scan");
 const totalEl = document.getElementById("hub-count-total");
 const runningEl = document.getElementById("hub-count-running");
 const missingEl = document.getElementById("hub-count-missing");
@@ -132,6 +133,7 @@ const hubUsageChartCanvas = document.getElementById("hub-usage-chart-canvas");
 const hubUsageChartRange = document.getElementById("hub-usage-chart-range");
 const hubUsageChartSegment = document.getElementById("hub-usage-chart-segment");
 const hubVersionEl = document.getElementById("hub-version");
+const pmaVersionEl = document.getElementById("pma-version");
 const hubInboxList = document.getElementById("hub-inbox-list");
 const hubInboxRefresh = document.getElementById("hub-inbox-refresh") as HTMLButtonElement | null;
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
@@ -271,6 +273,9 @@ function renderSummary(repos: HubRepo[]): void {
   if (missingEl) missingEl.textContent = missing.toString();
   if (lastScanEl) {
     lastScanEl.textContent = formatTimeCompact(hubData.last_scan_at);
+  }
+  if (pmaLastScanEl) {
+    pmaLastScanEl.textContent = formatTimeCompact(hubData.last_scan_at);
   }
 }
 
@@ -802,7 +807,9 @@ async function handleSystemUpdate(btnId: string, targetSelectId: string | null):
 }
 
 function initHubSettings(): void {
-  const settingsBtn = document.getElementById("hub-settings") as HTMLButtonElement | null;
+  const settingsBtns = Array.from(
+    document.querySelectorAll<HTMLButtonElement>("#hub-settings, #pma-settings")
+  );
   const modal = document.getElementById("hub-settings-modal");
   const closeBtn = document.getElementById("hub-settings-close");
   const updateBtn = document.getElementById("hub-update-btn") as HTMLButtonElement | null;
@@ -817,14 +824,16 @@ function initHubSettings(): void {
     }
   };
 
-  if (settingsBtn && modal) {
-    settingsBtn.addEventListener("click", () => {
-      const triggerEl = document.activeElement;
-      hideModal();
-      closeModal = openModal(modal, {
-        initialFocus: closeBtn || updateBtn || modal,
-        returnFocusTo: triggerEl as HTMLElement | null,
-        onRequestClose: hideModal,
+  if (modal && settingsBtns.length > 0) {
+    settingsBtns.forEach((settingsBtn) => {
+      settingsBtn.addEventListener("click", () => {
+        const triggerEl = document.activeElement;
+        hideModal();
+        closeModal = openModal(modal, {
+          initialFocus: closeBtn || updateBtn || modal,
+          returnFocusTo: triggerEl as HTMLElement | null,
+          onRequestClose: hideModal,
+        });
       });
     });
   }
@@ -1571,13 +1580,15 @@ async function dynamicRefreshHub(): Promise<void> {
 }
 
 async function loadHubVersion(): Promise<void> {
-  if (!hubVersionEl) return;
   try {
     const data = await api("/hub/version", { method: "GET" });
     const version = (data as { asset_version?: string }).asset_version || "";
-    hubVersionEl.textContent = version ? `v${version}` : "v–";
+    const formatted = version ? `v${version}` : "v–";
+    if (hubVersionEl) hubVersionEl.textContent = formatted;
+    if (pmaVersionEl) pmaVersionEl.textContent = formatted;
   } catch (_err) {
-    hubVersionEl.textContent = "v–";
+    if (hubVersionEl) hubVersionEl.textContent = "v–";
+    if (pmaVersionEl) pmaVersionEl.textContent = "v–";
   }
 }
 

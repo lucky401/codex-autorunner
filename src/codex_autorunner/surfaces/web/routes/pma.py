@@ -115,6 +115,11 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/agents")
     def list_pma_agents(request: Request) -> dict[str, Any]:
+        if (
+            getattr(request.app.state, "app_server_supervisor", None) is None
+            and getattr(request.app.state, "opencode_supervisor", None) is None
+        ):
+            raise HTTPException(status_code=404, detail="PMA unavailable")
         agents, default_agent = _available_agents(request)
         defaults = _get_pma_config(request)
         payload: dict[str, Any] = {"agents": agents, "default": default_agent}

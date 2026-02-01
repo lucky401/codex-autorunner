@@ -314,6 +314,7 @@ function getElements() {
     eventsToggle: document.getElementById("pma-chat-events-toggle") as HTMLButtonElement | null,
     messagesEl: document.getElementById("pma-chat-messages"),
     historyHeader: document.getElementById("pma-chat-history-header"),
+    pausedRunsBar: document.getElementById("pma-paused-runs"),
     agentSelect: document.getElementById("pma-chat-agent-select") as HTMLSelectElement | null,
     modelSelect: document.getElementById("pma-chat-model-select") as HTMLSelectElement | null,
     reasoningSelect: document.getElementById("pma-chat-reasoning-select") as HTMLSelectElement | null,
@@ -448,29 +449,34 @@ async function loadPMAInbox(): Promise<void> {
   try {
     const payload = (await api("/hub/messages", { method: "GET" })) as { items?: PMAInboxItem[] };
     const items = payload?.items || [];
-    const html = !items.length
-      ? '<div class="muted">No paused runs</div>'
-      : items
-        .map((item) => {
-          const title = item.message?.title || item.message?.mode || "Message";
-          const excerpt = item.message?.body ? item.message.body.slice(0, 160) : "";
-          const repoLabel = item.repo_display_name || item.repo_id;
-          const href = item.open_url || `/repos/${item.repo_id}/?tab=messages&run_id=${item.run_id}`;
-          return `
-            <a class="pma-inbox-item" href="${escapeHtml(resolvePath(href))}">
-              <div class="pma-inbox-item-header">
-                <span class="pma-inbox-repo">${escapeHtml(repoLabel)}</span>
-                <span class="pill pill-small pill-warn">paused</span>
-              </div>
-              <div class="pma-inbox-title">${escapeHtml(title)}</div>
-              <div class="pma-inbox-excerpt muted small">${escapeHtml(excerpt)}</div>
-            </a>
-          `;
-        })
-        .join("");
+    if (!items.length) {
+      elements.inboxList.innerHTML = "";
+      elements.pausedRunsBar?.classList.add("hidden");
+      return;
+    }
+    const html = items
+      .map((item) => {
+        const title = item.message?.title || item.message?.mode || "Message";
+        const excerpt = item.message?.body ? item.message.body.slice(0, 160) : "";
+        const repoLabel = item.repo_display_name || item.repo_id;
+        const href = item.open_url || `/repos/${item.repo_id}/?tab=messages&run_id=${item.run_id}`;
+        return `
+          <a class="pma-inbox-item" href="${escapeHtml(resolvePath(href))}">
+            <div class="pma-inbox-item-header">
+              <span class="pma-inbox-repo">${escapeHtml(repoLabel)}</span>
+              <span class="pill pill-small pill-warn">paused</span>
+            </div>
+            <div class="pma-inbox-title">${escapeHtml(title)}</div>
+            <div class="pma-inbox-excerpt muted small">${escapeHtml(excerpt)}</div>
+          </a>
+        `;
+      })
+      .join("");
     elements.inboxList.innerHTML = html;
+    elements.pausedRunsBar?.classList.remove("hidden");
   } catch (_err) {
     elements.inboxList.innerHTML = '<div class="muted">Failed to load inbox</div>';
+    elements.pausedRunsBar?.classList.remove("hidden");
   }
 }
 

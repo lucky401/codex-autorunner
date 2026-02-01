@@ -35,6 +35,7 @@ function showHubView(): void {
   const pmaShell = document.getElementById("pma-shell");
   if (hubShell) hubShell.classList.remove("hidden");
   if (pmaShell) pmaShell.classList.add("hidden");
+  updateModeToggle("manual");
   updateUrlParams({ view: null });
 }
 
@@ -43,8 +44,28 @@ function showPMAView(): void {
   const pmaShell = document.getElementById("pma-shell");
   if (hubShell) hubShell.classList.add("hidden");
   if (pmaShell) pmaShell.classList.remove("hidden");
+  updateModeToggle("pma");
   void initPMAView();
   updateUrlParams({ view: "pma" });
+}
+
+function updateModeToggle(mode: "manual" | "pma"): void {
+  const manualBtns = document.querySelectorAll<HTMLButtonElement>(
+    '[data-hub-mode="manual"]'
+  );
+  const pmaBtns = document.querySelectorAll<HTMLButtonElement>(
+    '[data-hub-mode="pma"]'
+  );
+  manualBtns.forEach((btn) => {
+    const active = mode === "manual";
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  pmaBtns.forEach((btn) => {
+    const active = mode === "pma";
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
 }
 
 async function probePMAEnabled(): Promise<boolean> {
@@ -58,8 +79,7 @@ async function probePMAEnabled(): Promise<boolean> {
       method: "GET",
       headers,
     });
-    if (res.ok) return true;
-    if (res.status === 403 || res.status === 404) return false;
+    if (res.status === 404) return false;
     return true;
   } catch {
     return true;
@@ -69,35 +89,41 @@ async function probePMAEnabled(): Promise<boolean> {
 async function initHubShell(): Promise<void> {
   const hubShell = document.getElementById("hub-shell");
   const repoShell = document.getElementById("repo-shell");
-  const hubPmaBtn = document.getElementById("hub-pma") as HTMLButtonElement | null;
-  const pmaBackBtn = document.getElementById("pma-back") as HTMLButtonElement | null;
+  const manualBtns = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[data-hub-mode="manual"]')
+  );
+  const pmaBtns = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[data-hub-mode="pma"]')
+  );
 
   if (hubShell) hubShell.classList.remove("hidden");
   if (repoShell) repoShell.classList.add("hidden");
   initHub();
 
-  if (hubPmaBtn) {
-    hubPmaBtn.addEventListener("click", () => {
-      showPMAView();
-    });
-  }
-
-  if (pmaBackBtn) {
-    pmaBackBtn.addEventListener("click", () => {
+  manualBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
       showHubView();
     });
-  }
+  });
+
+  pmaBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      showPMAView();
+    });
+  });
 
   const urlParams = new URLSearchParams(window.location.search);
   const requestedPMA = urlParams.get("view") === "pma";
   const pmaEnabled = await probePMAEnabled();
 
   if (!pmaEnabled) {
-    if (hubPmaBtn) {
-      hubPmaBtn.classList.add("hidden");
-      hubPmaBtn.setAttribute("aria-hidden", "true");
-      hubPmaBtn.disabled = true;
-    }
+    pmaBtns.forEach((btn) => {
+      btn.disabled = true;
+      btn.setAttribute("aria-disabled", "true");
+      btn.title = "Enable PMA in config to use Project Manager";
+      btn.classList.remove("active");
+      btn.setAttribute("aria-selected", "false");
+    });
     if (requestedPMA) {
       showHubView();
     }

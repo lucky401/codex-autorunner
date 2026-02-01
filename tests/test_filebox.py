@@ -58,6 +58,17 @@ def test_save_resolve_and_delete(tmp_path: Path) -> None:
     assert filebox.resolve_file(repo, "inbox", "note.md") is None
 
 
+def test_delete_removes_legacy_duplicates(tmp_path: Path) -> None:
+    repo = tmp_path
+    _write(repo / ".codex-autorunner" / "pma" / "inbox", "shared.txt", b"legacy")
+    _write(filebox.inbox_dir(repo), "shared.txt", b"primary")
+
+    removed = filebox.delete_file(repo, "inbox", "shared.txt")
+    assert removed
+    assert filebox.resolve_file(repo, "inbox", "shared.txt") is None
+    assert not (repo / ".codex-autorunner" / "pma" / "inbox" / "shared.txt").exists()
+
+
 @pytest.mark.parametrize(
     "name",
     [

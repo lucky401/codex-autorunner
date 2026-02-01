@@ -47,14 +47,11 @@ def test_pma_chat_requires_message(hub_env) -> None:
     assert resp.status_code == 400
 
 
-def test_pma_routes_disabled_by_default(hub_env) -> None:
+def test_pma_routes_enabled_by_default(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
     client = TestClient(app)
-    assert client.get("/hub/pma/agents").status_code in {403, 404}
-    assert client.post("/hub/pma/chat", json={"message": "hi"}).status_code in {
-        403,
-        404,
-    }
+    assert client.get("/hub/pma/agents").status_code == 200
+    assert client.post("/hub/pma/chat", json={}).status_code == 400
 
 
 def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:

@@ -878,8 +878,8 @@ main {
 }
 
 .hub-hero {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
   align-items: center;
   gap: 10px;
   background: linear-gradient(120deg, rgba(108, 245, 216, 0.08), rgba(108, 168, 255, 0.05));
@@ -916,6 +916,55 @@ main {
   gap: 4px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.hub-hero-actions {
+  justify-content: flex-end;
+}
+
+.hub-mode-toggle {
+  justify-self: end;
+}
+
+.hub-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.02);
+  gap: 2px;
+}
+
+.hub-mode-btn {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: transparent;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.hub-mode-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.hub-mode-btn.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: transparent;
+}
+
+.hub-mode-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.hub-mode-short {
+  display: none;
 }
 
 .hub-hero-meta {
@@ -6925,7 +6974,7 @@ button.loading::after {
   }
 
   .hub-hero {
-    flex-direction: row;
+    grid-template-columns: 1fr;
     align-items: center;
     gap: 8px;
   }
@@ -6938,7 +6987,11 @@ button.loading::after {
   }
 
   .hub-hero-actions {
-    justify-content: flex-end;
+    justify-content: flex-start;
+  }
+
+  .hub-mode-toggle {
+    justify-self: start;
   }
 
   .hub-stats {
@@ -7032,7 +7085,8 @@ button.loading::after {
   .hub-hero {
     padding: 8px 10px;
     gap: 8px;
-    flex-wrap: wrap;
+    grid-template-columns: 1fr;
+    justify-items: start;
     overflow: visible;
   }
 
@@ -7049,6 +7103,19 @@ button.loading::after {
     flex-wrap: wrap;
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .hub-mode-btn {
+    padding: 4px 8px;
+    font-size: 10px;
+  }
+
+  .hub-mode-long {
+    display: none;
+  }
+
+  .hub-mode-short {
+    display: inline;
   }
 
   .hub-hero-actions button {
@@ -10487,6 +10554,14 @@ button.loading::after {
   justify-content: start;
 }
 
+.filebox-card.filebox-stacked .filebox-header {
+  justify-content: flex-end;
+}
+
+.filebox-card.filebox-stacked .filebox-grid {
+  grid-template-columns: 1fr;
+}
+
 .filebox-title {
   font-size: 10px;
   font-weight: 700;
@@ -12113,12 +12188,26 @@ button.filebox-delete:hover {
 
 /* PMA Header - compact, clean */
 .pma-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
+}
+
+.pma-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pma-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: end;
 }
 
 .pma-back-btn {

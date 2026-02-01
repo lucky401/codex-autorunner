@@ -29,7 +29,7 @@ def test_pma_config_defaults(tmp_path: Path) -> None:
     assert "pma" in config.raw
     pma_config = config.raw["pma"]
     assert isinstance(pma_config, dict)
-    assert pma_config.get("enabled") is False
+    assert pma_config.get("enabled") is True
     assert pma_config.get("default_agent") == "codex"
     assert pma_config.get("model") is None
     assert pma_config.get("reasoning") is None

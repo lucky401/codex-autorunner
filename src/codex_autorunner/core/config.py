@@ -473,7 +473,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "mode": "hub",
     "repo_defaults": DEFAULT_REPO_DEFAULTS,
     "pma": {
-        "enabled": False,
+        "enabled": True,
         "default_agent": "codex",
         "model": None,
         "reasoning": None,

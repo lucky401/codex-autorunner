@@ -14,6 +14,7 @@ const HUB_REFRESH_IDLE_MS = 30000;
 let lastHubAutoRefreshAt = 0;
 const repoListEl = document.getElementById("hub-repo-list");
 const lastScanEl = document.getElementById("hub-last-scan");
+const pmaLastScanEl = document.getElementById("pma-last-scan");
 const totalEl = document.getElementById("hub-count-total");
 const runningEl = document.getElementById("hub-count-running");
 const missingEl = document.getElementById("hub-count-missing");
@@ -23,6 +24,7 @@ const hubUsageChartCanvas = document.getElementById("hub-usage-chart-canvas");
 const hubUsageChartRange = document.getElementById("hub-usage-chart-range");
 const hubUsageChartSegment = document.getElementById("hub-usage-chart-segment");
 const hubVersionEl = document.getElementById("hub-version");
+const pmaVersionEl = document.getElementById("pma-version");
 const hubInboxList = document.getElementById("hub-inbox-list");
 const hubInboxRefresh = document.getElementById("hub-inbox-refresh");
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
@@ -155,6 +157,9 @@ function renderSummary(repos) {
         missingEl.textContent = missing.toString();
     if (lastScanEl) {
         lastScanEl.textContent = formatTimeCompact(hubData.last_scan_at);
+    }
+    if (pmaLastScanEl) {
+        pmaLastScanEl.textContent = formatTimeCompact(hubData.last_scan_at);
     }
 }
 function formatTokensCompact(val) {
@@ -609,7 +614,7 @@ async function handleSystemUpdate(btnId, targetSelectId) {
     }
 }
 function initHubSettings() {
-    const settingsBtn = document.getElementById("hub-settings");
+    const settingsBtns = Array.from(document.querySelectorAll("#hub-settings, #pma-settings"));
     const modal = document.getElementById("hub-settings-modal");
     const closeBtn = document.getElementById("hub-settings-close");
     const updateBtn = document.getElementById("hub-update-btn");
@@ -622,14 +627,16 @@ function initHubSettings() {
             close();
         }
     };
-    if (settingsBtn && modal) {
-        settingsBtn.addEventListener("click", () => {
-            const triggerEl = document.activeElement;
-            hideModal();
-            closeModal = openModal(modal, {
-                initialFocus: closeBtn || updateBtn || modal,
-                returnFocusTo: triggerEl,
-                onRequestClose: hideModal,
+    if (modal && settingsBtns.length > 0) {
+        settingsBtns.forEach((settingsBtn) => {
+            settingsBtn.addEventListener("click", () => {
+                const triggerEl = document.activeElement;
+                hideModal();
+                closeModal = openModal(modal, {
+                    initialFocus: closeBtn || updateBtn || modal,
+                    returnFocusTo: triggerEl,
+                    onRequestClose: hideModal,
+                });
             });
         });
     }
@@ -1292,15 +1299,20 @@ async function dynamicRefreshHub() {
     await silentRefreshHub();
 }
 async function loadHubVersion() {
-    if (!hubVersionEl)
-        return;
     try {
         const data = await api("/hub/version", { method: "GET" });
         const version = data.asset_version || "";
-        hubVersionEl.textContent = version ? `v${version}` : "v–";
+        const formatted = version ? `v${version}` : "v–";
+        if (hubVersionEl)
+            hubVersionEl.textContent = formatted;
+        if (pmaVersionEl)
+            pmaVersionEl.textContent = formatted;
     }
     catch (_err) {
-        hubVersionEl.textContent = "v–";
+        if (hubVersionEl)
+            hubVersionEl.textContent = "v–";
+        if (pmaVersionEl)
+            pmaVersionEl.textContent = "v–";
     }
 }
 async function checkUpdateStatus() {

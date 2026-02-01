@@ -203,14 +203,22 @@ def resolve_file(repo_root: Path, box: str, filename: str) -> FileBoxEntry | Non
 
 
 def delete_file(repo_root: Path, box: str, filename: str) -> bool:
-    entry = resolve_file(repo_root, box, filename)
-    if entry is None:
+    if box not in BOXES:
         return False
-    try:
-        entry.path.unlink()
-        return True
-    except OSError:
-        return False
+    safe_name = sanitize_filename(filename)
+    paths: List[Tuple[str, Path]] = [("filebox", _box_dir(repo_root, box))]
+    paths.extend(_legacy_paths(repo_root, box))
+    candidates = _gather_files(paths, box)
+    removed = False
+    for entry in candidates:
+        if entry.name != safe_name:
+            continue
+        try:
+            entry.path.unlink()
+            removed = True
+        except OSError:
+            continue
+    return removed
 
 
 def migrate_legacy(repo_root: Path) -> int:

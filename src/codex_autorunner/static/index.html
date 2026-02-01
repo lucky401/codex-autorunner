@@ -24,9 +24,16 @@
       <div class="hub-hero-actions">
         <button class="primary sm" id="hub-new-repo">+ New</button>
         <button class="sm" id="hub-scan">Scan</button>
-        <button class="ghost sm" id="hub-pma">PM</button>
         <button class="ghost sm" id="hub-refresh">Refresh</button>
         <button class="ghost sm icon-btn" id="hub-settings" title="Settings">⚙</button>
+      </div>
+      <div class="hub-mode-toggle" role="tablist" aria-label="Hub mode">
+        <button class="hub-mode-btn active" id="hub-mode-manual" data-hub-mode="manual" role="tab"
+          aria-selected="true">Manual</button>
+        <button class="hub-mode-btn" id="hub-mode-pma" data-hub-mode="pma" role="tab" aria-selected="false">
+          <span class="hub-mode-long">PM Agent</span>
+          <span class="hub-mode-short">PMA</span>
+        </button>
       </div>
     </header>
     <section class="hub-stats">
@@ -85,9 +92,23 @@
     </section>
   </div>
   <div class="hub-shell hidden" id="pma-shell">
-    <header class="pma-header">
-      <button class="pma-back-btn" id="pma-back" title="Back to Hub">← Hub</button>
-      <h1 class="pma-title">Project Manager</h1>
+    <header class="hub-hero pma-hero">
+      <div class="hub-hero-text pma-hero-text">
+        <h1>Project Manager</h1>
+        <span class="pill pill-small pill-idle" id="pma-last-scan">–</span>
+        <span class="hub-version" id="pma-version">v–</span>
+      </div>
+      <div class="hub-hero-actions pma-hero-actions">
+        <button class="ghost sm icon-btn" id="pma-settings" title="Settings">⚙</button>
+      </div>
+      <div class="hub-mode-toggle" role="tablist" aria-label="Hub mode">
+        <button class="hub-mode-btn" id="pma-mode-manual" data-hub-mode="manual" role="tab"
+          aria-selected="false">Manual</button>
+        <button class="hub-mode-btn active" id="pma-mode-pma" data-hub-mode="pma" role="tab" aria-selected="true">
+          <span class="hub-mode-long">PM Agent</span>
+          <span class="hub-mode-short">PMA</span>
+        </button>
+      </div>
     </header>
     <section class="pma-top-bar">
       <div class="pma-chat-controls-row">
@@ -103,7 +124,7 @@
           <span class="pma-status-pill" id="pma-chat-status">idle</span>
         </div>
       </div>
-      <div class="pma-paused-runs-bar">
+      <div class="pma-paused-runs-bar" id="pma-paused-runs">
         <div class="pma-inbox-list" id="pma-inbox-list">Loading…</div>
         <button class="pma-inbox-refresh-btn" id="pma-inbox-refresh" title="Refresh inbox">↻</button>
       </div>
@@ -331,9 +352,8 @@
                   </div>
                 </div>
                 <div class="messages-filebox">
-                  <div class="filebox-card">
+                  <div class="filebox-card filebox-stacked">
                     <div class="filebox-header">
-                      <span class="label">FileBox</span>
                       <div class="filebox-actions">
                         <input type="file" id="messages-filebox-upload" multiple hidden />
                         <button class="ghost sm" id="messages-filebox-upload-btn" title="Upload to inbox">Upload</button>
