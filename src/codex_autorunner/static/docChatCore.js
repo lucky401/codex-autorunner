@@ -2,6 +2,7 @@
 import { parseAppServerEvent } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { saveChatHistory, loadChatHistory } from "./docChatStorage.js";
+import { renderMarkdown } from "./messages.js";
 function getElements(prefix) {
     return {
         input: document.getElementById(`${prefix}-input`),
@@ -240,8 +241,14 @@ export function createDocChat(config) {
             }
             wrapper.appendChild(roleLabel);
             const content = document.createElement("div");
-            content.className = config.styling.messageContentClass;
-            content.textContent = msg.content;
+            content.className = `${config.styling.messageContentClass} messages-markdown`;
+            // Use markdown rendering for assistant messages, plain text for user
+            if (msg.role === "assistant") {
+                content.innerHTML = renderMarkdown(msg.content);
+            }
+            else {
+                content.textContent = msg.content;
+            }
             wrapper.appendChild(content);
             const meta = document.createElement("div");
             meta.className = config.styling.messageMetaClass;
@@ -265,8 +272,8 @@ export function createDocChat(config) {
             roleLabel.textContent = "Thinking";
             streaming.appendChild(roleLabel);
             const content = document.createElement("div");
-            content.className = config.styling.messageContentClass;
-            content.textContent = state.streamText;
+            content.className = `${config.styling.messageContentClass} messages-markdown`;
+            content.innerHTML = renderMarkdown(state.streamText);
             streaming.appendChild(content);
             messagesEl.appendChild(streaming);
         }
