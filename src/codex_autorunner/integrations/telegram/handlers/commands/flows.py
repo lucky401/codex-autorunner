@@ -36,6 +36,7 @@ from .....integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
 )
+from .....manifest import load_manifest
 from .....tickets import AgentPool
 from .....tickets.files import list_ticket_paths
 from .....tickets.outbox import resolve_outbox_paths
@@ -259,28 +260,51 @@ class FlowCommands(SharedHelpers):
 
     async def _handle_flow(self, message: TelegramMessage, args: str) -> None:
         argv = self._parse_command_args(args)
+
+        target_repo_root = None
+        effective_args = args
+
+        if argv:
+            resolved = self._resolve_workspace(argv[0])
+            if resolved:
+                target_repo_root = Path(resolved[0])
+                argv = argv[1:]
+                # Reconstruct args for remainder logic (imperfect but sufficient for text commands)
+                effective_args = " ".join(argv)
+
         action_raw = argv[0] if argv else ""
         action = _normalize_flow_action(action_raw)
-        _, remainder = _split_flow_action(args)
+        _, remainder = _split_flow_action(effective_args)
         rest_argv = argv[1:]
 
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._store.get_topic(key)
 
+        if not target_repo_root and not action_raw:
+            # Check if we should show Hub Overview
+            is_pma = bool(record and record.pma_enabled)
+            is_unbound = bool(not record or not record.workspace_path)
+
+            if is_pma or is_unbound:
+                await self._send_flow_hub_overview(message)
+                return
+
         if action == "help":
             await self._send_flow_overview(message, record)
             return
 
-        if not record or not record.workspace_path:
+        if target_repo_root:
+            repo_root = canonicalize_path(target_repo_root)
+        elif record and record.workspace_path:
+            repo_root = canonicalize_path(Path(record.workspace_path))
+        else:
             await self._send_message(
                 message.chat_id,
-                "No workspace bound. Use /bind to bind this topic to a repo first.",
+                "No workspace bound. Use /bind to bind this topic to a repo first, or use /flow <repo_id>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
-
-        repo_root = canonicalize_path(Path(record.workspace_path))
 
         if action == "status":
             await self._handle_flow_status_action(message, repo_root, rest_argv)
@@ -747,6 +771,67 @@ class FlowCommands(SharedHelpers):
             "\n".join(lines),
             thread_id=message.thread_id,
             reply_to=message.message_id,
+        )
+
+    async def _send_flow_hub_overview(self, message: TelegramMessage) -> None:
+        if not self._manifest_path or not self._hub_root:
+            await self._send_message(
+                message.chat_id,
+                "Hub manifest not configured.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        try:
+            manifest = load_manifest(self._manifest_path, self._hub_root)
+        except Exception:
+            await self._send_message(
+                message.chat_id,
+                "Failed to load manifest.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        lines = ["Hub Flow Overview:"]
+        for repo in manifest.repos:
+            if not repo.enabled:
+                continue
+
+            repo_root = (self._hub_root / repo.path).resolve()
+            store = _load_flow_store(repo_root)
+            try:
+                store.initialize()
+                # Check for active runs
+                active = _select_latest_run(store, lambda run: run.status.is_active())
+                if active:
+                    status_icon = (
+                        "🟢" if active.status == FlowRunStatus.RUNNING else "🟡"
+                    )
+                    lines.append(
+                        f"{status_icon} `{repo.id}`: {active.status.value} (run {active.id})"
+                    )
+                else:
+                    # Check for paused
+                    paused = _select_latest_run(
+                        store, lambda run: run.status == FlowRunStatus.PAUSED
+                    )
+                    if paused:
+                        lines.append(f"🔴 `{repo.id}`: PAUSED (run {paused.id})")
+                    else:
+                        lines.append(f"⚪ `{repo.id}`: Idle")
+            except Exception:
+                lines.append(f"❓ `{repo.id}`: Error reading state")
+            finally:
+                store.close()
+
+        await self._send_message(
+            message.chat_id,
+            "\n".join(lines),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            parse_mode="Markdown",
         )
 
     async def _handle_flow_status_action(

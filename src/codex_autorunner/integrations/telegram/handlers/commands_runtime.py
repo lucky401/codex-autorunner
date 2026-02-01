@@ -1143,10 +1143,19 @@ class TelegramCommandHandlers(
 
         if record is None:
             await self._router.ensure_topic(message.chat_id, message.thread_id)
+
+        def apply_pma(record: TelegramTopicRecord) -> None:
+            record.pma_enabled = enabled
+            if enabled:
+                # Mutual exclusion: PMA mode implies Hub context, so unbind specific repo.
+                record.workspace_path = None
+                record.repo_id = None
+                record.workspace_id = None
+
         await self._router.update_topic(
             message.chat_id,
             message.thread_id,
-            lambda record: setattr(record, "pma_enabled", enabled),
+            apply_pma,
         )
         status = "enabled" if enabled else "disabled"
         hint = "Use /pma off to exit." if enabled else "Back to repo mode."

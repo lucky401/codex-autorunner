@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 from .....agents.opencode.runtime import extract_session_id
+from .....core.flows import FlowStore
+from .....core.flows.models import FlowRunStatus
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path, resolve_opencode_binary
@@ -777,6 +779,45 @@ class WorkspaceCommands(SharedHelpers):
             return False
         return True
 
+    async def _handle_repos(
+        self, message: TelegramMessage, _args: str, _runtime: Any
+    ) -> None:
+        if not self._manifest_path or not self._hub_root:
+            await self._send_message(
+                message.chat_id,
+                "Hub manifest not configured.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        try:
+            manifest = load_manifest(self._manifest_path, self._hub_root)
+        except Exception as exc:
+            await self._send_message(
+                message.chat_id,
+                f"Failed to load manifest: {exc}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        lines = ["Repositories:"]
+        for repo in manifest.repos:
+            if not repo.enabled:
+                continue
+            lines.append(f"- `{repo.id}` ({repo.path})")
+
+        lines.append("\nUse /bind <repo_id> to switch context.")
+
+        await self._send_message(
+            message.chat_id,
+            "\n".join(lines),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            parse_mode="Markdown",
+        )
+
     async def _handle_bind(self, message: TelegramMessage, args: str) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         if not args:
@@ -828,13 +869,19 @@ class WorkspaceCommands(SharedHelpers):
             scope=scope,
         )
         workspace_id = self._workspace_id_for_path(workspace_path)
-        if workspace_id:
-            await self._router.update_topic(
-                chat_id,
-                thread_id,
-                lambda record: setattr(record, "workspace_id", workspace_id),
-                scope=scope,
-            )
+
+        def apply_bind_updates(record: TelegramTopicRecord) -> None:
+            if workspace_id:
+                record.workspace_id = workspace_id
+            # Mutual exclusion: Binding to a repo disables PMA mode.
+            record.pma_enabled = False
+
+        await self._router.update_topic(
+            chat_id,
+            thread_id,
+            apply_bind_updates,
+            scope=scope,
+        )
         await self._answer_callback(callback, "Bound to repo")
         await self._finalize_selection(
             key,
@@ -866,13 +913,19 @@ class WorkspaceCommands(SharedHelpers):
             scope=scope,
         )
         workspace_id = self._workspace_id_for_path(workspace_path)
-        if workspace_id:
-            await self._router.update_topic(
-                message.chat_id,
-                message.thread_id,
-                lambda record: setattr(record, "workspace_id", workspace_id),
-                scope=scope,
-            )
+
+        def apply_bind_updates(record: TelegramTopicRecord) -> None:
+            if workspace_id:
+                record.workspace_id = workspace_id
+            # Mutual exclusion: Binding to a repo disables PMA mode.
+            record.pma_enabled = False
+
+        await self._router.update_topic(
+            message.chat_id,
+            message.thread_id,
+            apply_bind_updates,
+            scope=scope,
+        )
         await self._send_message(
             message.chat_id,
             f"Bound to {repo_id or workspace_path}.",
@@ -2035,6 +2088,63 @@ class WorkspaceCommands(SharedHelpers):
         lines.extend(_format_rate_limits(rate_limits))
         if not record.workspace_path:
             lines.append("Use /bind <repo_id> or /bind <path>.")
+
+        if record.pma_enabled:
+            if self._manifest_path and self._hub_root:
+                try:
+                    manifest = load_manifest(self._manifest_path, self._hub_root)
+                    active_count = 0
+                    paused_count = 0
+                    for repo in manifest.repos:
+                        if not repo.enabled:
+                            continue
+                        repo_root = (self._hub_root / repo.path).resolve()
+                        db_path = repo_root / ".codex-autorunner" / "flows.db"
+                        if not db_path.exists():
+                            continue
+
+                        store = FlowStore(db_path)
+                        try:
+                            store.initialize()
+                            runs = store.list_flow_runs(flow_type="ticket_flow")
+                            if runs:
+                                latest = runs[0]
+                                if latest.status.is_active():
+                                    active_count += 1
+                                elif latest.status == FlowRunStatus.PAUSED:
+                                    paused_count += 1
+                        except Exception:
+                            pass
+                        finally:
+                            store.close()
+
+                    if active_count or paused_count:
+                        lines.append(
+                            f"Hub Flows: {active_count} active, {paused_count} paused"
+                        )
+                except Exception:
+                    pass
+        elif record.workspace_path:
+            repo_root = Path(record.workspace_path)
+            db_path = repo_root / ".codex-autorunner" / "flows.db"
+            if db_path.exists():
+                store = FlowStore(db_path)
+                try:
+                    store.initialize()
+                    runs = store.list_flow_runs(flow_type="ticket_flow")
+                    if runs:
+                        latest = runs[0]
+                        if latest.status.is_active():
+                            lines.append(
+                                f"Active Flow: {latest.status.value} (run {latest.id})"
+                            )
+                        elif latest.status == FlowRunStatus.PAUSED:
+                            lines.append(f"Active Flow: PAUSED (run {latest.id})")
+                except Exception:
+                    pass
+                finally:
+                    store.close()
+
         await self._send_message(
             message.chat_id,
             "\n".join(lines),

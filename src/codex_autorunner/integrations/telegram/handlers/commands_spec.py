@@ -16,6 +16,12 @@ class CommandSpec:
 
 def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
     return {
+        "repos": CommandSpec(
+            "repos",
+            "list available repositories in the hub",
+            handlers._handle_repos,
+            allow_during_turn=True,
+        ),
         "bind": CommandSpec(
             "bind",
             "bind this topic to a workspace",

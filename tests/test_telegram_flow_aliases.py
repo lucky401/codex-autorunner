@@ -36,6 +36,9 @@ class _FlowReplyAliasHandler(FlowCommands):
     async def _handle_reply(self, _message: TelegramMessage, args: str) -> None:
         self.reply_args.append(args)
 
+    def _resolve_workspace(self, _key: str) -> tuple[str, Path] | None:
+        return None
+
     async def _send_message(
         self,
         _chat_id: int,
