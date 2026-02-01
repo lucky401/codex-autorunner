@@ -10,6 +10,7 @@ import { initAgentControls } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
 import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
 import { DocEditor } from "./docEditor.js";
+import { initTicketTemplates } from "./ticketTemplates.js";
 const DEFAULT_FRONTMATTER = {
     agent: "codex",
     done: false,
@@ -709,6 +710,8 @@ export function initTicketEditor() {
     void initTicketVoice();
     // Initialize rich chat experience (events toggle, etc.)
     initTicketChatEvents();
+    // Initialize ticket templates picker
+    initTicketTemplates();
     // Button handlers
     if (deleteBtn)
         deleteBtn.addEventListener("click", () => void deleteTicket());

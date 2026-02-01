@@ -12,6 +12,7 @@ import yaml
 
 from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
 from .path_utils import ConfigPathError, resolve_config_path
+from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.core.config")
 
@@ -1018,6 +1019,23 @@ def _load_root_config(root: Path) -> Dict[str, Any]:
     if override:
         merged = _merge_defaults(merged, override)
     return merged
+
+
+def update_override_templates(repo_root: Path, repos: List[Dict[str, Any]]) -> None:
+    """
+    Update templates.repos in the root override file, preserving other settings.
+
+    This writes to `codex-autorunner.override.yml` (gitignored) at the provided repo_root.
+    """
+    override_path = repo_root / ROOT_OVERRIDE_FILENAME
+    data = _load_yaml_dict(override_path)
+    templates = data.get("templates")
+    if templates is None or not isinstance(templates, dict):
+        templates = {}
+        data["templates"] = templates
+    templates["repos"] = list(repos or [])
+    rendered = yaml.safe_dump(data, sort_keys=False).rstrip() + "\n"
+    atomic_write(override_path, rendered)
 
 
 def load_root_defaults(root: Path) -> Dict[str, Any]:

@@ -509,13 +509,21 @@
               <button class="ghost sm icon-btn" id="ticket-overflow-toggle" title="More actions">⋯</button>
               <div class="ticket-overflow-dropdown hidden" id="ticket-overflow-dropdown">
                 <button class="ticket-overflow-item" id="ticket-overflow-new">+ New Ticket</button>
+                <button class="ticket-overflow-item hidden" id="ticket-overflow-template">From Template</button>
                 <button class="ticket-overflow-item" id="ticket-overflow-restart" style="display:none;">Restart</button>
                 <button class="ticket-overflow-item" id="ticket-overflow-archive" style="display:none;">Archive
                   Flow</button>
               </div>
             </div>
-            <button class="ghost sm ticket-desktop-only" id="ticket-new-btn" title="Create new ticket">+ New
-              Ticket</button>
+            <!-- Split button: New Ticket + Template dropdown -->
+            <div class="ticket-new-split ticket-desktop-only">
+              <button class="ghost sm" id="ticket-new-btn" title="Create new ticket">+ New Ticket</button>
+              <button class="ghost sm icon-btn ticket-new-dropdown-toggle hidden" id="ticket-new-dropdown-toggle"
+                title="Create from template">▾</button>
+              <div class="ticket-new-dropdown hidden" id="ticket-new-dropdown">
+                <button class="ticket-new-dropdown-item" id="ticket-new-from-template">From Template</button>
+              </div>
+            </div>
           </div>
           <div class="ticket-flow-meta" id="ticket-flow-meta">
             <div class="ticket-meta-details" id="ticket-meta-details">
@@ -706,6 +714,59 @@
                   <!-- Hidden elements for event tracking -->
                   <span class="hidden" id="ticket-chat-events-count">0</span>
                   <button class="ghost sm hidden" id="ticket-chat-events-toggle">Show more</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Template Picker Modal -->
+        <div class="modal-overlay hidden" id="ticket-template-modal">
+          <div class="modal-content ticket-template-modal-content">
+            <div class="modal-header ticket-template-header">
+              <span class="ticket-template-title">New Ticket from Template</span>
+              <button class="ghost sm icon-btn" id="ticket-template-close" title="Close">×</button>
+            </div>
+            <div class="ticket-template-body">
+              <!-- Recent templates (shown if history exists) -->
+              <div class="ticket-template-recent hidden" id="ticket-template-recent"></div>
+              
+              <!-- Main input section -->
+              <div class="ticket-template-input-section">
+                <div class="ticket-template-input-wrapper">
+                  <input class="ticket-template-input" id="ticket-template-ref" type="text"
+                    placeholder="repo:path/to/template.md" spellcheck="false" autocomplete="off">
+                  <button class="ticket-template-clear hidden" id="ticket-template-clear" type="button" title="Clear">×</button>
+                  <span class="ticket-template-input-hint" id="ticket-template-hint">or paste GitHub URL</span>
+                </div>
+                <div class="ticket-template-repos" id="ticket-template-repos"></div>
+              </div>
+              
+              <!-- Preview -->
+              <div class="ticket-template-preview-section">
+                <div class="ticket-template-preview-header">
+                  <span class="ticket-template-preview-label">Preview</span>
+                  <span class="ticket-template-preview-status" id="ticket-template-preview-status"></span>
+                </div>
+                <pre class="ticket-template-preview" id="ticket-template-preview"></pre>
+              </div>
+              
+              <!-- Error -->
+              <div class="ticket-template-error hidden" id="ticket-template-error"></div>
+              
+              <!-- Footer -->
+              <div class="ticket-template-footer">
+                <div class="ticket-template-options">
+                  <label class="ticket-template-option-label">Agent:</label>
+                  <select class="ticket-template-agent-select" id="ticket-template-agent">
+                    <option value="">default</option>
+                    <option value="codex">codex</option>
+                    <option value="opencode">opencode</option>
+                    <option value="user">user</option>
+                  </select>
+                </div>
+                <div class="ticket-template-actions">
+                  <button class="ghost sm" id="ticket-template-cancel">Cancel</button>
+                  <button class="primary sm" id="ticket-template-apply" disabled>Create</button>
                 </div>
               </div>
             </div>
@@ -953,6 +1014,42 @@
             <button class="ghost sm" id="thread-backup-download">Download backup</button>
           </div>
           <span class="form-hint">Resetting conversations clears stored thread IDs and restarts chats.</span>
+        </div>
+        <div class="form-group">
+          <label>Template Repositories</label>
+          <div class="template-repos-list" id="template-repos-list"></div>
+          <div class="settings-actions">
+            <button class="ghost sm" id="template-repos-add">+ Add repository</button>
+          </div>
+          <div class="template-repo-form hidden" id="template-repo-form">
+            <div class="settings-grid">
+              <div>
+                <label class="muted small" for="repo-id">ID</label>
+                <input autocomplete="off" id="repo-id" placeholder="my-team" spellcheck="false" type="text" />
+                <span class="form-hint">Used in refs like <span class="mono">id:path/to/file.md</span></span>
+              </div>
+              <div>
+                <label class="muted small" for="repo-url">Git URL</label>
+                <input autocomplete="off" id="repo-url" placeholder="https://github.com/org/repo.git" spellcheck="false"
+                  type="text" />
+              </div>
+              <div>
+                <label class="muted small" for="repo-ref">Default ref</label>
+                <input autocomplete="off" id="repo-ref" placeholder="main" spellcheck="false" type="text" value="main" />
+              </div>
+              <div class="settings-toggle-row">
+                <label class="form-checkbox">
+                  <input id="repo-trusted" type="checkbox" />
+                  <span>Trusted (skip scanning)</span>
+                </label>
+              </div>
+            </div>
+            <div class="settings-actions">
+              <button class="primary sm" id="repo-save">Save</button>
+              <button class="ghost sm" id="repo-cancel">Cancel</button>
+            </div>
+          </div>
+          <span class="form-hint">Edits are written to <span class="mono">codex-autorunner.override.yml</span>.</span>
         </div>
       </div>
       <div class="modal-actions">

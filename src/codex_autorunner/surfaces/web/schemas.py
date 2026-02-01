@@ -210,6 +210,23 @@ class TemplateReposResponse(ResponseModel):
     repos: List[TemplateRepoSummary]
 
 
+class TemplateRepoCreateRequest(Payload):
+    id: str
+    url: str
+    trusted: bool = False
+    default_ref: str = Field(
+        default="main", validation_alias=AliasChoices("default_ref", "defaultRef")
+    )
+
+
+class TemplateRepoUpdateRequest(Payload):
+    url: Optional[str] = None
+    trusted: Optional[bool] = None
+    default_ref: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("default_ref", "defaultRef")
+    )
+
+
 class TemplateFetchRequest(Payload):
     template: str
 

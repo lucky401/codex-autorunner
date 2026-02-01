@@ -1,5 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, confirmModal, flash, resolvePath, openModal } from "./utils.js";
+import { initTemplateReposSettings, loadTemplateRepos } from "./templateReposSettings.js";
 const ui = {
     settingsBtn: document.getElementById("repo-settings"),
     threadList: document.getElementById("thread-tools-list"),
@@ -71,11 +72,13 @@ async function loadThreadTools() {
 }
 async function refreshSettings() {
     await loadThreadTools();
+    await loadTemplateRepos();
 }
 export function initRepoSettingsPanel() {
     window.__CAR_SETTINGS = { loadThreadTools, refreshSettings };
     // Initialize the modal interaction
     initRepoSettingsModal();
+    initTemplateReposSettings();
     if (ui.threadNew) {
         ui.threadNew.addEventListener("click", async () => {
             try {

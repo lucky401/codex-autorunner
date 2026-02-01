@@ -7,7 +7,13 @@ import yaml
 from fastapi import APIRouter, HTTPException, Request
 
 from ....agents.registry import validate_agent_id
-from ....core.config import ConfigError, RepoConfig, load_hub_config
+from ....core.config import (
+    ConfigError,
+    RepoConfig,
+    load_hub_config,
+    load_repo_config,
+    update_override_templates,
+)
 from ....core.git_utils import GitError
 from ....core.templates import (
     FetchedTemplate,
@@ -33,7 +39,9 @@ from ..schemas import (
     TemplateApplyResponse,
     TemplateFetchRequest,
     TemplateFetchResponse,
+    TemplateRepoCreateRequest,
     TemplateReposResponse,
+    TemplateRepoUpdateRequest,
 )
 
 
@@ -74,6 +82,92 @@ def _resolve_hub_root(repo_root: Path) -> Path:
             ),
         ) from exc
     return hub_config.root
+
+
+def _reload_repo_config(request: Request) -> RepoConfig:
+    engine = request.app.state.engine
+    try:
+        new_config = load_repo_config(engine.repo_root)
+    except ConfigError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=_error_detail("config_reload_failed", str(exc)),
+        ) from exc
+    # RuntimeContext stores config on a private attribute.
+    engine._config = new_config
+    request.app.state.config = new_config
+    return new_config
+
+
+def _normalize_required_string(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail("validation_error", f"{field} must be a string"),
+        )
+    cleaned = value.strip()
+    if not cleaned:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail("validation_error", f"{field} must not be empty"),
+        )
+    if "\n" in cleaned or "\r" in cleaned:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail("validation_error", f"{field} must be single-line"),
+        )
+    return cleaned
+
+
+def _normalize_optional_string(value: object, field: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail("validation_error", f"{field} must be a string"),
+        )
+    cleaned = value.strip()
+    if not cleaned:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail("validation_error", f"{field} must not be empty"),
+        )
+    if "\n" in cleaned or "\r" in cleaned:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail("validation_error", f"{field} must be single-line"),
+        )
+    return cleaned
+
+
+def _validate_repo_url(url: str) -> None:
+    if any(ch.isspace() for ch in url):
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail("validation_error", "url must not contain whitespace"),
+        )
+    # Keep this intentionally permissive: https://, ssh://, git@host:org/repo.git, etc.
+    if "://" not in url and not url.startswith("git@"):
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail(
+                "validation_error",
+                "url must look like a git remote (expected '://...' or 'git@...')",
+            ),
+        )
+
+
+def _repos_to_dicts(repos) -> list[dict]:
+    return [
+        {
+            "id": repo.id,
+            "url": repo.url,
+            "trusted": bool(repo.trusted),
+            "default_ref": repo.default_ref,
+        }
+        for repo in repos
+    ]
 
 
 async def _fetch_template_with_scan(
@@ -283,6 +377,133 @@ def build_templates_routes() -> APIRouter:
                 }
                 for repo in config.templates.repos
             ],
+        )
+
+    @router.post("/repos", response_model=TemplateReposResponse)
+    def add_template_repo(request: Request, payload: TemplateRepoCreateRequest):
+        config: RepoConfig = request.app.state.config
+        repo_id = _normalize_required_string(payload.id, "id")
+        url = _normalize_required_string(payload.url, "url")
+        _validate_repo_url(url)
+        default_ref = _normalize_required_string(payload.default_ref, "default_ref")
+        trusted = bool(payload.trusted)
+
+        if any(repo.id == repo_id for repo in config.templates.repos):
+            raise HTTPException(
+                status_code=409,
+                detail=_error_detail(
+                    "template_repo_conflict", f"Template repo already exists: {repo_id}"
+                ),
+            )
+
+        updated = _repos_to_dicts(config.templates.repos)
+        updated.append(
+            {
+                "id": repo_id,
+                "url": url,
+                "trusted": trusted,
+                "default_ref": default_ref,
+            }
+        )
+        hub_root = _resolve_hub_root(request.app.state.engine.repo_root)
+        update_override_templates(hub_root, updated)
+        new_config = _reload_repo_config(request)
+        return TemplateReposResponse(
+            enabled=new_config.templates.enabled,
+            repos=_repos_to_dicts(new_config.templates.repos),
+        )
+
+    @router.put("/repos/{repo_id}", response_model=TemplateReposResponse)
+    def update_template_repo(
+        request: Request, repo_id: str, payload: TemplateRepoUpdateRequest
+    ):
+        config: RepoConfig = request.app.state.config
+        existing = _find_template_repo(config, repo_id)
+        if existing is None:
+            raise HTTPException(
+                status_code=404,
+                detail=_error_detail(
+                    "template_repo_missing", f"Template repo not configured: {repo_id}"
+                ),
+            )
+        updates = payload.model_dump(exclude_unset=True)
+        url = (
+            _normalize_optional_string(updates.get("url"), "url")
+            if "url" in updates
+            else None
+        )
+        if url is not None:
+            _validate_repo_url(url)
+        default_ref = (
+            _normalize_optional_string(updates.get("default_ref"), "default_ref")
+            if "default_ref" in updates
+            else None
+        )
+        trusted_val = updates.get("trusted") if "trusted" in updates else None
+        if trusted_val is not None and not isinstance(trusted_val, bool):
+            raise HTTPException(
+                status_code=400,
+                detail=_error_detail("validation_error", "trusted must be boolean"),
+            )
+        trusted = bool(trusted_val) if trusted_val is not None else None
+
+        updated: list[dict] = []
+        for repo in config.templates.repos:
+            if repo.id != repo_id:
+                updated.append(
+                    {
+                        "id": repo.id,
+                        "url": repo.url,
+                        "trusted": bool(repo.trusted),
+                        "default_ref": repo.default_ref,
+                    }
+                )
+                continue
+            updated.append(
+                {
+                    "id": repo.id,
+                    "url": url if url is not None else repo.url,
+                    "trusted": trusted if trusted is not None else bool(repo.trusted),
+                    "default_ref": (
+                        default_ref if default_ref is not None else repo.default_ref
+                    ),
+                }
+            )
+
+        hub_root = _resolve_hub_root(request.app.state.engine.repo_root)
+        update_override_templates(hub_root, updated)
+        new_config = _reload_repo_config(request)
+        return TemplateReposResponse(
+            enabled=new_config.templates.enabled,
+            repos=_repos_to_dicts(new_config.templates.repos),
+        )
+
+    @router.delete("/repos/{repo_id}", response_model=TemplateReposResponse)
+    def delete_template_repo(request: Request, repo_id: str):
+        config: RepoConfig = request.app.state.config
+        if _find_template_repo(config, repo_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail=_error_detail(
+                    "template_repo_missing", f"Template repo not configured: {repo_id}"
+                ),
+            )
+        updated = [
+            {
+                "id": repo.id,
+                "url": repo.url,
+                "trusted": bool(repo.trusted),
+                "default_ref": repo.default_ref,
+            }
+            for repo in config.templates.repos
+            if repo.id != repo_id
+        ]
+        hub_root = _resolve_hub_root(request.app.state.engine.repo_root)
+        update_override_templates(hub_root, updated)
+        new_config = _reload_repo_config(request)
+        return TemplateReposResponse(
+            enabled=new_config.templates.enabled,
+            repos=_repos_to_dicts(new_config.templates.repos),
         )
 
     @router.post("/fetch", response_model=TemplateFetchResponse)

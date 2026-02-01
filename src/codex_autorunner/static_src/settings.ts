@@ -1,4 +1,5 @@
 import { api, confirmModal, flash, resolvePath, openModal } from "./utils.js";
+import { initTemplateReposSettings, loadTemplateRepos } from "./templateReposSettings.js";
 
 const ui = {
   settingsBtn: document.getElementById("repo-settings"),
@@ -83,6 +84,7 @@ async function loadThreadTools(): Promise<ThreadToolData | null> {
 
 async function refreshSettings(): Promise<void> {
   await loadThreadTools();
+  await loadTemplateRepos();
 }
 
 export function initRepoSettingsPanel(): void {
@@ -90,6 +92,7 @@ export function initRepoSettingsPanel(): void {
   
   // Initialize the modal interaction
   initRepoSettingsModal();
+  initTemplateReposSettings();
   
   if (ui.threadNew) {
     ui.threadNew.addEventListener("click", async () => {
