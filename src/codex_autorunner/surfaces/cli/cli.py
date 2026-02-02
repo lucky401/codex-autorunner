@@ -85,9 +85,12 @@ from ...integrations.templates.scan_agent import (
 )
 from ...manifest import load_manifest
 from ...tickets import AgentPool
-from ...tickets.files import list_ticket_paths
+from ...tickets.files import list_ticket_paths, read_ticket, safe_relpath
 from ...tickets.frontmatter import split_markdown_frontmatter
-from ...tickets.lint import parse_ticket_index
+from ...tickets.lint import (
+    lint_ticket_directory,
+    parse_ticket_index,
+)
 from ...voice import VoiceConfig
 from ..web.app import create_hub_app
 
@@ -1715,6 +1718,37 @@ def _ticket_flow_paths(engine: RuntimeContext) -> tuple[Path, Path, Path]:
     return db_path, artifacts_root, ticket_dir
 
 
+def _validate_tickets(ticket_dir: Path) -> list[str]:
+    """Validate all tickets in the directory and return a list of error messages."""
+    errors: list[str] = []
+
+    if not ticket_dir.exists():
+        return errors
+
+    ticket_root = ticket_dir.parent
+    for path in sorted(ticket_dir.iterdir()):
+        if not path.is_file():
+            continue
+        if parse_ticket_index(path.name) is None:
+            rel_path = safe_relpath(path, ticket_root)
+            errors.append(
+                f"{rel_path}: Invalid ticket filename; expected TICKET-<number>[suffix].md (e.g. TICKET-001-foo.md)"
+            )
+
+    # Check for directory-level errors (duplicate indices)
+    dir_errors = lint_ticket_directory(ticket_dir)
+    errors.extend(dir_errors)
+
+    # Check each ticket file for frontmatter errors
+    ticket_paths = list_ticket_paths(ticket_dir)
+    for path in ticket_paths:
+        _, ticket_errors = read_ticket(path)
+        for err in ticket_errors:
+            errors.append(f"{path.relative_to(path.parent.parent)}: {err}")
+
+    return errors
+
+
 def _open_flow_store(engine: RuntimeContext) -> FlowStore:
     db_path, _, _ = _ticket_flow_paths(engine)
     store = FlowStore(db_path, durable=engine.config.durable_writes)
@@ -1856,6 +1890,18 @@ def flow_worker(
             raise typer.Exit(code=1)
 
         if record.flow_type == "ticket_flow":
+            lint_errors = _validate_tickets(ticket_dir)
+            if lint_errors:
+                typer.echo("Ticket validation failed:", err=True)
+                for err in lint_errors:
+                    typer.echo(f"  - {err}", err=True)
+                typer.echo("", err=True)
+                typer.echo(
+                    "Fix the above errors before starting the ticket flow.",
+                    err=True,
+                )
+                store.close()
+                raise typer.Exit(code=1)
             ticket_paths = list_ticket_paths(ticket_dir)
             if not ticket_paths:
                 typer.echo(
@@ -2032,6 +2078,18 @@ def ticket_flow_start(
             records = store.list_flow_runs(flow_type="ticket_flow")
             active = _active_or_paused_run(records)
             if active:
+                # Validate tickets before reusing active run
+                lint_errors = _validate_tickets(ticket_dir)
+                if lint_errors:
+                    typer.echo("Ticket validation failed:", err=True)
+                    for err in lint_errors:
+                        typer.echo(f"  - {err}", err=True)
+                    typer.echo("", err=True)
+                    typer.echo(
+                        "Fix the above errors before starting the ticket flow.",
+                        err=True,
+                    )
+                    _raise_exit("")
                 _start_ticket_flow_worker(engine.repo_root, active.id)
                 typer.echo(f"Reused active run: {active.id}")
                 typer.echo(
@@ -2039,12 +2097,21 @@ def ticket_flow_start(
                 )
                 return
 
-        if not list_ticket_paths(ticket_dir):
-            _raise_exit(
-                "No tickets found under .codex-autorunner/tickets. Use bootstrap first."
-            )
     finally:
         store.close()
+
+    lint_errors = _validate_tickets(ticket_dir)
+    if lint_errors:
+        typer.echo("Ticket validation failed:", err=True)
+        for err in lint_errors:
+            typer.echo(f"  - {err}", err=True)
+        typer.echo("", err=True)
+        typer.echo("Fix the above errors before starting the ticket flow.", err=True)
+        _raise_exit("")
+    if not list_ticket_paths(ticket_dir):
+        _raise_exit(
+            "No tickets found under .codex-autorunner/tickets. Use bootstrap first."
+        )
 
     controller, agent_pool = _ticket_flow_controller(engine)
     try:
@@ -2115,6 +2182,16 @@ def ticket_flow_resume(
         normalized_run_id = record.id
     finally:
         store.close()
+
+    _, _, ticket_dir = _ticket_flow_paths(engine)
+    lint_errors = _validate_tickets(ticket_dir)
+    if lint_errors:
+        typer.echo("Ticket validation failed:", err=True)
+        for err in lint_errors:
+            typer.echo(f"  - {err}", err=True)
+        typer.echo("", err=True)
+        typer.echo("Fix the above errors before resuming the ticket flow.", err=True)
+        _raise_exit("")
 
     controller, agent_pool = _ticket_flow_controller(engine)
     try:
