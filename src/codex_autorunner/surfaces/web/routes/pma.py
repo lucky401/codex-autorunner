@@ -33,6 +33,7 @@ from ....core.pma_queue import PmaQueue, QueueItemState
 from ....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from ....core.pma_state import PmaStateStore
 from ....core.time_utils import now_iso
+from ....core.utils import atomic_write
 from .agents import _available_agents, _serialize_model_catalog
 from .shared import SSE_HEADERS
 
@@ -75,6 +76,9 @@ def build_pma_routes() -> APIRouter:
             "default_agent": _normalize_optional_text(pma_config.get("default_agent")),
             "model": _normalize_optional_text(pma_config.get("model")),
             "reasoning": _normalize_optional_text(pma_config.get("reasoning")),
+            "active_context_max_lines": int(
+                pma_config.get("active_context_max_lines", 200)
+            ),
         }
 
     def _get_state_store(request: Request) -> PmaStateStore:
@@ -1298,6 +1302,111 @@ def build_pma_routes() -> APIRouter:
                 if f.is_file() and not f.name.startswith("."):
                     f.unlink()
         return {"status": "ok"}
+
+    @router.get("/docs")
+    def list_pma_docs(request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        hub_root = request.app.state.config.root
+        pma_dir = hub_root / ".codex-autorunner" / "pma"
+        allowed_docs = {
+            "AGENTS.md",
+            "active_context.md",
+            "context_log.md",
+            "ABOUT_CAR.md",
+            "prompt.md",
+        }
+        result: list[dict[str, Any]] = []
+        for doc_name in allowed_docs:
+            doc_path = pma_dir / doc_name
+            entry: dict[str, Any] = {"name": doc_name}
+            if doc_path.exists():
+                entry["exists"] = True
+                stat = doc_path.stat()
+                entry["size"] = stat.st_size
+                entry["mtime"] = datetime.fromtimestamp(
+                    stat.st_mtime, tz=timezone.utc
+                ).isoformat()
+                if doc_name == "active_context.md":
+                    try:
+                        entry["line_count"] = len(
+                            doc_path.read_text(encoding="utf-8").splitlines()
+                        )
+                    except Exception:
+                        entry["line_count"] = 0
+            else:
+                entry["exists"] = False
+            result.append(entry)
+        return {
+            "docs": result,
+            "active_context_max_lines": int(
+                pma_config.get("active_context_max_lines", 200)
+            ),
+        }
+
+    @router.get("/docs/{name}")
+    def get_pma_doc(name: str, request: Request) -> dict[str, str]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        allowed_docs = {
+            "AGENTS.md",
+            "active_context.md",
+            "context_log.md",
+            "ABOUT_CAR.md",
+            "prompt.md",
+        }
+        if name not in allowed_docs:
+            raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
+        hub_root = request.app.state.config.root
+        pma_dir = hub_root / ".codex-autorunner" / "pma"
+        doc_path = pma_dir / name
+        if not doc_path.exists():
+            raise HTTPException(status_code=404, detail=f"Doc not found: {name}")
+        try:
+            content = doc_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to read doc: {exc}"
+            ) from exc
+        return {"name": name, "content": content}
+
+    @router.put("/docs/{name}")
+    def update_pma_doc(
+        name: str, request: Request, body: dict[str, str]
+    ) -> dict[str, str]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        allowed_docs = {
+            "AGENTS.md",
+            "active_context.md",
+            "context_log.md",
+            "ABOUT_CAR.md",
+            "prompt.md",
+        }
+        if name not in allowed_docs:
+            raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
+        content = body.get("content", "")
+        if not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="content must be a string")
+        MAX_DOC_SIZE = 500_000
+        if len(content) > MAX_DOC_SIZE:
+            raise HTTPException(
+                status_code=413, detail=f"Content too large (max {MAX_DOC_SIZE} bytes)"
+            )
+        hub_root = request.app.state.config.root
+        pma_dir = hub_root / ".codex-autorunner" / "pma"
+        pma_dir.mkdir(parents=True, exist_ok=True)
+        doc_path = pma_dir / name
+        try:
+            atomic_write(doc_path, content)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to write doc: {exc}"
+            ) from exc
+        return {"name": name, "status": "ok"}
 
     return router
 
