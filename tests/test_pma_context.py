@@ -1,9 +1,11 @@
+import asyncio
 from pathlib import Path
 
 import yaml
 
 from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.core.pma_context import format_pma_prompt
+from codex_autorunner.core.hub import HubSupervisor
+from codex_autorunner.core.pma_context import build_hub_snapshot, format_pma_prompt
 
 
 def _write_hub_config(hub_root: Path, data: dict) -> None:
@@ -37,8 +39,8 @@ def test_format_pma_prompt_includes_agents_section(tmp_path: Path) -> None:
 
     result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
 
-    assert "<AGENTS.md>" in result
-    assert "</AGENTS.md>" in result
+    assert "<AGENTS_MD>" in result
+    assert "</AGENTS_MD>" in result
     assert "Durable best-practices" in result
 
 
@@ -52,8 +54,8 @@ def test_format_pma_prompt_includes_active_context_section(tmp_path: Path) -> No
 
     result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
 
-    assert "<active_context.md>" in result
-    assert "</active_context.md>" in result
+    assert "<ACTIVE_CONTEXT_MD>" in result
+    assert "</ACTIVE_CONTEXT_MD>" in result
     assert "short-lived" in result
 
 
@@ -67,7 +69,7 @@ def test_format_pma_prompt_includes_budget_metadata(tmp_path: Path) -> None:
 
     result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
 
-    assert "<active_context_budget" in result
+    assert "<ACTIVE_CONTEXT_BUDGET" in result
     assert "lines='200'" in result
     assert "current_lines='8'" in result
     assert "/>" in result
@@ -83,8 +85,8 @@ def test_format_pma_prompt_includes_context_log_tail(tmp_path: Path) -> None:
 
     result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
 
-    assert "<context_log_tail.md>" in result
-    assert "</context_log_tail.md>" in result
+    assert "<CONTEXT_LOG_TAIL_MD>" in result
+    assert "</CONTEXT_LOG_TAIL_MD>" in result
     assert "append-only" in result
 
 
@@ -186,7 +188,7 @@ def test_context_log_tail_lines(tmp_path: Path) -> None:
 
     result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
 
-    assert "<context_log_tail.md>" in result
+    assert "<CONTEXT_LOG_TAIL_MD>" in result
     assert "line 3" in result
     assert "line 4" in result
     assert "line 5" in result
@@ -222,12 +224,12 @@ def test_context_log_tail_lines_one(tmp_path: Path) -> None:
 
     result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
 
-    assert "<context_log_tail.md>" in result
-    assert "</context_log_tail.md>" in result
+    assert "<CONTEXT_LOG_TAIL_MD>" in result
+    assert "</CONTEXT_LOG_TAIL_MD>" in result
     # Extract just the context_log_tail section
-    start_idx = result.find("<context_log_tail.md>")
-    end_idx = result.find("</context_log_tail.md>")
-    context_section = result[start_idx : end_idx + len("</context_log_tail.md>")]
+    start_idx = result.find("<CONTEXT_LOG_TAIL_MD>")
+    end_idx = result.find("</CONTEXT_LOG_TAIL_MD>")
+    context_section = result[start_idx : end_idx + len("</CONTEXT_LOG_TAIL_MD>")]
     # With 1 tail line, only the last line should be present
     assert "line 3" in context_section
     assert "line 1" not in context_section
@@ -297,3 +299,50 @@ def test_active_context_line_count_reflected_in_metadata(tmp_path: Path) -> None
     result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
 
     assert "current_lines='3'" in result
+
+
+def test_build_hub_snapshot_includes_templates(tmp_path: Path) -> None:
+    """Verify templates metadata is included in hub snapshots."""
+    seed_hub_files(tmp_path, force=True)
+
+    config_path = tmp_path / ".codex-autorunner" / "config.yml"
+    config_data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config_data["templates"] = {
+        "enabled": True,
+        "repos": [
+            {
+                "id": "alpha",
+                "url": "https://example.com/alpha.git",
+                "trusted": True,
+                "default_ref": "main",
+            },
+            {
+                "id": "beta",
+                "url": "https://example.com/beta.git",
+                "trusted": False,
+                "default_ref": "stable",
+            },
+        ],
+    }
+    config_path.write_text(
+        yaml.safe_dump(config_data, sort_keys=False), encoding="utf-8"
+    )
+
+    supervisor = HubSupervisor.from_path(tmp_path)
+    try:
+        snapshot = asyncio.run(build_hub_snapshot(supervisor, hub_root=tmp_path))
+    finally:
+        supervisor.shutdown()
+
+    templates = snapshot.get("templates")
+    assert isinstance(templates, dict)
+    assert templates.get("enabled") is True
+    repos = templates.get("repos")
+    assert isinstance(repos, list)
+    assert repos[0]["id"] == "alpha"
+    assert repos[0]["trusted"] is True
+    assert repos[0]["default_ref"] == "main"
+    assert repos[1]["id"] == "beta"
+    assert repos[1]["trusted"] is False
+    assert repos[1]["default_ref"] == "stable"
+    assert "url" not in repos[0]

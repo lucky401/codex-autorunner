@@ -1,14 +1,19 @@
+import asyncio
 import json
 from pathlib import Path
 from typing import Optional
 
+import anyio
+import httpx
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes import pma as pma_routes
 
 
 def _write_config(path: Path, data: dict) -> None:
@@ -17,7 +22,11 @@ def _write_config(path: Path, data: dict) -> None:
 
 
 def _enable_pma(
-    hub_root: Path, *, model: Optional[str] = None, reasoning: Optional[str] = None
+    hub_root: Path,
+    *,
+    model: Optional[str] = None,
+    reasoning: Optional[str] = None,
+    max_text_chars: Optional[int] = None,
 ) -> None:
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg.setdefault("pma", {})
@@ -26,6 +35,8 @@ def _enable_pma(
         cfg["pma"]["model"] = model
     if reasoning is not None:
         cfg["pma"]["reasoning"] = reasoning
+    if max_text_chars is not None:
+        cfg["pma"]["max_text_chars"] = max_text_chars
     _write_config(hub_root / CONFIG_FILENAME, cfg)
 
 
@@ -53,6 +64,16 @@ def test_pma_chat_requires_message(hub_env) -> None:
     client = TestClient(app)
     resp = client.post("/hub/pma/chat", json={})
     assert resp.status_code == 400
+
+
+def test_pma_chat_rejects_oversize_message(hub_env) -> None:
+    _enable_pma(hub_env.hub_root, max_text_chars=5)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+    resp = client.post("/hub/pma/chat", json={"message": "toolong"})
+    assert resp.status_code == 400
+    payload = resp.json()
+    assert "max_text_chars" in (payload.get("detail") or "")
 
 
 def test_pma_routes_enabled_by_default(hub_env) -> None:
@@ -127,6 +148,177 @@ def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
     }
 
 
+@pytest.mark.anyio
+async def test_pma_chat_idempotency_key_uses_full_message(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    blocker = asyncio.Event()
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "turn-1"
+
+        async def wait(self, timeout=None):
+            await blocker.wait()
+            return type(
+                "Result",
+                (),
+                {"agent_messages": ["ok"], "raw_events": [], "errors": []},
+            )()
+
+    class FakeClient:
+        async def thread_resume(self, thread_id: str) -> None:
+            return None
+
+        async def thread_start(self, root: str) -> dict:
+            return {"id": "thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        prefix = "a" * 100
+        message_one = f"{prefix}one"
+        message_two = f"{prefix}two"
+        task_one = asyncio.create_task(
+            client.post("/hub/pma/chat", json={"message": message_one})
+        )
+        await anyio.sleep(0.05)
+        task_two = asyncio.create_task(
+            client.post("/hub/pma/chat", json={"message": message_two})
+        )
+        await anyio.sleep(0.05)
+        assert not task_two.done()
+        blocker.set()
+        with anyio.fail_after(2):
+            resp_one = await task_one
+            resp_two = await task_two
+
+    assert resp_one.status_code == 200
+    assert resp_two.status_code == 200
+    assert resp_two.json().get("deduped") is not True
+
+
+@pytest.mark.anyio
+async def test_pma_active_updates_during_running_turn(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    blocker = asyncio.Event()
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "turn-1"
+
+        async def wait(self, timeout=None):
+            await blocker.wait()
+            return type(
+                "Result",
+                (),
+                {"agent_messages": ["ok"], "raw_events": [], "errors": []},
+            )()
+
+    class FakeClient:
+        async def thread_resume(self, thread_id: str) -> None:
+            return None
+
+        async def thread_start(self, root: str) -> dict:
+            return {"id": "thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        chat_task = asyncio.create_task(
+            client.post("/hub/pma/chat", json={"message": "hi"})
+        )
+        try:
+            with anyio.fail_after(2):
+                while True:
+                    resp = await client.get("/hub/pma/active")
+                    assert resp.status_code == 200
+                    payload = resp.json()
+                    current = payload.get("current") or {}
+                    if (
+                        payload.get("active")
+                        and current.get("thread_id")
+                        and current.get("turn_id")
+                    ):
+                        break
+                    await anyio.sleep(0.05)
+            assert payload["active"] is True
+            assert payload["current"]["lane_id"] == "pma:default"
+        finally:
+            blocker.set()
+        resp = await chat_task
+        assert resp.status_code == 200
+        assert resp.json().get("status") == "ok"
+
+
+def test_pma_active_clears_on_prompt_build_error(hub_env, monkeypatch) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("snapshot failed")
+
+    monkeypatch.setattr(pma_routes, "build_hub_snapshot", _boom)
+
+    client = TestClient(app)
+    resp = client.post("/hub/pma/chat", json={"message": "hi"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "error"
+    assert "snapshot failed" in (payload.get("detail") or "")
+
+    active = client.get("/hub/pma/active").json()
+    assert active["active"] is False
+    assert active["current"] == {}
+
+
 def test_pma_thread_reset_clears_registry(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -137,12 +329,60 @@ def test_pma_thread_reset_clears_registry(hub_env) -> None:
     client = TestClient(app)
     resp = client.post("/hub/pma/thread/reset", json={"agent": "opencode"})
     assert resp.status_code == 200
+    payload = resp.json()
+    artifact_path = Path(payload["artifact_path"])
+    assert artifact_path.exists()
     assert registry.get_thread_id(PMA_KEY) == "thread-codex"
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
 
     resp = client.post("/hub/pma/thread/reset", json={"agent": "all"})
     assert resp.status_code == 200
+    payload = resp.json()
+    artifact_path = Path(payload["artifact_path"])
+    assert artifact_path.exists()
     assert registry.get_thread_id(PMA_KEY) is None
+
+
+def test_pma_reset_creates_artifact(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post("/hub/pma/reset", json={"agent": "all"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    artifact_path = Path(payload["artifact_path"])
+    assert artifact_path.exists()
+
+
+def test_pma_stop_creates_artifact(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post("/hub/pma/stop", json={"lane_id": "pma:default"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    artifact_path = Path(payload["artifact_path"])
+    assert artifact_path.exists()
+    assert payload["details"]["lane_id"] == "pma:default"
+
+
+def test_pma_new_creates_artifact(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/hub/pma/new", json={"agent": "codex", "lane_id": "pma:default"}
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    artifact_path = Path(payload["artifact_path"])
+    assert artifact_path.exists()
 
 
 def test_pma_files_list_empty(hub_env) -> None:
@@ -310,14 +550,14 @@ def test_pma_docs_list(hub_env) -> None:
     assert "docs" in payload
     docs = payload["docs"]
     assert isinstance(docs, list)
-    doc_names = {doc["name"] for doc in docs}
-    assert doc_names == {
+    doc_names = [doc["name"] for doc in docs]
+    assert doc_names == [
         "AGENTS.md",
         "active_context.md",
         "context_log.md",
         "ABOUT_CAR.md",
         "prompt.md",
-    }
+    ]
     for doc in docs:
         assert "name" in doc
         assert "exists" in doc
@@ -415,6 +655,30 @@ def test_pma_docs_put_invalid_content_type(hub_env) -> None:
         assert any("content" in str(err) for err in detail)
     else:
         assert "content" in str(detail)
+
+
+def test_pma_context_snapshot(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    pma_dir = hub_env.hub_root / ".codex-autorunner" / "pma"
+    active_path = pma_dir / "active_context.md"
+    active_content = "# Active Context\n\n- alpha\n- beta\n"
+    active_path.write_text(active_content, encoding="utf-8")
+
+    resp = client.post("/hub/pma/context/snapshot", json={"reset": True})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["active_context_line_count"] == len(active_content.splitlines())
+    assert payload["reset"] is True
+
+    log_content = (pma_dir / "context_log.md").read_text(encoding="utf-8")
+    assert "## Snapshot:" in log_content
+    assert active_content in log_content
+    assert active_path.read_text(encoding="utf-8") == pma_active_context_content()
 
 
 def test_pma_docs_disabled(hub_env) -> None:

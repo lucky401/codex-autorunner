@@ -5,6 +5,8 @@ Hub-level PMA routes (chat + models + events).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +20,14 @@ from ....agents.codex.harness import CodexHarness
 from ....agents.opencode.harness import OpenCodeHarness
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....agents.registry import validate_agent_id
+from ....bootstrap import (
+    ensure_pma_docs,
+    pma_about_content,
+    pma_active_context_content,
+    pma_agents_content,
+    pma_context_log_content,
+    pma_prompt_content,
+)
 from ....core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from ....core.filebox import sanitize_filename
 from ....core.logging_utils import log_event
@@ -40,6 +50,9 @@ from .shared import SSE_HEADERS
 logger = logging.getLogger(__name__)
 
 PMA_TIMEOUT_SECONDS = 28800
+PMA_CONTEXT_SNAPSHOT_MAX_BYTES = 200_000
+PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES = 5_000_000
+PMA_BULK_DELETE_SAMPLE_LIMIT = 10
 
 
 def build_pma_routes() -> APIRouter:
@@ -79,7 +92,29 @@ def build_pma_routes() -> APIRouter:
             "active_context_max_lines": int(
                 pma_config.get("active_context_max_lines", 200)
             ),
+            "max_text_chars": int(pma_config.get("max_text_chars", 800)),
         }
+
+    def _build_idempotency_key(
+        *,
+        lane_id: str,
+        agent: Optional[str],
+        model: Optional[str],
+        reasoning: Optional[str],
+        client_turn_id: Optional[str],
+        message: str,
+    ) -> str:
+        payload = {
+            "lane_id": lane_id,
+            "agent": agent,
+            "model": model,
+            "reasoning": reasoning,
+            "client_turn_id": client_turn_id,
+            "message": message,
+        }
+        raw = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=True)
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return f"pma:{digest}"
 
     def _get_state_store(request: Request) -> PmaStateStore:
         nonlocal pma_state_store, pma_state_root
@@ -188,7 +223,10 @@ def build_pma_routes() -> APIRouter:
         await _persist_state(store)
 
     async def _begin_turn(
-        client_turn_id: Optional[str], *, store: Optional[PmaStateStore] = None
+        client_turn_id: Optional[str],
+        *,
+        store: Optional[PmaStateStore] = None,
+        lane_id: Optional[str] = None,
     ) -> bool:
         nonlocal pma_active, pma_current
         async with pma_lock:
@@ -201,6 +239,7 @@ def build_pma_routes() -> APIRouter:
                 "agent": None,
                 "thread_id": None,
                 "turn_id": None,
+                "lane_id": lane_id or "",
                 "started_at": now_iso(),
             }
         await _persist_state(store)
@@ -346,10 +385,11 @@ def build_pma_routes() -> APIRouter:
 
         async def lane_worker():
             queue = _get_pma_queue(request)
+            await queue.replay_pending(lane_id)
             while not cancel_event.is_set():
                 item = await queue.dequeue(lane_id)
                 if item is None:
-                    await asyncio.sleep(0.5)
+                    await queue.wait_for_lane_item(lane_id, cancel_event)
                     continue
 
                 if cancel_event.is_set():
@@ -414,19 +454,40 @@ def build_pma_routes() -> APIRouter:
                 detail = f"{detail}: {safety_check.details}"
             return {"status": "error", "detail": detail}
 
+        started = await _begin_turn(
+            client_turn_id, store=store, lane_id=getattr(item, "lane_id", None)
+        )
+        if not started:
+            logger.warning("PMA turn started while another was active")
+
         if not model and defaults.get("model"):
             model = defaults["model"]
         if not reasoning and defaults.get("reasoning"):
             reasoning = defaults["reasoning"]
 
-        prompt_base = load_pma_prompt(hub_root)
-        supervisor = getattr(request.app.state, "hub_supervisor", None)
-        snapshot = await build_hub_snapshot(supervisor, hub_root=hub_root)
-        prompt = format_pma_prompt(prompt_base, snapshot, message, hub_root=hub_root)
+        try:
+            prompt_base = load_pma_prompt(hub_root)
+            supervisor = getattr(request.app.state, "hub_supervisor", None)
+            snapshot = await build_hub_snapshot(supervisor, hub_root=hub_root)
+            prompt = format_pma_prompt(
+                prompt_base, snapshot, message, hub_root=hub_root
+            )
+        except Exception as exc:
+            error_result = {
+                "status": "error",
+                "detail": str(exc),
+                "client_turn_id": client_turn_id or "",
+            }
+            if started:
+                await _finalize_result(error_result, request=request, store=store)
+            return error_result
 
         interrupt_event = await _get_interrupt_event()
         if interrupt_event.is_set():
-            return {"status": "interrupted", "detail": "PMA chat interrupted"}
+            result = {"status": "interrupted", "detail": "PMA chat interrupted"}
+            if started:
+                await _finalize_result(result, request=request, store=store)
+            return result
 
         meta_future: asyncio.Future[tuple[str, str]] = (
             asyncio.get_running_loop().create_future()
@@ -475,36 +536,52 @@ def build_pma_routes() -> APIRouter:
         except Exception:
             stall_timeout_seconds = None
 
-        if agent_id == "opencode":
-            if opencode is None:
-                return {"status": "error", "detail": "OpenCode unavailable"}
-            result = await _execute_opencode(
-                opencode,
-                hub_root,
-                prompt,
-                interrupt_event,
-                model=model,
-                reasoning=reasoning,
-                thread_registry=registry,
-                thread_key=PMA_OPENCODE_KEY,
-                stall_timeout_seconds=stall_timeout_seconds,
-                on_meta=_meta,
-            )
-        else:
-            if supervisor is None or events is None:
-                return {"status": "error", "detail": "App-server unavailable"}
-            result = await _execute_app_server(
-                supervisor,
-                events,
-                hub_root,
-                prompt,
-                interrupt_event,
-                model=model,
-                reasoning=reasoning,
-                thread_registry=registry,
-                thread_key=PMA_KEY,
-                on_meta=_meta,
-            )
+        try:
+            if agent_id == "opencode":
+                if opencode is None:
+                    result = {"status": "error", "detail": "OpenCode unavailable"}
+                    if started:
+                        await _finalize_result(result, request=request, store=store)
+                    return result
+                result = await _execute_opencode(
+                    opencode,
+                    hub_root,
+                    prompt,
+                    interrupt_event,
+                    model=model,
+                    reasoning=reasoning,
+                    thread_registry=registry,
+                    thread_key=PMA_OPENCODE_KEY,
+                    stall_timeout_seconds=stall_timeout_seconds,
+                    on_meta=_meta,
+                )
+            else:
+                if supervisor is None or events is None:
+                    result = {"status": "error", "detail": "App-server unavailable"}
+                    if started:
+                        await _finalize_result(result, request=request, store=store)
+                    return result
+                result = await _execute_app_server(
+                    supervisor,
+                    events,
+                    hub_root,
+                    prompt,
+                    interrupt_event,
+                    model=model,
+                    reasoning=reasoning,
+                    thread_registry=registry,
+                    thread_key=PMA_KEY,
+                    on_meta=_meta,
+                )
+        except Exception as exc:
+            if started:
+                error_result = {
+                    "status": "error",
+                    "detail": str(exc),
+                    "client_turn_id": client_turn_id or "",
+                }
+                await _finalize_result(error_result, request=request, store=store)
+            raise
 
         result = dict(result or {})
         result["client_turn_id"] = client_turn_id or ""
@@ -875,19 +952,34 @@ def build_pma_routes() -> APIRouter:
         body = await request.json()
         message = (body.get("message") or "").strip()
         stream = bool(body.get("stream", False))
-        agent = body.get("agent")
+        agent = _normalize_optional_text(body.get("agent"))
         model = _normalize_optional_text(body.get("model"))
         reasoning = _normalize_optional_text(body.get("reasoning"))
         client_turn_id = (body.get("client_turn_id") or "").strip() or None
 
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
+        max_text_chars = int(pma_config.get("max_text_chars", 0) or 0)
+        if max_text_chars > 0 and len(message) > max_text_chars:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "message exceeds max_text_chars " f"({max_text_chars} characters)"
+                ),
+            )
 
         hub_root = request.app.state.config.root
         queue = _get_pma_queue(request)
 
         lane_id = "pma:default"
-        idempotency_key = f"{hub_root}:{client_turn_id or 'none'}:{message[:100]}"
+        idempotency_key = _build_idempotency_key(
+            lane_id=lane_id,
+            agent=agent,
+            model=model,
+            reasoning=reasoning,
+            client_turn_id=client_turn_id,
+            message=message,
+        )
 
         payload = {
             "message": message,
@@ -945,16 +1037,27 @@ def build_pma_routes() -> APIRouter:
 
         body = await request.json() if request.headers.get("content-type") else {}
         lane_id = (body.get("lane_id") or "pma:default").strip()
+        hub_root = request.app.state.config.root
+        lifecycle_router = PmaLifecycleRouter(hub_root)
 
-        queue = _get_pma_queue(request)
-        cancelled = await queue.cancel_lane(lane_id)
+        result = await lifecycle_router.stop(lane_id=lane_id)
+
+        if result.status != "ok":
+            raise HTTPException(status_code=500, detail=result.error)
 
         if lane_id in lane_cancel_events:
             lane_cancel_events[lane_id].set()
 
         await _interrupt_active(request, reason="Lane stopped", source="user_request")
 
-        return {"status": "ok", "cancelled_items": cancelled, "lane_id": lane_id}
+        return {
+            "status": result.status,
+            "message": result.message,
+            "artifact_path": (
+                str(result.artifact_path) if result.artifact_path else None
+            ),
+            "details": result.details,
+        }
 
     @router.post("/new")
     async def new_pma_session(request: Request) -> dict[str, Any]:
@@ -970,6 +1073,33 @@ def build_pma_routes() -> APIRouter:
         lifecycle_router = PmaLifecycleRouter(hub_root)
 
         result = await lifecycle_router.new(agent=agent, lane_id=lane_id)
+
+        if result.status != "ok":
+            raise HTTPException(status_code=500, detail=result.error)
+
+        return {
+            "status": result.status,
+            "message": result.message,
+            "artifact_path": (
+                str(result.artifact_path) if result.artifact_path else None
+            ),
+            "details": result.details,
+        }
+
+    @router.post("/reset")
+    async def reset_pma_session(request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+
+        body = await request.json() if request.headers.get("content-type") else {}
+        raw_agent = (body.get("agent") or "").strip().lower()
+        agent = raw_agent or None
+
+        hub_root = request.app.state.config.root
+        lifecycle_router = PmaLifecycleRouter(hub_root)
+
+        result = await lifecycle_router.reset(agent=agent)
 
         if result.status != "ok":
             raise HTTPException(status_code=500, detail=result.error)
@@ -1022,21 +1152,24 @@ def build_pma_routes() -> APIRouter:
         if not pma_config.get("enabled", True):
             raise HTTPException(status_code=404, detail="PMA is disabled")
         body = await request.json()
-        agent = (body.get("agent") or "").strip().lower()
-        registry = request.app.state.app_server_threads
-        cleared = []
-        if agent in ("", "all", None):
-            if registry.reset_thread(PMA_KEY):
-                cleared.append(PMA_KEY)
-            if registry.reset_thread(PMA_OPENCODE_KEY):
-                cleared.append(PMA_OPENCODE_KEY)
-        elif agent == "opencode":
-            if registry.reset_thread(PMA_OPENCODE_KEY):
-                cleared.append(PMA_OPENCODE_KEY)
-        else:
-            if registry.reset_thread(PMA_KEY):
-                cleared.append(PMA_KEY)
-        return {"status": "ok", "cleared": cleared}
+        raw_agent = (body.get("agent") or "").strip().lower()
+        agent = raw_agent or None
+
+        hub_root = request.app.state.config.root
+        lifecycle_router = PmaLifecycleRouter(hub_root)
+
+        result = await lifecycle_router.reset(agent=agent)
+
+        if result.status != "ok":
+            raise HTTPException(status_code=500, detail=result.error)
+
+        return {
+            "status": result.status,
+            "cleared": result.details.get("cleared_threads", []),
+            "artifact_path": (
+                str(result.artifact_path) if result.artifact_path else None
+            ),
+        }
 
     @router.get("/turns/{turn_id}/events")
     async def stream_pma_turn_events(
@@ -1297,11 +1430,126 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
         box_dir = hub_root / ".codex-autorunner" / "pma" / box
+        deleted_files: list[str] = []
         if box_dir.exists():
             for f in box_dir.iterdir():
                 if f.is_file() and not f.name.startswith("."):
+                    deleted_files.append(f.name)
                     f.unlink()
+        _get_safety_checker(request).record_action(
+            action_type=PmaActionType.FILE_BULK_DELETED,
+            details={
+                "box": box,
+                "count": len(deleted_files),
+                "sample": deleted_files[:PMA_BULK_DELETE_SAMPLE_LIMIT],
+            },
+        )
         return {"status": "ok"}
+
+    @router.post("/context/snapshot")
+    def snapshot_pma_context(request: Request, body: Optional[dict[str, Any]] = None):
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        hub_root = request.app.state.config.root
+        try:
+            ensure_pma_docs(hub_root)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to ensure PMA docs: {exc}"
+            ) from exc
+
+        reset = False
+        if isinstance(body, dict):
+            reset = bool(body.get("reset", False))
+
+        pma_dir = hub_root / ".codex-autorunner" / "pma"
+        active_context_path = pma_dir / "active_context.md"
+        context_log_path = pma_dir / "context_log.md"
+
+        try:
+            active_content = active_context_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to read active_context.md: {exc}"
+            ) from exc
+
+        timestamp = now_iso()
+        snapshot_header = f"\n\n## Snapshot: {timestamp}\n\n"
+        snapshot_content = snapshot_header + active_content
+        snapshot_bytes = len(snapshot_content.encode("utf-8"))
+        if snapshot_bytes > PMA_CONTEXT_SNAPSHOT_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "Snapshot too large "
+                    f"(max {PMA_CONTEXT_SNAPSHOT_MAX_BYTES} bytes)"
+                ),
+            )
+
+        try:
+            with context_log_path.open("a", encoding="utf-8") as f:
+                f.write(snapshot_content)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to append context_log.md: {exc}"
+            ) from exc
+
+        if reset:
+            try:
+                atomic_write(active_context_path, pma_active_context_content())
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to reset active_context.md: {exc}"
+                ) from exc
+
+        line_count = len(active_content.splitlines())
+        response: dict[str, Any] = {
+            "status": "ok",
+            "timestamp": timestamp,
+            "active_context_line_count": line_count,
+            "reset": reset,
+        }
+        try:
+            context_log_bytes = context_log_path.stat().st_size
+            response["context_log_bytes"] = context_log_bytes
+            if context_log_bytes > PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES:
+                response["warning"] = (
+                    "context_log.md is large "
+                    f"({context_log_bytes} bytes); consider pruning"
+                )
+        except Exception:
+            pass
+
+        return response
+
+    PMA_DOC_ORDER = (
+        "AGENTS.md",
+        "active_context.md",
+        "context_log.md",
+        "ABOUT_CAR.md",
+        "prompt.md",
+    )
+    PMA_DOC_SET = set(PMA_DOC_ORDER)
+    PMA_DOC_DEFAULTS = {
+        "AGENTS.md": pma_agents_content,
+        "active_context.md": pma_active_context_content,
+        "context_log.md": pma_context_log_content,
+        "ABOUT_CAR.md": pma_about_content,
+        "prompt.md": pma_prompt_content,
+    }
+
+    @router.get("/docs/default/{name}")
+    def get_pma_doc_default(name: str, request: Request) -> dict[str, str]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        if name not in PMA_DOC_SET:
+            raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
+        content_fn = PMA_DOC_DEFAULTS.get(name)
+        if content_fn is None:
+            raise HTTPException(status_code=404, detail=f"Default not found: {name}")
+        return {"name": name, "content": content_fn()}
 
     @router.get("/docs")
     def list_pma_docs(request: Request) -> dict[str, Any]:
@@ -1310,15 +1558,8 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="PMA is disabled")
         hub_root = request.app.state.config.root
         pma_dir = hub_root / ".codex-autorunner" / "pma"
-        allowed_docs = {
-            "AGENTS.md",
-            "active_context.md",
-            "context_log.md",
-            "ABOUT_CAR.md",
-            "prompt.md",
-        }
         result: list[dict[str, Any]] = []
-        for doc_name in allowed_docs:
+        for doc_name in PMA_DOC_ORDER:
             doc_path = pma_dir / doc_name
             entry: dict[str, Any] = {"name": doc_name}
             if doc_path.exists():
@@ -1350,14 +1591,7 @@ def build_pma_routes() -> APIRouter:
         pma_config = _get_pma_config(request)
         if not pma_config.get("enabled", True):
             raise HTTPException(status_code=404, detail="PMA is disabled")
-        allowed_docs = {
-            "AGENTS.md",
-            "active_context.md",
-            "context_log.md",
-            "ABOUT_CAR.md",
-            "prompt.md",
-        }
-        if name not in allowed_docs:
+        if name not in PMA_DOC_SET:
             raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
         hub_root = request.app.state.config.root
         pma_dir = hub_root / ".codex-autorunner" / "pma"
@@ -1379,14 +1613,7 @@ def build_pma_routes() -> APIRouter:
         pma_config = _get_pma_config(request)
         if not pma_config.get("enabled", True):
             raise HTTPException(status_code=404, detail="PMA is disabled")
-        allowed_docs = {
-            "AGENTS.md",
-            "active_context.md",
-            "context_log.md",
-            "ABOUT_CAR.md",
-            "prompt.md",
-        }
-        if name not in allowed_docs:
+        if name not in PMA_DOC_SET:
             raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
         content = body.get("content", "")
         if not isinstance(content, str):
@@ -1406,6 +1633,17 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(
                 status_code=500, detail=f"Failed to write doc: {exc}"
             ) from exc
+        details = {
+            "name": name,
+            "size": len(content.encode("utf-8")),
+            "source": "web",
+        }
+        if name == "active_context.md":
+            details["line_count"] = len(content.splitlines())
+        _get_safety_checker(request).record_action(
+            action_type=PmaActionType.DOC_UPDATED,
+            details=details,
+        )
         return {"name": name, "status": "ok"}
 
     return router

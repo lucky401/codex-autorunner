@@ -44,6 +44,7 @@ let isUnloading = false;
 let unloadHandlerInstalled = false;
 let currentEventsController = null;
 const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
+const DEFAULT_PMA_LANE_ID = "pma:default";
 let fileBoxCtrl = null;
 let pendingUploadNames = [];
 let currentDocName = null;
@@ -175,6 +176,18 @@ async function loadPMADocContent(name) {
         return "";
     }
 }
+async function loadPMADocDefaultContent(name) {
+    try {
+        const payload = (await api(`/hub/pma/docs/default/${encodeURIComponent(name)}`, {
+            method: "GET",
+        }));
+        return payload?.content || "";
+    }
+    catch (err) {
+        flash(`Failed to load default ${name}`, "error");
+        return "";
+    }
+}
 async function savePMADoc(name, content) {
     if (isSavingDoc)
         return;
@@ -249,17 +262,20 @@ async function snapshotActiveContext() {
     const editor = document.getElementById("pma-docs-editor");
     if (!editor)
         return;
-    const activeContent = editor.value;
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "Z";
-    const logName = "context_log.md";
     try {
-        const logContent = await loadPMADocContent(logName);
-        const newSection = `\n## ${timestamp}\n\n${activeContent}\n`;
-        await savePMADoc(logName, logContent + newSection);
-        const resetContent = "# Active Context\n\n<!-- Current working context -->\n";
-        await savePMADoc("active_context.md", resetContent);
+        const payload = (await api("/hub/pma/context/snapshot", {
+            method: "POST",
+            body: { reset: true },
+        }));
+        if (payload?.status !== "ok") {
+            throw new Error("snapshot failed");
+        }
+        const resetContent = await loadPMADocContent("active_context.md");
         editor.value = resetContent;
-        flash("Active context snapshot saved to log and reset", "info");
+        const message = payload?.warning
+            ? `Active context snapshot saved (${payload.warning})`
+            : "Active context snapshot saved";
+        flash(message, "info");
         await loadPMADocs();
     }
     catch (err) {
@@ -272,9 +288,12 @@ function resetActiveContext() {
     const editor = document.getElementById("pma-docs-editor");
     if (!editor)
         return;
-    const resetContent = "# Active Context\n\n<!-- Current working context -->\n";
-    editor.value = resetContent;
-    void savePMADoc("active_context.md", resetContent);
+    void loadPMADocDefaultContent("active_context.md").then((resetContent) => {
+        if (!resetContent)
+            return;
+        editor.value = resetContent;
+        void savePMADoc("active_context.md", resetContent);
+    });
 }
 async function startTurnEventsStream(meta) {
     stopTurnEventsStream();
@@ -304,14 +323,17 @@ async function startTurnEventsStream(meta) {
         // ignore (abort / network)
     }
 }
-async function pollForTurnMeta(clientTurnId, timeoutMs = 8000) {
+async function pollForTurnMeta(clientTurnId, options = {}) {
     if (!clientTurnId)
         return;
+    const timeoutMs = options.timeoutMs ?? 8000;
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
         if (!pmaChat || pmaChat.state.status !== "running")
             return;
         if (currentEventsController)
+            return;
+        if (options.signal?.aborted)
             return;
         try {
             const payload = (await api(`/hub/pma/active?client_turn_id=${encodeURIComponent(clientTurnId)}`, { method: "GET" }));
@@ -577,7 +599,7 @@ async function sendMessage() {
     if (!message)
         return;
     if (currentController) {
-        cancelRequest();
+        void cancelRequest({ clearPending: true, interruptServer: true });
         return;
     }
     // Ensure prior turn event streams are cleared so we don't render stale actions.
@@ -630,12 +652,16 @@ async function sendMessage() {
             payload.model = model;
         if (reasoning)
             payload.reasoning = reasoning;
-        const res = await fetch(endpoint, {
+        const responsePromise = fetch(endpoint, {
             method: "POST",
             headers,
             body: JSON.stringify(payload),
             signal: currentController.signal,
         });
+        // Stream tool calls/events separately as soon as we have (thread_id, turn_id).
+        // The main /hub/pma/chat stream only emits a final "update"/"done" today.
+        void pollForTurnMeta(clientTurnId, { signal: currentController.signal });
+        const res = await responsePromise;
         if (!res.ok) {
             const text = await res.text();
             let detail = text;
@@ -648,9 +674,6 @@ async function sendMessage() {
             }
             throw new Error(detail || `Request failed (${res.status})`);
         }
-        // Stream tool calls/events separately as soon as we have (thread_id, turn_id).
-        // The main /hub/pma/chat stream only emits a final "update"/"done" today.
-        void pollForTurnMeta(clientTurnId);
         const contentType = res.headers.get("content-type") || "";
         if (contentType.includes("text/event-stream")) {
             await readPMAStream(res, true);
@@ -967,22 +990,43 @@ function parseMaybeJson(data) {
         return data;
     }
 }
-function cancelRequest() {
+async function interruptActiveTurn(options = {}) {
+    try {
+        if (options.stopLane) {
+            await api("/hub/pma/stop", {
+                method: "POST",
+                body: { lane_id: DEFAULT_PMA_LANE_ID },
+            });
+            return;
+        }
+        await api("/hub/pma/interrupt", { method: "POST" });
+    }
+    catch {
+        // Best-effort; UI state already reflects cancellation.
+    }
+}
+async function cancelRequest(options = {}) {
+    const { clearPending = false, interruptServer = false, stopLane = false, statusText } = options;
     if (currentController) {
         currentController.abort();
         currentController = null;
     }
     stopTurnEventsStream();
+    if (interruptServer || stopLane) {
+        await interruptActiveTurn({ stopLane });
+    }
+    if (clearPending) {
+        clearPendingTurn();
+    }
     if (pmaChat) {
         pmaChat.state.controller = null;
         pmaChat.state.status = "interrupted";
-        pmaChat.state.statusText = "Cancelled";
+        pmaChat.state.statusText = statusText || "Cancelled";
         pmaChat.state.contextUsagePercent = null;
         pmaChat.render();
     }
 }
 function resetThread() {
-    cancelRequest();
     clearPendingTurn();
     stopTurnEventsStream();
     if (pmaChat) {
@@ -999,13 +1043,13 @@ function resetThread() {
     }
     flash("Thread reset", "info");
 }
-async function resetThreadOnServer() {
+async function startNewThreadOnServer() {
     const elements = getElements();
     const rawAgent = (elements.agentSelect?.value || getSelectedAgent() || "").trim().toLowerCase();
-    const resetAgent = rawAgent === "codex" || rawAgent === "opencode" ? rawAgent : "all";
-    await api("/hub/pma/thread/reset", {
+    const selectedAgent = rawAgent === "codex" || rawAgent === "opencode" ? rawAgent : undefined;
+    await api("/hub/pma/new", {
         method: "POST",
-        body: { agent: resetAgent },
+        body: { agent: selectedAgent, lane_id: DEFAULT_PMA_LANE_ID },
     });
 }
 function attachHandlers() {
@@ -1017,18 +1061,23 @@ function attachHandlers() {
     }
     if (elements.cancelBtn) {
         elements.cancelBtn.addEventListener("click", () => {
-            cancelRequest();
+            void cancelRequest({ clearPending: true, interruptServer: true });
         });
     }
     if (elements.newThreadBtn) {
         elements.newThreadBtn.addEventListener("click", () => {
             void (async () => {
-                cancelRequest();
+                await cancelRequest({
+                    clearPending: true,
+                    interruptServer: true,
+                    stopLane: true,
+                    statusText: "Cancelled (new thread)",
+                });
                 try {
-                    await resetThreadOnServer();
+                    await startNewThreadOnServer();
                 }
                 catch (err) {
-                    flash("Failed to reset server thread", "error");
+                    flash("Failed to start new session", "error");
                     return;
                 }
                 clearAgentSelectionStorage();
