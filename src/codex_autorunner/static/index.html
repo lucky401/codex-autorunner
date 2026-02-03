@@ -23,6 +23,8 @@
       </div>
       <div class="hub-hero-actions">
         <button class="primary sm" id="hub-new-repo">+ New</button>
+        <button class="sm" id="hub-scan">Scan</button>
+        <button class="ghost sm" id="hub-refresh">Refresh</button>
         <div class="notifications-bell" data-notifications-root="hub">
           <button class="ghost sm icon-btn notifications-bell-btn" data-notifications-trigger title="Notifications"
             aria-label="Notifications">
@@ -56,6 +58,15 @@
         <div class="hub-stat-value" id="hub-count-missing">–</div>
         <p class="muted small">missing</p>
       </div>
+    </section>
+    <section class="hub-inbox">
+      <div class="hub-panel-header">
+        <span class="label">Inbox</span>
+        <div class="hub-panel-actions">
+          <button class="ghost sm" id="hub-inbox-refresh">Refresh</button>
+        </div>
+      </div>
+      <div class="hub-inbox-list" id="hub-inbox-list">Loading…</div>
     </section>
     <section class="hub-usage-chart">
       <div class="hub-usage-chart-header">
@@ -130,6 +141,10 @@
             thread</button>
           <span class="pma-status-pill" id="pma-chat-status">idle</span>
         </div>
+      </div>
+      <div class="pma-paused-runs-bar" id="pma-paused-runs">
+        <div class="pma-inbox-list" id="pma-inbox-list">Loading…</div>
+        <button class="pma-inbox-refresh-btn" id="pma-inbox-refresh" title="Refresh inbox">↻</button>
       </div>
       <div class="pma-thread-info hidden" id="pma-thread-info">
         <div class="pma-thread-info-header">
@@ -1154,7 +1169,7 @@
     </div>
   </div>
   <!-- Notifications Modal -->
-  <div class="modal-overlay" hidden id="notifications-modal">
+  <div class="modal-overlay hidden" id="notifications-modal">
     <div aria-labelledby="notifications-modal-title" aria-modal="true" class="modal-dialog notifications-modal-dialog"
       role="dialog" tabindex="-1">
       <div class="notifications-modal-header">
