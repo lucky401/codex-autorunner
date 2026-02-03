@@ -172,6 +172,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     },
     "opencode": {
         "session_stall_timeout_seconds": 60,
+        "max_text_chars": 20000,
     },
     "server": {
         "host": "127.0.0.1",
@@ -534,6 +535,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     },
     "opencode": {
         "session_stall_timeout_seconds": 60,
+        "max_text_chars": 20000,
     },
     "server": {
         "host": "127.0.0.1",
@@ -709,6 +711,7 @@ class AppServerConfig:
 @dataclasses.dataclass
 class OpenCodeConfig:
     session_stall_timeout_seconds: Optional[float]
+    max_text_chars: Optional[int]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1119,7 +1122,16 @@ def _parse_opencode_config(
     )
     if stall_timeout_seconds is not None and stall_timeout_seconds <= 0:
         stall_timeout_seconds = None
-    return OpenCodeConfig(session_stall_timeout_seconds=stall_timeout_seconds)
+    max_text_chars_raw = cfg.get("max_text_chars", defaults.get("max_text_chars"))
+    max_text_chars = (
+        int(max_text_chars_raw)
+        if isinstance(max_text_chars_raw, int) and max_text_chars_raw > 0
+        else None
+    )
+    return OpenCodeConfig(
+        session_stall_timeout_seconds=stall_timeout_seconds,
+        max_text_chars=max_text_chars,
+    )
 
 
 def _parse_agents_config(
@@ -1655,6 +1667,15 @@ def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
             raise ConfigError(
                 "opencode.session_stall_timeout_seconds must be a number or null"
             )
+    if (
+        "max_text_chars" in opencode_cfg
+        and opencode_cfg.get("max_text_chars") is not None
+    ):
+        max_text_chars = opencode_cfg.get("max_text_chars")
+        if not isinstance(max_text_chars, int):
+            raise ConfigError("opencode.max_text_chars must be an integer or null")
+        if max_text_chars <= 0:
+            raise ConfigError("opencode.max_text_chars must be > 0")
 
 
 def _validate_agents_config(cfg: Dict[str, Any]) -> None:

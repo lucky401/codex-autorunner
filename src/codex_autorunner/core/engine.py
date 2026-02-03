@@ -1410,6 +1410,7 @@ class Engine:
             max_handles=config.max_handles,
             idle_ttl_seconds=config.idle_ttl_seconds,
             session_stall_timeout_seconds=self.config.opencode.session_stall_timeout_seconds,
+            max_text_chars=self.config.opencode.max_text_chars,
             base_env=None,
             subagent_models=subagent_models,
         )
