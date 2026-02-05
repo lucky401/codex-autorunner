@@ -8,7 +8,6 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { JSDOM } from "jsdom";
 
 const INDEX_PATH = resolve("src/codex_autorunner/static/index.html");
 
@@ -19,16 +18,15 @@ function fail(message) {
 
 function main() {
   const html = readFileSync(INDEX_PATH, "utf8");
-  const dom = new JSDOM(html);
-  const { document } = dom.window;
-
   // 1) Duplicate IDs
   const ids = new Map();
-  document.querySelectorAll("[id]").forEach((el) => {
-    const id = el.id.trim();
+  const idRegex = /\bid="([^"]+)"/g;
+  let idMatch;
+  while ((idMatch = idRegex.exec(html)) !== null) {
+    const id = idMatch[1].trim();
     if (!id) return;
     ids.set(id, (ids.get(id) || 0) + 1);
-  });
+  }
   const dupes = [...ids.entries()].filter(([, count]) => count > 1);
   if (dupes.length) {
     fail(
@@ -39,7 +37,20 @@ function main() {
   }
 
   // 2) Panels present and unique
-  const panels = [...document.querySelectorAll("section.panel")];
+  const sectionRegex = /<section\b([^>]*)>/gi;
+  const panels = [];
+  let sectionMatch;
+  while ((sectionMatch = sectionRegex.exec(html)) !== null) {
+    const attrs = sectionMatch[1];
+    const classMatch = /\bclass="([^"]*)"/i.exec(attrs);
+    const idMatchSection = /\bid="([^"]*)"/i.exec(attrs);
+    const classList = classMatch ? classMatch[1].split(/\s+/).filter(Boolean) : [];
+    if (!classList.includes("panel")) continue;
+    panels.push({
+      id: idMatchSection ? idMatchSection[1] : "",
+      classList,
+    });
+  }
   if (!panels.length) {
     fail("No section.panel elements found.");
   }
@@ -61,7 +72,7 @@ function main() {
   }
 
   // 3) Exactly one active panel
-  const activePanels = panels.filter((p) => p.classList.contains("active"));
+  const activePanels = panels.filter((p) => p.classList.includes("active"));
   if (activePanels.length !== 1) {
     fail(
       `Expected 1 active panel, found ${activePanels.length}: [${activePanels
