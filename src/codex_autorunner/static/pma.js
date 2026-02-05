@@ -2,14 +2,13 @@
 /**
  * PMA (Project Management Agent) - Hub-level chat interface
  */
-import { api, confirmModal, resolvePath, getAuthToken, flash, escapeHtml } from "./utils.js";
-import { renderMarkdown } from "./messages.js";
-import { registerAutoRefresh } from "./autoRefresh.js";
+import { api, resolvePath, getAuthToken, flash } from "./utils.js";
 import { createDocChat, } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import { clearAgentSelectionStorage, getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
 import { extractContextRemainingPercent } from "./streamUtils.js";
+import { initNotificationBell } from "./notificationBell.js";
 const pmaStyling = {
     eventClass: "chat-event",
     eventTitleClass: "chat-event-title",
@@ -26,10 +25,11 @@ const pmaStyling = {
     messageAssistantThinkingClass: "chat-message-assistant-thinking",
     messageAssistantFinalClass: "chat-message-assistant-final",
 };
-const READONLY_DOCS = new Set(["context_log.md"]);
+const EDITABLE_DOCS = ["AGENTS.md", "active_context.md"];
 let activeContextMaxLines = 200;
 const pmaConfig = {
     idPrefix: "pma-chat",
+    storage: { keyPrefix: "car.pma.", maxMessages: 100, version: 1 },
     limits: {
         eventVisible: 20,
         eventMax: 50,
@@ -47,20 +47,11 @@ let currentEventsController = null;
 const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
 const PMA_VIEW_KEY = "car.pma.view";
 const DEFAULT_PMA_LANE_ID = "pma:default";
-const PMA_HISTORY_LIMIT = 50;
-const PMA_HISTORY_REFRESH_MS = 15000;
 let fileBoxCtrl = null;
 let pendingUploadNames = [];
 let currentDocName = null;
 const docsInfo = new Map();
 let isSavingDoc = false;
-let pmaHistoryLoading = false;
-let pmaHistoryInitialized = false;
-const pmaHistoryTurnIds = new Set();
-const pmaHistoryClientTurnIds = new Set();
-let pmaDispatches = [];
-let pmaDispatchSelected = null;
-let pmaDispatchesLoading = false;
 function newClientTurnId() {
     // crypto.randomUUID is not guaranteed everywhere; keep a safe fallback.
     try {
@@ -72,23 +63,6 @@ function newClientTurnId() {
         // ignore
     }
     return `pma-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-function formatDispatchTimestamp(value) {
-    if (!value)
-        return "–";
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime()))
-        return value;
-    return parsed.toLocaleString();
-}
-function resolveDispatchPriority(priority) {
-    const normalized = (priority || "info").toLowerCase();
-    if (normalized === "warn" || normalized === "action")
-        return normalized;
-    return "info";
-}
-function unresolvedDispatchCount(items) {
-    return items.filter((item) => !item.resolved_at).length;
 }
 function loadPendingTurn() {
     try {
@@ -122,6 +96,29 @@ function clearPendingTurn() {
         // ignore
     }
 }
+function loadPMAView() {
+    const raw = localStorage.getItem(PMA_VIEW_KEY);
+    if (raw === "memory")
+        return "memory";
+    return "chat";
+}
+function setPMAView(view, options = {}) {
+    const elements = getElements();
+    const { persist = true } = options;
+    if (persist) {
+        localStorage.setItem(PMA_VIEW_KEY, view);
+    }
+    if (elements.shell) {
+        elements.shell.setAttribute("data-pma-view", view);
+    }
+    document.querySelectorAll(".pma-view-btn").forEach((btn) => {
+        const isActive = btn.dataset.view === view;
+        btn.classList.toggle("active", isActive);
+        btn.setAttribute("aria-selected", isActive ? "true" : "false");
+    });
+    elements.chatSection?.classList.toggle("hidden", view !== "chat");
+    elements.docsSection?.classList.toggle("hidden", view !== "memory");
+}
 async function initFileBoxUI() {
     const elements = getElements();
     if (!elements.inboxFiles || !elements.outboxFiles)
@@ -152,6 +149,7 @@ async function initFileBoxUI() {
                 }
                 pendingUploadNames = [];
             }
+            updateClearButtons(listing);
         },
         onUpload: (names) => {
             pendingUploadNames = names;
@@ -173,213 +171,6 @@ function stopTurnEventsStream() {
 function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
-function readString(value) {
-    return typeof value === "string" ? value : "";
-}
-function readNumber(value) {
-    if (typeof value !== "number")
-        return null;
-    if (!Number.isFinite(value))
-        return null;
-    return value;
-}
-function normalizeHistoryMeta(raw) {
-    const lifecycleEvent = typeof raw.lifecycle_event === "object" && raw.lifecycle_event !== null
-        ? raw.lifecycle_event
-        : null;
-    const trigger = readString(raw.trigger) || (lifecycleEvent ? "lifecycle_event" : "");
-    return {
-        turnId: readString(raw.turn_id),
-        clientTurnId: readString(raw.client_turn_id),
-        trigger,
-        userPrompt: readString(raw.user_prompt),
-        repoId: readString(raw.repo_id),
-        runId: readString(raw.run_id),
-        eventType: readString(raw.event_type),
-        eventId: readString(raw.event_id),
-        startedAt: readString(raw.started_at),
-        finishedAt: readString(raw.finished_at) || readString(raw.created_at),
-        durationMs: readNumber(raw.duration_ms),
-    };
-}
-function historyEntryTimestamp(entry) {
-    const raw = entry;
-    const stamp = readString(raw.finished_at) ||
-        readString(raw.created_at) ||
-        readString(raw.started_at) ||
-        readString(raw.event_timestamp);
-    const ts = Date.parse(stamp);
-    return Number.isNaN(ts) ? 0 : ts;
-}
-function buildRunArtifactsUrl(repoId, runId) {
-    if (!repoId || !runId)
-        return "";
-    const encodedRepo = encodeURIComponent(repoId);
-    const encodedRun = encodeURIComponent(runId);
-    return resolvePath(`/repos/${encodedRepo}/api/flows/${encodedRun}/artifacts`);
-}
-function buildHistoryFooter(meta) {
-    const contextParts = [];
-    if (meta.repoId)
-        contextParts.push(`repo_id: \`${meta.repoId}\``);
-    if (meta.runId)
-        contextParts.push(`run_id: \`${meta.runId}\``);
-    const artifactsUrl = buildRunArtifactsUrl(meta.repoId, meta.runId);
-    if (artifactsUrl)
-        contextParts.push(`[artifacts](${artifactsUrl})`);
-    if (!contextParts.length)
-        return "";
-    return `\n\n---\n\nContext: ${contextParts.join(" | ")}`;
-}
-function shouldSkipHistoryMeta(meta) {
-    if (meta.turnId && pmaHistoryTurnIds.has(meta.turnId))
-        return true;
-    if (meta.clientTurnId && pmaHistoryClientTurnIds.has(meta.clientTurnId))
-        return true;
-    return false;
-}
-function appendHistoryTranscript(meta, content, options = {}) {
-    if (!pmaChat)
-        return;
-    if (shouldSkipHistoryMeta(meta))
-        return;
-    if (meta.userPrompt) {
-        pmaChat.addUserMessage(meta.userPrompt);
-    }
-    const isAuto = meta.trigger === "lifecycle_event";
-    const footer = buildHistoryFooter(meta);
-    const trimmed = (content || "").trim();
-    const safeFooter = footer ? footer.replace(/^\n\n---\n\n/, "") : "";
-    const combined = trimmed ? `${trimmed}${footer}` : safeFooter;
-    if (combined) {
-        pmaChat.addAssistantMessage(combined, true, {
-            duration: meta.durationMs ? meta.durationMs / 1000 : undefined,
-            tag: isAuto ? "Auto" : undefined,
-        });
-    }
-    if (meta.turnId)
-        pmaHistoryTurnIds.add(meta.turnId);
-    if (meta.clientTurnId)
-        pmaHistoryClientTurnIds.add(meta.clientTurnId);
-    if (options.render !== false) {
-        pmaChat.render();
-        pmaChat.renderMessages();
-    }
-}
-async function fetchPmaTranscript(turnId) {
-    if (!turnId)
-        return null;
-    try {
-        const payload = (await api(`/hub/pma/history/${encodeURIComponent(turnId)}`, {
-            method: "GET",
-        }));
-        return payload || null;
-    }
-    catch {
-        return null;
-    }
-}
-async function loadPMAHistory(options = {}) {
-    if (pmaHistoryLoading || !pmaChat)
-        return;
-    pmaHistoryLoading = true;
-    const limit = options.limit ?? PMA_HISTORY_LIMIT;
-    void options.reason;
-    try {
-        const pending = loadPendingTurn();
-        if (pending?.clientTurnId) {
-            pmaHistoryClientTurnIds.add(pending.clientTurnId);
-        }
-        const payload = (await api(`/hub/pma/history?limit=${limit}`, {
-            method: "GET",
-        }));
-        const entries = Array.isArray(payload?.entries) ? payload.entries : [];
-        if (!pmaHistoryInitialized) {
-            pmaChat.state.messages = [];
-            pmaChat.state.streamText = "";
-            pmaChat.state.error = "";
-            pmaHistoryTurnIds.clear();
-            pmaHistoryClientTurnIds.clear();
-        }
-        const sorted = entries.slice().sort((a, b) => historyEntryTimestamp(a) - historyEntryTimestamp(b));
-        const pendingEntries = sorted.filter((entry) => {
-            const meta = normalizeHistoryMeta(entry);
-            return !shouldSkipHistoryMeta(meta);
-        });
-        for (const entry of pendingEntries) {
-            const entryMeta = normalizeHistoryMeta(entry);
-            const turnId = entryMeta.turnId;
-            const transcript = await fetchPmaTranscript(turnId);
-            const meta = transcript?.metadata
-                ? normalizeHistoryMeta(transcript.metadata)
-                : entryMeta;
-            const content = typeof transcript?.content === "string"
-                ? transcript.content
-                : readString(entry.preview);
-            appendHistoryTranscript(meta, content, { render: false });
-        }
-        if (pendingEntries.length) {
-            pmaChat.render();
-            pmaChat.renderMessages();
-        }
-        pmaHistoryInitialized = true;
-    }
-    catch {
-        // Best-effort; avoid spamming errors on a background refresh.
-    }
-    finally {
-        pmaHistoryLoading = false;
-    }
-}
-async function syncHistoryFromActive(payload) {
-    if (pmaHistoryLoading || !pmaChat)
-        return;
-    const last = (payload.last_result || {});
-    const turnId = readString(last.turn_id);
-    const clientTurnId = readString(last.client_turn_id);
-    if (!turnId)
-        return;
-    if (pmaHistoryTurnIds.has(turnId))
-        return;
-    if (clientTurnId && pmaHistoryClientTurnIds.has(clientTurnId))
-        return;
-    const transcript = await fetchPmaTranscript(turnId);
-    const meta = transcript?.metadata
-        ? normalizeHistoryMeta(transcript.metadata)
-        : normalizeHistoryMeta(last);
-    const content = typeof transcript?.content === "string" ? transcript.content : readString(last.message);
-    appendHistoryTranscript(meta, content);
-}
-function formatDocLabel(name) {
-    const map = {
-        "AGENTS.md": "Agents",
-        "active_context.md": "Active Context",
-        "context_log.md": "Context Log",
-        "ABOUT_CAR.md": "About CAR",
-        "prompt.md": "Prompt",
-    };
-    if (map[name])
-        return map[name];
-    const base = name.replace(/\.md$/i, "");
-    return base.replace(/_/g, " ").replace(/\b\w/g, (match) => match.toUpperCase());
-}
-function renderPMADocsTabs() {
-    const tabsEl = document.getElementById("pma-docs-tabs");
-    if (!tabsEl)
-        return;
-    const names = Array.from(docsInfo.keys());
-    if (!names.length) {
-        tabsEl.innerHTML = "";
-        return;
-    }
-    const html = names
-        .map((name) => {
-        const active = name === currentDocName;
-        return `<button class="pma-docs-tab ${active ? "active" : ""}" data-doc="${escapeHtml(name)}">${escapeHtml(formatDocLabel(name))}</button>`;
-    })
-        .join("");
-    tabsEl.innerHTML = html;
-}
 async function loadPMADocs() {
     try {
         const payload = (await api("/hub/pma/docs", { method: "GET" }));
@@ -393,13 +184,6 @@ async function loadPMADocs() {
             typeof payload?.active_context_max_lines === "number"
                 ? payload.active_context_max_lines
                 : 200;
-        renderPMADocsTabs();
-        if (!currentDocName || !docsInfo.has(currentDocName)) {
-            const firstDoc = payload?.docs?.[0]?.name;
-            if (firstDoc) {
-                switchPMADoc(firstDoc);
-            }
-        }
         renderPMADocsMeta();
     }
     catch (err) {
@@ -414,11 +198,15 @@ async function loadPMADocContent(name) {
         return payload?.content || "";
     }
     catch (err) {
+        const content = await bootstrapPMADoc(name);
+        if (content) {
+            return content;
+        }
         flash(`Failed to load ${name}`, "error");
         return "";
     }
 }
-async function loadPMADocDefaultContent(name) {
+async function loadPMADocDefaultContent(name, options = {}) {
     try {
         const payload = (await api(`/hub/pma/docs/default/${encodeURIComponent(name)}`, {
             method: "GET",
@@ -426,8 +214,26 @@ async function loadPMADocDefaultContent(name) {
         return payload?.content || "";
     }
     catch (err) {
-        flash(`Failed to load default ${name}`, "error");
+        if (!options.silent) {
+            flash(`Failed to load default ${name}`, "error");
+        }
         return "";
+    }
+}
+async function bootstrapPMADoc(name) {
+    const content = await loadPMADocDefaultContent(name, { silent: true });
+    if (!content)
+        return "";
+    try {
+        await api(`/hub/pma/docs/${encodeURIComponent(name)}`, {
+            method: "PUT",
+            body: { content },
+        });
+        await loadPMADocs();
+        return content;
+    }
+    catch {
+        return content;
     }
 }
 async function savePMADoc(name, content) {
@@ -449,25 +255,6 @@ async function savePMADoc(name, content) {
     }
     finally {
         isSavingDoc = false;
-    }
-}
-async function loadPMADocHistory(name) {
-    try {
-        const payload = (await api(`/hub/pma/docs/history/${encodeURIComponent(name)}`, { method: "GET" }));
-        return payload?.entries || [];
-    }
-    catch (err) {
-        return [];
-    }
-}
-async function loadPMADocHistoryContent(name, versionId) {
-    try {
-        const payload = (await api(`/hub/pma/docs/history/${encodeURIComponent(name)}/${encodeURIComponent(versionId)}`, { method: "GET" }));
-        return payload?.content || "";
-    }
-    catch (err) {
-        flash("Failed to load history entry", "error");
-        return "";
     }
 }
 function renderPMADocsMeta() {
@@ -505,11 +292,9 @@ function switchPMADoc(name) {
     const resetBtn = document.getElementById("pma-docs-reset");
     const snapshotBtn = document.getElementById("pma-docs-snapshot");
     const saveBtn = document.getElementById("pma-docs-save");
-    const historySelect = document.getElementById("pma-docs-history");
-    const restoreBtn = document.getElementById("pma-docs-restore");
     if (!editor)
         return;
-    const isEditable = !READONLY_DOCS.has(name);
+    const isEditable = EDITABLE_DOCS.includes(name);
     editor.readOnly = !isEditable;
     if (resetBtn)
         resetBtn.disabled = name !== "active_context.md";
@@ -517,21 +302,8 @@ function switchPMADoc(name) {
         snapshotBtn.disabled = name !== "active_context.md";
     if (saveBtn)
         saveBtn.disabled = !isEditable;
-    if (restoreBtn)
-        restoreBtn.disabled = true;
     void loadPMADocContent(name).then((content) => {
         editor.value = content;
-    });
-    void loadPMADocHistory(name).then((entries) => {
-        if (!historySelect)
-            return;
-        const options = [
-            '<option value="">History (latest first)</option>',
-            ...entries.map((entry) => `<option value="${escapeHtml(entry.id)}">${escapeHtml(entry.id)}</option>`),
-        ];
-        historySelect.innerHTML = options.join("");
-        if (restoreBtn)
-            restoreBtn.disabled = true;
     });
 }
 async function snapshotActiveContext() {
@@ -558,9 +330,8 @@ async function snapshotActiveContext() {
         flash("Failed to snapshot active context", "error");
     }
 }
-async function resetActiveContext() {
-    const confirmed = await confirmModal("Reset active context to default?");
-    if (!confirmed)
+function resetActiveContext() {
+    if (!confirm("Reset active context to default?"))
         return;
     const editor = document.getElementById("pma-docs-editor");
     if (!editor)
@@ -632,6 +403,7 @@ async function pollForTurnMeta(clientTurnId, options = {}) {
 function getElements() {
     return {
         shell: document.getElementById("pma-shell"),
+        chatSection: document.getElementById("pma-chat-section"),
         input: document.getElementById("pma-chat-input"),
         sendBtn: document.getElementById("pma-chat-send"),
         cancelBtn: document.getElementById("pma-chat-cancel"),
@@ -652,6 +424,8 @@ function getElements() {
         inboxFiles: document.getElementById("pma-inbox-files"),
         outboxFiles: document.getElementById("pma-outbox-files"),
         outboxRefresh: document.getElementById("pma-outbox-refresh"),
+        inboxClear: document.getElementById("pma-inbox-clear"),
+        outboxClear: document.getElementById("pma-outbox-clear"),
         threadInfo: document.getElementById("pma-thread-info"),
         threadInfoAgent: document.getElementById("pma-thread-info-agent"),
         threadInfoThreadId: document.getElementById("pma-thread-info-thread-id"),
@@ -664,160 +438,7 @@ function getElements() {
         docsSaveBtn: document.getElementById("pma-docs-save"),
         docsResetBtn: document.getElementById("pma-docs-reset"),
         docsSnapshotBtn: document.getElementById("pma-docs-snapshot"),
-        dispatchesList: document.getElementById("pma-dispatches-list"),
-        dispatchesDetail: document.getElementById("pma-dispatches-detail"),
-        dispatchesCount: document.getElementById("pma-dispatches-count"),
-        dispatchesRefresh: document.getElementById("pma-dispatches-refresh"),
-        viewTabs: document.getElementById("pma-view-tabs"),
-        docsTabs: document.getElementById("pma-docs-tabs"),
-        docsHistorySelect: document.getElementById("pma-docs-history"),
-        docsRestoreBtn: document.getElementById("pma-docs-restore"),
     };
-}
-function setPmaView(view) {
-    const target = view || "chat";
-    localStorage.setItem(PMA_VIEW_KEY, target);
-    document.querySelectorAll("[data-pma-view]").forEach((section) => {
-        if (!(section instanceof HTMLElement))
-            return;
-        section.classList.toggle("hidden", section.dataset.pmaView !== target);
-    });
-    document.querySelectorAll(".pma-view-tab").forEach((tab) => {
-        if (!(tab instanceof HTMLElement))
-            return;
-        tab.classList.toggle("active", tab.dataset.view === target);
-    });
-}
-function renderDispatchesList(elements) {
-    if (!elements.dispatchesList || !elements.dispatchesDetail || !elements.dispatchesCount)
-        return;
-    const unresolvedCount = unresolvedDispatchCount(pmaDispatches);
-    elements.dispatchesCount.textContent = String(unresolvedCount);
-    elements.dispatchesCount.classList.toggle("hidden", unresolvedCount === 0);
-    if (!pmaDispatches.length) {
-        elements.dispatchesList.innerHTML = '<div class="muted small">No dispatches yet.</div>';
-        elements.dispatchesDetail.innerHTML = '<div class="muted small">Select a dispatch to view details.</div>';
-        return;
-    }
-    const listHtml = pmaDispatches
-        .map((dispatch) => {
-        const priority = resolveDispatchPriority(dispatch.priority);
-        const resolved = Boolean(dispatch.resolved_at);
-        const active = dispatch.id === pmaDispatchSelected;
-        const classes = [
-            "pma-dispatch-item",
-            resolved ? "resolved" : "",
-            active ? "active" : "",
-        ]
-            .filter(Boolean)
-            .join(" ");
-        const title = (dispatch.title || "Untitled dispatch").trim();
-        const createdAt = formatDispatchTimestamp(dispatch.created_at);
-        const status = resolved ? "resolved" : "open";
-        return `
-        <button class="${classes}" type="button" data-dispatch-id="${dispatch.id}">
-          <div class="pma-dispatch-item-title">${title}</div>
-          <div class="pma-dispatch-item-meta">
-            <span>${priority}</span>
-            <span>•</span>
-            <span>${status}</span>
-            <span>•</span>
-            <span>${createdAt}</span>
-          </div>
-        </button>
-      `;
-    })
-        .join("");
-    elements.dispatchesList.innerHTML = listHtml;
-    renderDispatchDetail(elements);
-}
-function renderDispatchDetail(elements) {
-    if (!elements.dispatchesDetail)
-        return;
-    const selected = pmaDispatches.find((item) => item.id === pmaDispatchSelected);
-    if (!selected) {
-        elements.dispatchesDetail.innerHTML = '<div class="muted small">Select a dispatch to view details.</div>';
-        return;
-    }
-    const title = (selected.title || "Untitled dispatch").trim();
-    const priority = resolveDispatchPriority(selected.priority);
-    const createdAt = formatDispatchTimestamp(selected.created_at);
-    const resolvedAt = selected.resolved_at ? formatDispatchTimestamp(selected.resolved_at) : "Open";
-    const body = selected.body?.trim()
-        ? renderMarkdown(selected.body)
-        : '<span class="muted">No message body.</span>';
-    const links = (selected.links || [])
-        .map((link) => {
-        const label = escapeHtml(link.label || link.href || "");
-        const href = escapeHtml(link.href || "#");
-        return `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
-    })
-        .join("");
-    const linkSection = links
-        ? `<div class="pma-dispatch-detail-links">${links}</div>`
-        : "";
-    const actionButton = selected.resolved_at
-        ? ""
-        : '<button class="primary sm" id="pma-dispatch-resolve-btn">Resolve</button>';
-    elements.dispatchesDetail.innerHTML = `
-    <h3 class="pma-dispatch-detail-title">${title}</h3>
-    <div class="pma-dispatch-detail-meta">
-      <span>${priority}</span>
-      <span>•</span>
-      <span>Created ${createdAt}</span>
-      <span>•</span>
-      <span>${resolvedAt}</span>
-    </div>
-    <div class="pma-dispatch-detail-body">${body}</div>
-    ${linkSection}
-    <div class="pma-dispatch-detail-actions">
-      ${actionButton}
-    </div>
-  `;
-}
-async function refreshPmaDispatches() {
-    if (pmaDispatchesLoading)
-        return;
-    pmaDispatchesLoading = true;
-    try {
-        const payload = (await api("/hub/pma/dispatches?include_resolved=true", {
-            method: "GET",
-        }));
-        pmaDispatches = payload?.items || [];
-        if (!pmaDispatchSelected && pmaDispatches.length) {
-            const firstOpen = pmaDispatches.find((item) => !item.resolved_at);
-            pmaDispatchSelected = (firstOpen || pmaDispatches[0]).id;
-        }
-        else if (pmaDispatchSelected) {
-            const stillExists = pmaDispatches.some((item) => item.id === pmaDispatchSelected);
-            if (!stillExists) {
-                pmaDispatchSelected = pmaDispatches[0]?.id || null;
-            }
-        }
-    }
-    catch {
-        // ignore errors; leave existing data
-    }
-    finally {
-        pmaDispatchesLoading = false;
-        const elements = getElements();
-        renderDispatchesList(elements);
-    }
-}
-async function resolveSelectedDispatch() {
-    const selected = pmaDispatchSelected;
-    if (!selected)
-        return;
-    try {
-        await api(`/hub/pma/dispatches/${encodeURIComponent(selected)}/resolve`, {
-            method: "POST",
-        });
-        await refreshPmaDispatches();
-        flash("Dispatch resolved", "success");
-    }
-    catch {
-        flash("Failed to resolve dispatch", "error");
-    }
 }
 const decoder = new TextDecoder();
 function escapeMarkdownLinkText(text) {
@@ -890,7 +511,6 @@ async function initPMA() {
         if (messages)
             messages.scrollTop = messages.scrollHeight;
     }, 100);
-    await loadPMAHistory({ reason: "initial" });
     initAgentControls({
         agentSelect: elements.agentSelect,
         modelSelect: elements.modelSelect,
@@ -901,9 +521,8 @@ async function initPMA() {
     await initFileBoxUI();
     await loadPMADocs();
     attachHandlers();
-    attachDispatchHandlers();
-    const savedView = localStorage.getItem(PMA_VIEW_KEY) || "chat";
-    setPmaView(savedView);
+    setPMAView(loadPMAView(), { persist: false });
+    initNotificationBell();
     // If we refreshed mid-turn, recover the final output from the server.
     await resumePendingTurn();
     // If the page refreshes/navigates while a turn is running, avoid showing a noisy
@@ -928,10 +547,9 @@ async function initPMA() {
     }
     // Periodically refresh thread info
     setInterval(() => {
-        void loadPMAHistory({ reason: "interval" });
         void loadPMAThreadInfo();
         void fileBoxCtrl?.refresh();
-    }, PMA_HISTORY_REFRESH_MS);
+    }, 30000);
 }
 async function loadPMAThreadInfo() {
     const elements = getElements();
@@ -944,7 +562,6 @@ async function loadPMAThreadInfo() {
         const info = (payload.active && current.thread_id) ? current : last;
         if (!info || !info.thread_id) {
             elements.threadInfo.classList.add("hidden");
-            void syncHistoryFromActive(payload);
             return;
         }
         if (elements.threadInfoAgent) {
@@ -973,11 +590,27 @@ async function loadPMAThreadInfo() {
             }
         }
         elements.threadInfo.classList.remove("hidden");
-        void syncHistoryFromActive(payload);
     }
     catch {
         elements.threadInfo?.classList.add("hidden");
     }
+}
+function updateClearButtons(listing) {
+    const elements = getElements();
+    if (!elements.inboxClear || !elements.outboxClear)
+        return;
+    const inboxCount = listing?.inbox?.length ?? 0;
+    const outboxCount = listing?.outbox?.length ?? 0;
+    elements.inboxClear.classList.toggle("hidden", inboxCount <= 1);
+    elements.outboxClear.classList.toggle("hidden", outboxCount <= 1);
+}
+async function clearPMABox(box) {
+    const confirmed = window.confirm(`Clear ${box}? This will delete all files.`);
+    if (!confirmed)
+        return;
+    await api(`/hub/pma/files/${box}`, { method: "DELETE" });
+    flash(`Cleared ${box}`, "info");
+    await fileBoxCtrl?.refresh();
 }
 async function sendMessage() {
     const elements = getElements();
@@ -999,7 +632,6 @@ async function sendMessage() {
     const reasoning = elements.reasoningSelect?.value || getSelectedReasoning(agent);
     const clientTurnId = newClientTurnId();
     savePendingTurn({ clientTurnId, message, startedAtMs: Date.now() });
-    pmaHistoryClientTurnIds.add(clientTurnId);
     currentController = new AbortController();
     pmaChat.state.controller = currentController;
     pmaChat.state.status = "running";
@@ -1443,6 +1075,14 @@ async function startNewThreadOnServer() {
 }
 function attachHandlers() {
     const elements = getElements();
+    document.addEventListener("click", (event) => {
+        const target = event.target;
+        const btn = target?.closest?.(".pma-view-btn");
+        if (!btn)
+            return;
+        const value = (btn.dataset.view || "chat");
+        setPMAView(value);
+    });
     if (elements.sendBtn) {
         elements.sendBtn.addEventListener("click", () => {
             void sendMessage();
@@ -1503,12 +1143,22 @@ function attachHandlers() {
             void fileBoxCtrl?.refresh();
         });
     }
+    if (elements.inboxClear) {
+        elements.inboxClear.addEventListener("click", () => {
+            void clearPMABox("inbox");
+        });
+    }
+    if (elements.outboxClear) {
+        elements.outboxClear.addEventListener("click", () => {
+            void clearPMABox("outbox");
+        });
+    }
     if (elements.scanReposBtn) {
         elements.scanReposBtn.addEventListener("click", async () => {
+            const btn = elements.scanReposBtn;
+            const originalText = btn.textContent || "";
             try {
-                const btn = elements.scanReposBtn;
                 btn.disabled = true;
-                btn.textContent = "Scanning…";
                 await api("/hub/repos/scan", { method: "POST" });
                 flash("Repositories scanned", "info");
             }
@@ -1516,9 +1166,8 @@ function attachHandlers() {
                 flash("Failed to scan repos", "error");
             }
             finally {
-                const btn = elements.scanReposBtn;
                 btn.disabled = false;
-                btn.textContent = "Scan repos";
+                btn.textContent = btn.textContent || originalText;
             }
         });
     }
@@ -1544,20 +1193,19 @@ function attachHandlers() {
         });
         elements.threadInfoTurnId.style.cursor = "pointer";
     }
-    if (elements.docsTabs) {
-        elements.docsTabs.addEventListener("click", (event) => {
-            const target = event.target?.closest(".pma-docs-tab");
-            if (!target)
-                return;
-            const docName = target.dataset.doc;
-            if (docName)
-                switchPMADoc(docName);
-        });
-    }
+    document.querySelectorAll(".pma-docs-tab").forEach((tab) => {
+        if (tab instanceof HTMLElement) {
+            tab.addEventListener("click", () => {
+                const docName = tab.dataset.doc;
+                if (docName)
+                    switchPMADoc(docName);
+            });
+        }
+    });
     if (elements.docsSaveBtn) {
         elements.docsSaveBtn.addEventListener("click", () => {
             const editor = elements.docsEditor;
-            if (editor && currentDocName && !READONLY_DOCS.has(currentDocName)) {
+            if (editor && currentDocName && EDITABLE_DOCS.includes(currentDocName)) {
                 void savePMADoc(currentDocName, editor.value);
             }
         });
@@ -1570,84 +1218,11 @@ function attachHandlers() {
             void snapshotActiveContext();
         });
     }
-    if (elements.viewTabs) {
-        elements.viewTabs.addEventListener("click", (event) => {
-            const target = event.target?.closest(".pma-view-tab");
-            if (!target)
-                return;
-            const view = target.dataset.view || "chat";
-            setPmaView(view);
-        });
-    }
-    if (elements.docsHistorySelect) {
-        elements.docsHistorySelect.addEventListener("change", () => {
-            if (!elements.docsHistorySelect || !elements.docsRestoreBtn)
-                return;
-            const hasSelection = Boolean(elements.docsHistorySelect.value);
-            elements.docsRestoreBtn.disabled = !hasSelection;
-        });
-    }
-    if (elements.docsRestoreBtn) {
-        elements.docsRestoreBtn.addEventListener("click", () => {
-            void (async () => {
-                if (!currentDocName || !elements.docsHistorySelect || !elements.docsEditor)
-                    return;
-                const versionId = elements.docsHistorySelect.value;
-                if (!versionId)
-                    return;
-                const confirmed = await confirmModal(`Restore ${currentDocName} to ${versionId}? This will overwrite the current file.`);
-                if (!confirmed)
-                    return;
-                const content = await loadPMADocHistoryContent(currentDocName, versionId);
-                if (!content)
-                    return;
-                elements.docsEditor.value = content;
-                if (!READONLY_DOCS.has(currentDocName)) {
-                    await savePMADoc(currentDocName, content);
-                }
-            })();
-        });
-    }
     if (elements.docsEditor) {
         elements.docsEditor.addEventListener("input", () => {
             elements.docsEditor.style.height = "auto";
             elements.docsEditor.style.height = `${elements.docsEditor.scrollHeight}px`;
         });
     }
-}
-function attachDispatchHandlers() {
-    const elements = getElements();
-    if (!elements.dispatchesList)
-        return;
-    elements.dispatchesList.addEventListener("click", (event) => {
-        const target = event.target?.closest(".pma-dispatch-item");
-        if (!target)
-            return;
-        const dispatchId = target.dataset.dispatchId;
-        if (!dispatchId)
-            return;
-        pmaDispatchSelected = dispatchId;
-        renderDispatchesList(elements);
-    });
-    elements.dispatchesDetail?.addEventListener("click", (event) => {
-        const target = event.target;
-        if (!target)
-            return;
-        if (target.id === "pma-dispatch-resolve-btn") {
-            void resolveSelectedDispatch();
-        }
-    });
-    elements.dispatchesRefresh?.addEventListener("click", () => {
-        void refreshPmaDispatches();
-    });
-    registerAutoRefresh("pma-dispatches", {
-        callback: async () => {
-            await refreshPmaDispatches();
-        },
-        tabId: null,
-        interval: 15000,
-        refreshOnActivation: true,
-        immediate: true,
-    });
 }
 export { initPMA };

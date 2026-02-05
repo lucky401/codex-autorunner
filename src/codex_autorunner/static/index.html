@@ -23,15 +23,15 @@
       </div>
       <div class="hub-hero-actions">
         <button class="primary sm" id="hub-new-repo">+ New</button>
-        <div class="notifications-bell" data-notifications-root="hub">
-          <button class="ghost sm icon-btn notifications-bell-btn" data-notifications-trigger title="Notifications"
-            aria-label="Notifications">
-            <span aria-hidden="true">🔔</span>
-            <span class="notifications-bell-badge hidden" data-notifications-badge></span>
-          </button>
-          <div class="notifications-dropdown hidden" data-notifications-dropdown role="menu"
-            aria-label="Pending dispatches"></div>
-        </div>
+        <button class="sm" id="hub-scan">Scan</button>
+        <button class="ghost sm" id="hub-refresh">Refresh</button>
+        <button class="ghost sm icon-btn notification-bell" id="hub-notification-bell" title="Dispatches">
+          <svg class="notification-bell-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 9.5a6 6 0 0 1 12 0v3.5l1.6 2.2H4.4L6 13z" />
+            <path d="M9.8 18.2a2.2 2.2 0 0 0 4.4 0" />
+          </svg>
+          <span class="notification-badge hidden" aria-label="Pending dispatches"></span>
+        </button>
         <button class="ghost sm icon-btn" id="hub-settings" title="Settings">⚙</button>
       </div>
       <div class="hub-mode-toggle" role="tablist" aria-label="Hub mode">
@@ -56,6 +56,15 @@
         <div class="hub-stat-value" id="hub-count-missing">–</div>
         <p class="muted small">missing</p>
       </div>
+    </section>
+    <section class="hub-inbox">
+      <div class="hub-panel-header">
+        <span class="label">Inbox</span>
+        <div class="hub-panel-actions">
+          <button class="ghost sm" id="hub-inbox-refresh">Refresh</button>
+        </div>
+      </div>
+      <div class="hub-inbox-list" id="hub-inbox-list">Loading…</div>
     </section>
     <section class="hub-usage-chart">
       <div class="hub-usage-chart-header">
@@ -89,7 +98,7 @@
       </div>
     </section>
   </div>
-  <div class="hub-shell hidden" id="pma-shell">
+  <div class="hub-shell hidden" id="pma-shell" data-pma-view="chat">
     <header class="hub-hero pma-hero">
       <div class="hub-hero-text pma-hero-text">
         <h1>Project Manager</h1>
@@ -97,15 +106,13 @@
         <span class="hub-version" id="pma-version">v–</span>
       </div>
       <div class="hub-hero-actions pma-hero-actions">
-        <div class="notifications-bell" data-notifications-root="pma">
-          <button class="ghost sm icon-btn notifications-bell-btn" data-notifications-trigger title="Notifications"
-            aria-label="Notifications">
-            <span aria-hidden="true">🔔</span>
-            <span class="notifications-bell-badge hidden" data-notifications-badge></span>
-          </button>
-          <div class="notifications-dropdown hidden" data-notifications-dropdown role="menu"
-            aria-label="Pending dispatches"></div>
-        </div>
+        <button class="ghost sm icon-btn notification-bell" id="pma-notification-bell" title="Dispatches">
+          <svg class="notification-bell-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 9.5a6 6 0 0 1 12 0v3.5l1.6 2.2H4.4L6 13z" />
+            <path d="M9.8 18.2a2.2 2.2 0 0 0 4.4 0" />
+          </svg>
+          <span class="notification-badge hidden" aria-label="Pending dispatches"></span>
+        </button>
         <button class="ghost sm icon-btn" id="pma-settings" title="Settings">⚙</button>
       </div>
       <div class="hub-mode-toggle" role="tablist" aria-label="Hub mode">
@@ -123,47 +130,44 @@
           <select id="pma-chat-agent-select" title="Agent"></select>
           <select id="pma-chat-model-select" title="Model"></select>
           <select id="pma-chat-reasoning-select" title="Reasoning"></select>
+          <div class="pma-view-toggle" role="tablist" aria-label="PMA view">
+            <button class="pma-view-btn active" data-view="chat" role="tab" aria-selected="true" type="button">Chat</button>
+            <button class="pma-view-btn" data-view="memory" role="tab" aria-selected="false" type="button">Memory</button>
+          </div>
         </div>
         <div class="pma-chat-actions">
+          <button class="ghost sm icon-btn" id="pma-scan-repos-btn" title="Rescan hub repositories">↻</button>
           <button class="ghost sm hidden" id="pma-chat-cancel" title="Cancel">✕</button>
           <button class="pma-new-thread-btn" id="pma-chat-new-thread" title="Start a new chat thread">New
             thread</button>
           <span class="pma-status-pill" id="pma-chat-status">idle</span>
         </div>
       </div>
-      <div class="pma-thread-info hidden" id="pma-thread-info">
-        <div class="pma-thread-info-header">
-          <span class="pma-thread-info-label">Thread</span>
-          <span class="pill pill-small pill-idle" id="pma-thread-info-status">idle</span>
-        </div>
-        <div class="pma-thread-info-details">
-          <div class="pma-thread-info-row">
-            <span class="pma-thread-info-key muted">Agent</span>
-            <span class="pma-thread-info-value" id="pma-thread-info-agent">–</span>
-          </div>
-          <div class="pma-thread-info-row">
-            <span class="pma-thread-info-key muted">Thread ID</span>
-            <span class="pma-thread-info-value" id="pma-thread-info-thread-id" title="Click to copy">–</span>
-          </div>
-          <div class="pma-thread-info-row">
-            <span class="pma-thread-info-key muted">Turn ID</span>
-            <span class="pma-thread-info-value" id="pma-thread-info-turn-id" title="Click to copy">–</span>
-          </div>
-        </div>
-      </div>
-      <div class="pma-repo-actions" id="pma-repo-actions">
-        <button class="ghost sm" id="pma-scan-repos-btn">Scan repos</button>
-      </div>
     </section>
-    <section class="pma-view-tabs" id="pma-view-tabs">
-      <button class="pma-view-tab active" data-view="chat">Chat</button>
-      <button class="pma-view-tab" data-view="dispatches">Dispatches</button>
-      <button class="pma-view-tab" data-view="memory">Memory</button>
-    </section>
-    <section class="pma-chat-section" data-pma-view="chat">
+    <section class="pma-chat-section" id="pma-chat-section">
       <div class="pma-chat-main">
         <div class="pma-chat-stream" id="pma-chat-stream">
           <div class="pma-chat-error hidden" id="pma-chat-error"></div>
+          <div class="pma-thread-info hidden" id="pma-thread-info">
+            <div class="pma-thread-info-header">
+              <span class="pma-thread-info-label">Thread</span>
+              <span class="pill pill-small pill-idle" id="pma-thread-info-status">idle</span>
+            </div>
+            <div class="pma-thread-info-details">
+              <div class="pma-thread-info-row">
+                <span class="pma-thread-info-key muted">Agent</span>
+                <span class="pma-thread-info-value" id="pma-thread-info-agent">–</span>
+              </div>
+              <div class="pma-thread-info-row">
+                <span class="pma-thread-info-key muted">Thread ID</span>
+                <span class="pma-thread-info-value" id="pma-thread-info-thread-id" title="Click to copy">–</span>
+              </div>
+              <div class="pma-thread-info-row">
+                <span class="pma-thread-info-key muted">Turn ID</span>
+                <span class="pma-thread-info-value" id="pma-thread-info-turn-id" title="Click to copy">–</span>
+              </div>
+            </div>
+          </div>
           <div class="pma-history-header" id="pma-chat-history-header">
             <span class="pma-history-label">History</span>
           </div>
@@ -181,10 +185,12 @@
           <div class="pma-attachments-area" id="pma-attachments-area">
             <div class="pma-files-row">
               <span class="pma-files-label">In</span>
+              <button class="pma-icon-btn-small hidden pma-clear-btn" id="pma-inbox-clear" title="Clear inbox">🗑</button>
               <div class="pma-file-list filebox-list" id="pma-inbox-files"></div>
             </div>
             <div class="pma-files-row">
               <span class="pma-files-label">Out</span>
+              <button class="pma-icon-btn-small hidden pma-clear-btn" id="pma-outbox-clear" title="Clear outbox">🗑</button>
               <div class="pma-file-list filebox-list" id="pma-outbox-files"></div>
               <button class="pma-icon-btn-small" id="pma-outbox-refresh" title="Refresh files">↻</button>
             </div>
@@ -202,21 +208,14 @@
         </div>
       </div>
     </section>
-    <section class="pma-dispatches-section hidden" id="pma-dispatches-section" data-pma-view="dispatches">
-      <div class="pma-dispatches-header">
-        <h2>PMA Dispatches</h2>
-        <span class="pill pill-small pill-warn" id="pma-dispatches-count">0</span>
-        <button class="ghost sm" id="pma-dispatches-refresh" title="Refresh dispatches">Refresh</button>
-      </div>
-      <div class="pma-dispatches-content">
-        <div class="pma-dispatches-list" id="pma-dispatches-list"></div>
-        <div class="pma-dispatches-detail" id="pma-dispatches-detail"></div>
-      </div>
-    </section>
-    <section class="pma-docs-section hidden" id="pma-docs-section" data-pma-view="memory">
+    <section class="pma-docs-section hidden" id="pma-docs-section">
       <div class="pma-docs-header">
-        <h2>PMA Memory</h2>
-        <div class="pma-docs-tabs" id="pma-docs-tabs"></div>
+        <h2>PMA Docs</h2>
+        <div class="pma-docs-tabs">
+          <button class="pma-docs-tab active" data-doc="AGENTS.md">AGENTS</button>
+          <button class="pma-docs-tab" data-doc="active_context.md">Active Context</button>
+          <button class="pma-docs-tab" data-doc="context_log.md">Context Log</button>
+        </div>
       </div>
       <div class="pma-docs-content">
         <div class="pma-docs-meta" id="pma-docs-meta"></div>
@@ -224,10 +223,6 @@
           <textarea id="pma-docs-editor" class="pma-docs-editor" spellcheck="false"></textarea>
         </div>
         <div class="pma-docs-actions">
-          <select class="pma-docs-history" id="pma-docs-history">
-            <option value="">History (latest first)</option>
-          </select>
-          <button class="ghost sm" id="pma-docs-restore" title="Restore selected version" disabled>Restore</button>
           <button class="ghost sm" id="pma-docs-reset" title="Reset to default">Reset</button>
           <button class="ghost sm" id="pma-docs-snapshot" title="Snapshot active context to log">Snapshot to log</button>
           <button class="primary sm" id="pma-docs-save">Save</button>
@@ -1058,6 +1053,22 @@
       </div>
     </div>
   </div>
+  <!-- Dispatch Notifications Modal -->
+  <div class="modal-overlay" hidden="" id="notification-modal">
+    <div aria-describedby="notification-modal-body" aria-labelledby="notification-modal-title" aria-modal="true"
+      class="modal-dialog notification-dialog" role="dialog" tabindex="-1">
+      <div class="modal-header notification-modal-header">
+        <span class="label" id="notification-modal-title">Dispatches</span>
+        <div class="notification-modal-actions">
+          <button class="ghost sm" id="notification-refresh">Refresh</button>
+          <button class="ghost sm icon-btn" id="notification-close" title="Close">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" id="notification-modal-body">
+        <div class="notification-list" id="notification-list">Loading…</div>
+      </div>
+    </div>
+  </div>
   <!-- Repo Settings Modal -->
   <div class="modal-overlay" hidden="" id="repo-settings-modal">
     <div aria-describedby="repo-settings-modal-body" aria-labelledby="repo-settings-modal-title" aria-modal="true"
@@ -1167,17 +1178,6 @@
       <div class="modal-actions">
         <button class="ghost" id="repo-settings-close">Close</button>
       </div>
-    </div>
-  </div>
-  <!-- Notifications Modal -->
-  <div class="modal-overlay" hidden="" id="notifications-modal">
-    <div aria-labelledby="notifications-modal-title" aria-modal="true" class="modal-dialog notifications-modal-dialog"
-      role="dialog" tabindex="-1">
-      <div class="notifications-modal-header">
-        <span class="label" id="notifications-modal-title">Pending dispatch</span>
-        <button class="ghost sm icon-btn" id="notifications-modal-close" title="Close">×</button>
-      </div>
-      <div class="notifications-modal-body-wrapper" id="notifications-modal-body"></div>
     </div>
   </div>
   <!-- Reason Details Modal -->
