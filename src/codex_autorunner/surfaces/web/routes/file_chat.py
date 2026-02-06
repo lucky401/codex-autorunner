@@ -1,9 +1,9 @@
 """
-Unified file chat routes: AI-powered editing for tickets and workspace docs.
+Unified file chat routes: AI-powered editing for tickets and contextspace docs.
 
 Targets:
 - ticket:{index} -> .codex-autorunner/tickets/TICKET-###.md
-- workspace:{path} -> .codex-autorunner/workspace/{path}
+- contextspace:{path} -> .codex-autorunner/contextspace/{path}
 """
 
 from __future__ import annotations
@@ -20,16 +20,16 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ....agents.registry import validate_agent_id
+from ....contextspace.paths import (
+    CONTEXTSPACE_DOC_KINDS,
+    contextspace_doc_path,
+    normalize_contextspace_rel_path,
+)
 from ....core import drafts as draft_utils
 from ....core.context_awareness import CAR_AWARENESS_BLOCK, format_file_role_addendum
 from ....core.state import now_iso
 from ....core.utils import atomic_write, find_repo_root
 from ....integrations.app_server.event_buffer import format_sse
-from ....workspace.paths import (
-    WORKSPACE_DOC_KINDS,
-    normalize_workspace_rel_path,
-    workspace_doc_path,
-)
 from .shared import SSE_HEADERS
 
 FILE_CHAT_STATE_NAME = draft_utils.FILE_CHAT_STATE_NAME
@@ -44,7 +44,7 @@ class FileChatError(Exception):
 @dataclass(frozen=True)
 class _Target:
     target: str
-    kind: str  # "ticket" | "workspace"
+    kind: str  # "ticket" | "contextspace"
     id: str  # "001" | "spec"
     path: Path
     rel_path: str
@@ -130,18 +130,20 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
             state_key=f"ticket_{idx:03d}",
         )
 
-    if target.lower().startswith("workspace:"):
+    if target.lower().startswith("contextspace:"):
         suffix_raw = target.split(":", 1)[1].strip()
         if not suffix_raw:
-            raise HTTPException(status_code=400, detail="invalid workspace target")
+            raise HTTPException(status_code=400, detail="invalid contextspace target")
 
         # Allow legacy kind-only targets (active_context/decisions/spec)
-        if suffix_raw.lower() in WORKSPACE_DOC_KINDS:
-            path = workspace_doc_path(repo_root, suffix_raw)
+        if suffix_raw.lower() in CONTEXTSPACE_DOC_KINDS:
+            path = contextspace_doc_path(repo_root, suffix_raw)
             rel_suffix = f"{suffix_raw}.md"
         else:
             try:
-                path, rel_suffix = normalize_workspace_rel_path(repo_root, suffix_raw)
+                path, rel_suffix = normalize_contextspace_rel_path(
+                    repo_root, suffix_raw
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -151,12 +153,12 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
             else str(path)
         )
         return _Target(
-            target=f"workspace:{rel_suffix}",
-            kind="workspace",
+            target=f"contextspace:{rel_suffix}",
+            kind="contextspace",
             id=rel_suffix,
             path=path,
             rel_path=rel,
-            state_key=f"workspace_{rel_suffix.replace('/', '_')}",
+            state_key=f"contextspace_{rel_suffix.replace('/', '_')}",
         )
 
     raise HTTPException(status_code=400, detail=f"invalid target: {target}")
@@ -166,12 +168,12 @@ def _build_file_chat_prompt(*, target: _Target, message: str, before: str) -> st
     if target.kind == "ticket":
         file_role_context = (
             f"{format_file_role_addendum('ticket', target.rel_path)}\n"
-            "Edits here change what the ticket flow agent will do; keep YAML "
+            "Edits here change what ticket flow agent will do; keep YAML "
             "frontmatter valid."
         )
-    elif target.kind == "workspace":
+    elif target.kind == "contextspace":
         file_role_context = (
-            f"{format_file_role_addendum('workspace', target.rel_path)}\n"
+            f"{format_file_role_addendum('contextspace', target.rel_path)}\n"
             "These docs act as shared memory across ticket turns."
         )
     else:
@@ -334,8 +336,8 @@ def build_file_chat_routes() -> APIRouter:
         repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, str(target_raw or ""))
 
-        # Ensure target directory exists for workspace docs (write on demand)
-        if target.kind == "workspace":
+        # Ensure target directory exists for contextspace docs (write on demand)
+        if target.kind == "contextspace":
             target.path.parent.mkdir(parents=True, exist_ok=True)
 
         # Concurrency guard per target

@@ -4,9 +4,9 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ..contextspace.paths import contextspace_doc_path
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats, run_git
-from ..workspace.paths import workspace_doc_path
 from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
@@ -1028,13 +1028,13 @@ class TicketRunner:
             ("decisions", "Decisions"),
             ("spec", "Spec"),
         ):
-            path = workspace_doc_path(self._workspace_root, key)
+            path = contextspace_doc_path(self._workspace_root, key)
             try:
                 if not path.exists():
                     continue
                 content = path.read_text(encoding="utf-8")
             except OSError as exc:
-                _logger.debug("workspace doc read failed for %s: %s", path, exc)
+                _logger.debug("contextspace doc read failed for %s: %s", path, exc)
                 continue
             snippet = (content or "").strip()
             if not snippet:
@@ -1048,7 +1048,7 @@ class TicketRunner:
             )
 
         if workspace_docs:
-            blocks = ["Workspace docs (truncated; skip if not relevant):"]
+            blocks = ["Contextspace docs (truncated; skip if not relevant):"]
             for label, rel, body in workspace_docs:
                 blocks.append(f"{label} [{rel}]:\n{body}")
             workspace_block = "\n\n".join(blocks)
@@ -1057,7 +1057,7 @@ class TicketRunner:
         if previous_ticket_content:
             prev_ticket_block = (
                 "PREVIOUS TICKET CONTEXT (truncated to 16KB; for reference only; do not edit):\n"
-                "Cross-ticket context should flow through workspace docs (active_context.md, decisions.md, spec.md) "
+                "Cross-ticket context should flow through contextspace docs (active_context.md, decisions.md, spec.md) "
                 "rather than implicit previous ticket content. This is included only for legacy compatibility.\n"
                 + previous_ticket_content
             )
@@ -1096,7 +1096,7 @@ class TicketRunner:
                 "- Set `done: true` in the ticket YAML frontmatter only when the ticket is truly complete.\n\n"
                 "CAR orientation (80/20):\n"
                 "- `.codex-autorunner/tickets/` is the queue that drives the flow (files named `TICKET-###*.md`, processed in numeric order).\n"
-                "- `.codex-autorunner/workspace/` holds durable context shared across ticket turns (especially `active_context.md` and `spec.md`).\n"
+                "- `.codex-autorunner/contextspace/` holds durable context shared across ticket turns (especially `active_context.md` and `spec.md`).\n"
                 "- `.codex-autorunner/ABOUT_CAR.md` is the repo-local briefing (what CAR auto-generates + helper scripts) if you need operational details.\n\n"
                 "Communicating with the user (optional):\n"
                 "- To send a message or request input, write to the dispatch directory:\n"
@@ -1119,7 +1119,7 @@ class TicketRunner:
                 "- If you need a standard ticket pattern, prefer: `car templates fetch <repo_id>:<path>[@<ref>]`\n"
                 "  - Trusted repos skip scanning; untrusted repos are scanned (cached by blob SHA).\n\n"
                 "Workspace docs:\n"
-                "- You may update or add context under `.codex-autorunner/workspace/` so future ticket turns have durable context.\n"
+                "- You may update or add context under `.codex-autorunner/contextspace/` so future ticket turns have durable context.\n"
                 "- Prefer referencing these docs instead of creating duplicate “shadow” docs elsewhere.\n\n"
                 "Repo hygiene:\n"
                 "- Do not add new `.codex-autorunner/` artifacts to git unless they are already tracked.\n"

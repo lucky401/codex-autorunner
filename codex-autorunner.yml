@@ -13,9 +13,9 @@ repo_defaults:
   docs:
     # Paths are relative to the repo root.
     # Note: Absolute paths and ~ expansion are NOT allowed for docs.*
-    active_context: .codex-autorunner/workspace/active_context.md
-    decisions: .codex-autorunner/workspace/decisions.md
-    spec: .codex-autorunner/workspace/spec.md
+    active_context: .codex-autorunner/contextspace/active_context.md
+    decisions: .codex-autorunner/contextspace/decisions.md
+    spec: .codex-autorunner/contextspace/spec.md
 
   codex:
     # Codex CLI binary to invoke.
@@ -65,7 +65,7 @@ repo_defaults:
     default_approval_decision: accept
     # Include previous ticket content in prompts (disabled by default to keep tickets isolated).
     # When enabled, previous ticket content is truncated to 16KB and clearly labeled.
-    # Prefer using workspace docs (active_context.md, decisions.md, spec.md) for cross-ticket context.
+    # Prefer using contextspace docs (active_context.md, decisions.md, spec.md) for cross-ticket context.
     include_previous_ticket_context: false
 
   git:
