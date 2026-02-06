@@ -13,6 +13,8 @@ _SCRIPT = """#!/usr/bin/env python3
 Commands:
   list                   Show ticket order with titles/done flags.
   lint                   Validate ticket filenames and frontmatter.
+  import-zip --zip PATH  Import TICKET-*.md files from a ZIP archive.
+                         Missing frontmatter can be auto-normalized.
   insert --before N      Shift tickets >= N up by COUNT (default 1).
   insert --after N       Shift tickets > N up by COUNT (default 1).
                          Optionally create a ticket in the new slot.
@@ -23,6 +25,8 @@ Commands:
 
 Examples:
   ticket_tool.py list
+  ticket_tool.py import-zip --zip tickets.zip
+  ticket_tool.py import-zip --zip tickets.zip --no-normalize
   ticket_tool.py insert --before 3
   ticket_tool.py create --title "Investigate flaky test" --at 3
   ticket_tool.py move --start 5 --end 7 --to 2
@@ -40,6 +44,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -229,6 +234,140 @@ def cmd_lint(ticket_dir: Path) -> int:
     return 0
 
 
+def _normalize_missing_frontmatter(
+    raw: str, *, filename: str, default_agent: str
+) -> str:
+    title = filename[:-3] if filename.lower().endswith(".md") else filename
+    body = raw.lstrip("\\n")
+    return (
+        f"---\\n"
+        f"agent: {_yaml_scalar(default_agent)}\\n"
+        f"done: false\\n"
+        f"title: {_yaml_scalar(title)}\\n"
+        f"---\\n\\n"
+        f"{body}"
+    )
+
+
+def _collect_zip_tickets(zip_path: Path) -> Tuple[List[tuple[str, str]], List[str]]:
+    entries: list[tuple[str, str]] = []
+    errors: list[str] = []
+    seen_names: set[str] = set()
+
+    if not zip_path.exists():
+        return [], [f"ZIP file not found: {zip_path}"]
+    if not zipfile.is_zipfile(zip_path):
+        return [], [f"Not a valid ZIP archive: {zip_path}"]
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for member in zf.infolist():
+                if member.is_dir():
+                    continue
+                filename = Path(member.filename).name
+                if filename == "AGENTS.md":
+                    continue
+                if not _TICKET_NAME_RE.match(filename):
+                    continue
+                if filename in seen_names:
+                    errors.append(
+                        f"Duplicate ticket filename in ZIP (possibly from different folders): {filename}"
+                    )
+                    continue
+                seen_names.add(filename)
+                try:
+                    raw = zf.read(member).decode("utf-8")
+                except UnicodeDecodeError:
+                    errors.append(f"{member.filename}: not valid UTF-8 text")
+                    continue
+                except OSError as exc:
+                    errors.append(f"{member.filename}: unable to read ({exc})")
+                    continue
+                entries.append((filename, raw))
+    except OSError as exc:
+        return [], [f"Unable to open ZIP archive {zip_path}: {exc}"]
+
+    entries.sort(key=lambda item: (_parse_index(item[0]) or 0, item[0]))
+    return entries, errors
+
+
+def cmd_import_zip(
+    ticket_dir: Path,
+    *,
+    zip_path: Path,
+    normalize: bool,
+    agent: str,
+) -> int:
+    existing_paths, existing_name_errors = _ticket_paths(ticket_dir)
+    if existing_paths:
+        sys.stderr.write(
+            "Tickets directory is not empty; refusing to import over existing tickets.\\n"
+        )
+        return 1
+    if existing_name_errors:
+        for msg in existing_name_errors:
+            sys.stderr.write(msg + "\\n")
+        return 1
+
+    entries, collect_errors = _collect_zip_tickets(zip_path)
+    if collect_errors:
+        for msg in collect_errors:
+            sys.stderr.write(msg + "\\n")
+        return 1
+    if not entries:
+        sys.stderr.write("No ticket files found in ZIP archive.\\n")
+        return 1
+
+    normalized_entries: list[tuple[str, str]] = []
+    errors: list[str] = []
+    for filename, raw in entries:
+        fm_yaml, fm_errors = _split_frontmatter(raw)
+        if fm_errors:
+            if not normalize:
+                errors.append(f"{filename}: {fm_errors[0]}")
+                continue
+            normalized_entries.append(
+                (
+                    filename,
+                    _normalize_missing_frontmatter(
+                        raw, filename=filename, default_agent=agent
+                    ),
+                )
+            )
+            continue
+        data, parse_errors = _parse_yaml(fm_yaml)
+        if parse_errors:
+            errors.append(f"{filename}: {parse_errors[0]}")
+            continue
+        lint_errors = _lint_frontmatter(data)
+        if lint_errors:
+            errors.append(
+                f"{filename}: invalid frontmatter ({'; '.join(lint_errors)})"
+            )
+            continue
+        normalized_entries.append((filename, raw))
+
+    if errors:
+        for msg in errors:
+            sys.stderr.write(msg + "\\n")
+        return 1
+
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    imported = 0
+    for filename, content in normalized_entries:
+        dest = ticket_dir / filename
+        if dest.exists():
+            sys.stderr.write(f"Refusing to overwrite existing ticket: {dest}\\n")
+            return 1
+        dest.write_text(content, encoding="utf-8")
+        imported += 1
+
+    sys.stdout.write(
+        f"Imported {imported} ticket(s) from {zip_path}.\\n"
+    )
+    return 0
+
+
 def _shift(ticket_dir: Path, start_idx: int, delta: int) -> None:
     if delta == 0:
         return
@@ -410,6 +549,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     sub.add_parser("list", help="List tickets in order")
     sub.add_parser("lint", help="Validate ticket filenames and frontmatter")
+    import_p = sub.add_parser(
+        "import-zip", help="Import TICKET-*.md files from a ZIP archive"
+    )
+    import_p.add_argument("--zip", required=True, help="Path to ZIP archive")
+    import_p.add_argument(
+        "--no-normalize",
+        action="store_true",
+        help="Fail when a ticket is missing frontmatter (default: normalize missing frontmatter).",
+    )
+    import_p.add_argument(
+        "--agent",
+        default="codex",
+        help="Default agent used when normalizing missing frontmatter (default: codex)",
+    )
 
     insert_p = sub.add_parser("insert", help="Insert gap by shifting tickets")
     insert_group = insert_p.add_mutually_exclusive_group(required=True)
@@ -451,6 +604,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return cmd_list(ticket_dir)
     if args.cmd == "lint":
         return cmd_lint(ticket_dir)
+    if args.cmd == "import-zip":
+        return cmd_import_zip(
+            ticket_dir,
+            zip_path=Path(args.zip),
+            normalize=not args.no_normalize,
+            agent=args.agent,
+        )
     if args.cmd == "insert":
         return cmd_insert(
             ticket_dir,

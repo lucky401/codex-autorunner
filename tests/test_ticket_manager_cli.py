@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 from codex_autorunner.core.ticket_manager_cli import MANAGER_REL_PATH
@@ -111,3 +112,39 @@ def test_insert_rejects_title_with_count_gt_one(repo: Path) -> None:
     res = _run(repo, "insert", "--before", "1", "--count", "2", "--title", "Nope")
     assert res.returncode != 0
     assert "--title is only supported with --count 1" in res.stderr
+
+
+def test_import_zip_normalizes_missing_frontmatter(repo: Path, tmp_path: Path) -> None:
+    zip_path = tmp_path / "tickets.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("TICKET-001.md", "## Goal\n- Import me\n")
+        zf.writestr(
+            "TICKET-002.md",
+            "---\nagent: codex\ndone: false\ntitle: Existing\n---\n\nBody\n",
+        )
+
+    res = _run(repo, "import-zip", "--zip", str(zip_path))
+    assert res.returncode == 0
+    assert "Imported 2 ticket(s)" in res.stdout
+
+    content = (repo / ".codex-autorunner" / "tickets" / "TICKET-001.md").read_text(
+        encoding="utf-8"
+    )
+    assert 'agent: "codex"' in content
+    assert "done: false" in content
+    assert 'title: "TICKET-001"' in content
+
+    lint = _run(repo, "lint")
+    assert lint.returncode == 0
+
+
+def test_import_zip_no_normalize_rejects_missing_frontmatter(
+    repo: Path, tmp_path: Path
+) -> None:
+    zip_path = tmp_path / "tickets.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("TICKET-001.md", "## Goal\n- Missing frontmatter\n")
+
+    res = _run(repo, "import-zip", "--zip", str(zip_path), "--no-normalize")
+    assert res.returncode != 0
+    assert "Missing YAML frontmatter" in res.stderr
