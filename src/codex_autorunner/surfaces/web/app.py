@@ -38,6 +38,10 @@ from ...core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
+from ...core.flows.failure_diagnostics import (
+    format_failure_summary,
+    get_failure_payload,
+)
 from ...core.flows.models import FlowRunStatus
 from ...core.flows.reconciler import reconcile_flow_runs
 from ...core.flows.store import FlowStore
@@ -1524,11 +1528,17 @@ def create_hub_app(
                 engine = engine if isinstance(engine, dict) else {}
                 current_step = engine.get("total_turns")
 
+                failure_payload = get_failure_payload(latest)
+                failure_summary = (
+                    format_failure_summary(failure_payload) if failure_payload else None
+                )
                 return {
                     "status": latest.status.value,
                     "done_count": done,
                     "total_count": total,
                     "current_step": current_step,
+                    "failure": failure_payload,
+                    "failure_summary": failure_summary,
                 }
         except Exception:
             return None
@@ -1912,6 +1922,12 @@ def create_hub_app(
                         continue
                     if _dismissal_key(str(record.id), seq) in dismissals:
                         continue
+                    failure_payload = get_failure_payload(record)
+                    failure_summary = (
+                        format_failure_summary(failure_payload)
+                        if failure_payload
+                        else None
+                    )
                     # Reconcile stale inbox items: if reply history already
                     # reached this dispatch seq, treat it as resolved.
                     if (
@@ -1923,6 +1939,8 @@ def create_hub_app(
                         continue
                     messages.append(
                         {
+                            "item_type": "run_dispatch",
+                            "next_action": "reply_and_resume",
                             "repo_id": snap.id,
                             "repo_display_name": snap.display_name,
                             "repo_path": str(snap.path),
@@ -1931,7 +1949,10 @@ def create_hub_app(
                             "status": record.status.value,
                             "seq": latest["seq"],
                             "dispatch": latest["dispatch"],
+                            "message": latest["dispatch"],
                             "files": latest.get("files") or [],
+                            "failure": failure_payload,
+                            "failure_summary": failure_summary,
                             "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
                         }
                     )

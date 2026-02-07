@@ -2539,6 +2539,25 @@ button.icon-btn {
   margin-bottom: 2px;
 }
 
+.ticket-card .ticket-panel-header .ticket-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ticket-card .ticket-panel-header .ticket-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ticket-card .ticket-panel-header .ticket-panel-actions button {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
 /* Ticket progress bar */
 .ticket-progress-bar {
   height: 3px;
@@ -10114,6 +10133,11 @@ button.loading::after {
   font-size: 13px;
 }
 
+.hub-inbox-next {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
 /* Inbox / Messages panel */
 #inbox.panel.active {
   display: flex;
@@ -10275,6 +10299,16 @@ button.loading::after {
   flex: 1;
   min-height: 0;
   position: relative;
+}
+
+.messages-failure-banner {
+  border: 1px solid rgba(232, 94, 92, 0.45);
+  background: rgba(232, 94, 92, 0.12);
+  color: #f3c1bf;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 11px;
+  margin-bottom: 12px;
 }
 
 .messages-thread-list.refreshing::after,
@@ -10732,6 +10766,10 @@ button.loading::after {
   align-items: center;
   gap: 6px;
   min-height: 20px;
+}
+
+.pma-files-hint {
+  margin-left: 2px;
 }
 
 .chat-files-label,
@@ -13956,6 +13994,11 @@ button.filebox-delete:hover {
 
 .notification-excerpt {
   font-size: 12px;
+  color: var(--muted);
+}
+
+.notification-next {
+  font-size: 11px;
   color: var(--muted);
 }
 
