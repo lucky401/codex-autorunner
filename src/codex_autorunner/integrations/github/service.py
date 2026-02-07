@@ -220,13 +220,13 @@ def _parse_repo_info(payload: dict) -> RepoInfo:
 
 
 ISSUE_URL_RE = re.compile(
-    r"^https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/issues/(?P<num>\d+)(?:[/?#].*)?$"
+    r"^https?://(?:www\.)?github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/issues/(?P<num>\d+)(?:[/?#?].*)?$"
 )
 PR_URL_RE = re.compile(
-    r"^https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<num>\d+)(?:[/?#].*)?$"
+    r"^https?://(?:www\.)?github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<num>\d+)(?:[/?#?].*)?$"
 )
 GITHUB_LINK_RE = re.compile(
-    r"https?://github\.com/[^/\s]+/[^/\s]+/(?:issues|pull)/\d+(?:[/?#][^\s]*)?"
+    r"https?://(?:www\.)?github\.com/[^/\s]+/[^/\s]+/(?:issues|pull)/\d+(?:[/?#?][^\s]*)?"
 )
 
 
