@@ -57,6 +57,8 @@ from ..schemas import (
     TicketBulkUpdateResponse,
     TicketCreateRequest,
     TicketDeleteResponse,
+    TicketReorderRequest,
+    TicketReorderResponse,
     TicketResponse,
     TicketUpdateRequest,
 )
@@ -100,6 +102,105 @@ def _find_ticket_path_by_index(ticket_dir: Path, index: int) -> Optional[Path]:
         if idx == index:
             return path
     return None
+
+
+_TICKET_NAME_RE = re.compile(r"^TICKET-(\d+)([^/]*)\.md$", re.IGNORECASE)
+
+
+def _ticket_suffix(path: Path) -> str:
+    match = _TICKET_NAME_RE.match(path.name)
+    if not match:
+        return ""
+    return match.group(2) or ""
+
+
+def _planned_ticket_renames(order: list[Path]) -> list[tuple[Path, Path]]:
+    if not order:
+        return []
+    existing_width = max(
+        3,
+        max(
+            (
+                len(m.group(1))
+                for m in (_TICKET_NAME_RE.match(path.name) for path in order)
+                if m is not None
+            ),
+            default=3,
+        ),
+    )
+    planned: list[tuple[Path, Path]] = []
+    for new_idx, original_path in enumerate(order, start=1):
+        suffix = _ticket_suffix(original_path)
+        target_name = f"TICKET-{new_idx:0{existing_width}d}{suffix}.md"
+        target_path = original_path.with_name(target_name)
+        planned.append((original_path, target_path))
+    return planned
+
+
+def _rename_ticket_order(order: list[Path]) -> None:
+    planned = _planned_ticket_renames(order)
+    if not planned:
+        return
+    staged: list[tuple[Path, Path]] = []
+    for original_path, _target_path in planned:
+        tmp = original_path.with_name(
+            f".tmp-reorder-{uuid.uuid4().hex}-{original_path.name}"
+        )
+        original_path.rename(tmp)
+        staged.append((tmp, _target_path))
+    for tmp_path, target_path in staged:
+        tmp_path.rename(target_path)
+
+
+def _sync_active_run_current_ticket_paths_after_reorder(
+    repo_root: Path, renamed_paths: list[tuple[Path, Path]]
+) -> None:
+    if not renamed_paths:
+        return
+    store = _require_flow_store(repo_root)
+    if store is None:
+        return
+    try:
+        records = store.list_flow_runs(flow_type="ticket_flow")
+        active = _active_or_paused_run(records)
+        if active is None or not isinstance(active.state, dict):
+            return
+        rel_map: dict[str, str] = {}
+        for old_path, new_path in renamed_paths:
+            rel_map[safe_relpath(old_path, repo_root)] = safe_relpath(
+                new_path, repo_root
+            )
+        next_state = dict(active.state)
+        changed = False
+
+        current_ticket = next_state.get("current_ticket")
+        if isinstance(current_ticket, str):
+            updated = rel_map.get(current_ticket)
+            if isinstance(updated, str) and updated != current_ticket:
+                next_state["current_ticket"] = updated
+                changed = True
+
+        ticket_engine = next_state.get("ticket_engine")
+        if isinstance(ticket_engine, dict):
+            next_ticket_engine = dict(ticket_engine)
+            current_ticket = next_ticket_engine.get("current_ticket")
+            if isinstance(current_ticket, str):
+                updated = rel_map.get(current_ticket)
+                if isinstance(updated, str) and updated != current_ticket:
+                    next_ticket_engine["current_ticket"] = updated
+                    next_state["ticket_engine"] = next_ticket_engine
+                    changed = True
+
+        if not changed:
+            return
+        store.update_flow_run_status(active.id, active.status, state=next_state)
+    except Exception as exc:
+        _logger.warning("Failed to sync current_ticket after reorder: %s", exc)
+    finally:
+        try:
+            store.close()
+        except Exception:
+            pass
 
 
 def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
@@ -1002,6 +1103,74 @@ You are the first ticket in a new ticket_flow run.
             status="deleted",
             index=index,
             path=rel_path,
+        )
+
+    @router.post("/ticket_flow/tickets/reorder", response_model=TicketReorderResponse)
+    async def reorder_ticket(request: TicketReorderRequest):
+        """Reorder one ticket relative to another ticket."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        ticket_paths = list_ticket_paths(ticket_dir)
+        indices = [parse_ticket_index(path.name) for path in ticket_paths]
+        ordered_indices = [idx for idx in indices if idx is not None]
+
+        source_index = request.source_index
+        destination_index = request.destination_index
+        place_after = bool(request.place_after)
+
+        if source_index == destination_index:
+            lint_errors = _lint_after_ticket_update(ticket_dir)
+            return TicketReorderResponse(
+                status="ok" if not lint_errors else "error",
+                source_index=source_index,
+                destination_index=destination_index,
+                place_after=place_after,
+                lint_errors=lint_errors,
+            )
+        if source_index not in ordered_indices:
+            raise HTTPException(
+                status_code=404, detail=f"Ticket {source_index:03d} not found"
+            )
+        if destination_index not in ordered_indices:
+            raise HTTPException(
+                status_code=404, detail=f"Ticket {destination_index:03d} not found"
+            )
+
+        source_pos = ordered_indices.index(source_index)
+        destination_pos = ordered_indices.index(destination_index)
+        desired_pos = destination_pos + (1 if place_after else 0)
+        if source_pos < desired_pos:
+            desired_pos -= 1
+        desired_pos = max(0, min(desired_pos, len(ticket_paths) - 1))
+
+        if desired_pos != source_pos:
+            source_path = ticket_paths[source_pos]
+            remaining_paths = [
+                path for idx, path in enumerate(ticket_paths) if idx != source_pos
+            ]
+            reordered_paths = (
+                remaining_paths[:desired_pos]
+                + [source_path]
+                + remaining_paths[desired_pos:]
+            )
+            renamed_paths = _planned_ticket_renames(reordered_paths)
+            try:
+                _rename_ticket_order(reordered_paths)
+                _sync_active_run_current_ticket_paths_after_reorder(
+                    repo_root, renamed_paths
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"Failed to reorder ticket: {exc}"
+                ) from exc
+
+        lint_errors = _lint_after_ticket_update(ticket_dir)
+        return TicketReorderResponse(
+            status="ok" if not lint_errors else "error",
+            source_index=source_index,
+            destination_index=destination_index,
+            place_after=place_after,
+            lint_errors=lint_errors,
         )
 
     @router.post(
