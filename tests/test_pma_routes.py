@@ -588,18 +588,41 @@ def test_pma_docs_get_nonexistent(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
     client = TestClient(app)
 
-    # Delete the doc in both new docs/ and legacy locations, then try to get it
+    # Delete the canonical doc, then try to get it
     pma_dir = hub_env.hub_root / ".codex-autorunner" / "pma"
     docs_agents_path = pma_dir / "docs" / "AGENTS.md"
-    legacy_agents_path = pma_dir / "AGENTS.md"
     if docs_agents_path.exists():
         docs_agents_path.unlink()
-    if legacy_agents_path.exists():
-        legacy_agents_path.unlink()
 
     resp = client.get("/hub/pma/docs/AGENTS.md")
     assert resp.status_code == 404
     assert "not found" in resp.json()["detail"].lower()
+
+
+def test_pma_docs_list_migrates_legacy_doc_into_canonical(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    pma_dir = hub_env.hub_root / ".codex-autorunner" / "pma"
+    docs_path = pma_dir / "docs" / "active_context.md"
+    legacy_path = pma_dir / "active_context.md"
+
+    docs_path.unlink(missing_ok=True)
+    legacy_content = "# Legacy copy\n\n- migrated\n"
+    legacy_path.write_text(legacy_content, encoding="utf-8")
+
+    resp = client.get("/hub/pma/docs")
+    assert resp.status_code == 200
+
+    assert docs_path.exists()
+    assert docs_path.read_text(encoding="utf-8") == legacy_content
+    assert not legacy_path.exists()
+
+    resp = client.get("/hub/pma/docs/active_context.md")
+    assert resp.status_code == 200
+    assert resp.json()["content"] == legacy_content
 
 
 def test_pma_docs_put(hub_env) -> None:
