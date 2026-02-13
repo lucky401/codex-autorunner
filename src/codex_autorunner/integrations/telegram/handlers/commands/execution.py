@@ -1651,6 +1651,9 @@ class ExecutionCommands(SharedHelpers):
                             )
                             if token_usage:
                                 if is_primary_session:
+                                    last_usage = token_usage.get("last")
+                                    if isinstance(last_usage, dict):
+                                        token_usage["total"] = dict(last_usage)
                                     if (
                                         "modelContextWindow" not in token_usage
                                         and not context_window_resolved
