@@ -40,7 +40,9 @@ class _StubSupervisor:
 
 
 @pytest.mark.asyncio
-async def test_model_catalog_uses_codex_agent_filter() -> None:
+async def test_model_catalog_uses_codex_agent_filter_and_normalizes_alias_name() -> (
+    None
+):
     client = _StubClient(
         response={
             "data": [
@@ -49,7 +51,11 @@ async def test_model_catalog_uses_codex_agent_filter() -> None:
                     "displayName": "GPT-5.3-Codex-Spark",
                     "supportedReasoningEfforts": ["low", "medium", "high"],
                     "defaultReasoningEffort": "medium",
-                }
+                },
+                {
+                    "id": "internal-preview-model",
+                    "displayName": "Internal Preview (Fast)",
+                },
             ]
         }
     )
@@ -59,7 +65,14 @@ async def test_model_catalog_uses_codex_agent_filter() -> None:
 
     assert client.calls == [{"agent": "codex"}]
     assert catalog.default_model == "gpt-5.3-codex-spark"
-    assert [model.id for model in catalog.models] == ["gpt-5.3-codex-spark"]
+    assert [model.id for model in catalog.models] == [
+        "gpt-5.3-codex-spark",
+        "internal-preview-model",
+    ]
+    assert [model.display_name for model in catalog.models] == [
+        "gpt-5.3-codex-spark",
+        "Internal Preview (Fast)",
+    ]
 
 
 @pytest.mark.asyncio
@@ -68,14 +81,7 @@ async def test_model_catalog_falls_back_when_agent_filter_is_unsupported(
     fail_code: int,
 ) -> None:
     client = _StubClient(
-        response={
-            "data": [
-                {
-                    "id": "gpt-5.3-codex-spark",
-                    "displayName": "GPT-5.3-Codex-Spark",
-                }
-            ]
-        },
+        response={"data": [{"id": "gpt-5.3-codex-spark"}]},
         fail_agent_request=True,
         fail_code=fail_code,
     )

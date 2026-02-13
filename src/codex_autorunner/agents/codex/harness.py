@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
@@ -74,6 +75,18 @@ def _coerce_reasoning_efforts(entry: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(efforts))
 
 
+def _normalize_model_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _select_display_name(model_id: str, display_name_raw: Any) -> str:
+    if not isinstance(display_name_raw, str) or not display_name_raw:
+        return model_id
+    if _normalize_model_name(display_name_raw) == _normalize_model_name(model_id):
+        return model_id
+    return display_name_raw
+
+
 class CodexHarness(AgentHarness):
     agent_id: AgentId = AgentId("codex")
     display_name = "Codex"
@@ -108,9 +121,9 @@ class CodexHarness(AgentHarness):
             model_id = entry.get("model") or entry.get("id")
             if not isinstance(model_id, str) or not model_id:
                 continue
-            display_name = entry.get("displayName") or entry.get("name") or model_id
-            if not isinstance(display_name, str) or not display_name:
-                display_name = model_id
+            display_name = _select_display_name(
+                model_id, entry.get("displayName") or entry.get("name")
+            )
             efforts = _coerce_reasoning_efforts(entry)
             models.append(
                 ModelSpec(
