@@ -89,7 +89,7 @@ class TicketRunConfig:
     max_network_retries: int = 5
     auto_commit: bool = True
     prompt_max_bytes: int = 5 * 1024 * 1024
-    checkpoint_message_template: str = "CAR checkpoint: run={run_id} turn={turn} agent={agent} ticket_code={ticket_code}"
+    checkpoint_message_template: Optional[str] = None
     include_previous_ticket_context: bool = False
     branch_template: Optional[str] = None
     bitbucket: Optional[BitbucketConfig] = None

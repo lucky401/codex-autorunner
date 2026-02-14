@@ -4322,9 +4322,15 @@ You are the first ticket in a new ticket_flow run.
     controller, agent_pool = _ticket_flow_controller(engine)
     try:
         run_id = str(uuid.uuid4())
+        ticket_flow_cfg = engine.config.ticket_flow or {}
         record = asyncio.run(
             controller.start_flow(
-                input_data={},
+                input_data={
+                    "branch_template": ticket_flow_cfg.get("branch_template"),
+                    "checkpoint_message_template": ticket_flow_cfg.get(
+                        "checkpoint_message_template"
+                    ),
+                },
                 run_id=run_id,
                 metadata={"seeded_ticket": seeded},
             )
