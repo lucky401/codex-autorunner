@@ -8,6 +8,17 @@ DEFAULT_MAX_TOTAL_TURNS = 50
 
 
 @dataclass(frozen=True)
+class BitbucketConfig:
+    """Configuration for Bitbucket PR integration."""
+
+    enabled: bool = False
+    access_token: Optional[str] = None
+    default_reviewers: list[str] = field(default_factory=list)
+    close_source_branch: bool = True
+    dest_branch: str = "main"
+
+
+@dataclass(frozen=True)
 class TicketFrontmatter:
     """Parsed, validated ticket frontmatter.
 
@@ -77,11 +88,11 @@ class TicketRunConfig:
     max_commit_retries: int = 2
     max_network_retries: int = 5
     auto_commit: bool = True
-    prompt_max_bytes: int = 5 * 1024 * 1024  # 5 MB default budget
-    checkpoint_message_template: str = (
-        "CAR checkpoint: run={run_id} turn={turn} agent={agent}"
-    )
+    prompt_max_bytes: int = 5 * 1024 * 1024
+    checkpoint_message_template: str = "CAR checkpoint: run={run_id} turn={turn} agent={agent} ticket_code={ticket_code}"
     include_previous_ticket_context: bool = False
+    branch_template: Optional[str] = None
+    bitbucket: Optional[BitbucketConfig] = None
 
 
 @dataclass(frozen=True)

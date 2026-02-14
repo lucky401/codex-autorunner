@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..contextspace.paths import contextspace_doc_path
+from ..integrations.bitbucket import BitbucketPRClient, PullRequestResult
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats, run_git
 from .agent_pool import AgentPool, AgentTurnRequest
@@ -458,6 +460,15 @@ class TicketRunner:
             )
 
         ticket_turns = int(state.get("ticket_turns") or 0)
+
+        # Create branch for new ticket if branch_template is configured
+        if ticket_turns == 0 and self._config.branch_template:
+            ticket_code = self._extract_ticket_code(
+                safe_relpath(current_path, self._workspace_root)
+            )
+            ticket_title = ticket_doc.frontmatter.title or ""
+            self._create_branch_for_ticket(ticket_code, ticket_title)
+
         reply_seq = int(state.get("reply_seq") or 0)
         reply_context, reply_max_seq = self._build_reply_context(
             reply_paths=reply_paths, last_seq=reply_seq
@@ -804,8 +815,10 @@ class TicketRunner:
             updated_fm and updated_fm.done and clean_after_agent is False
         )
         if self._config.auto_commit and not commit_pending and not commit_required_now:
+            current_ticket_id = safe_relpath(current_path, self._workspace_root)
+            ticket_code = self._extract_ticket_code(current_ticket_id)
             checkpoint_error = self._checkpoint_git(
-                turn=total_turns, agent=result.agent_id
+                turn=total_turns, agent=result.agent_id, ticket_code=ticket_code
             )
 
         # If we dispatched a pause message, pause regardless of ticket completion.
@@ -887,6 +900,18 @@ class TicketRunner:
 
             # Clean (or unknown) → commit satisfied (or no changes / cannot check).
             state.pop("commit", None)
+
+            # Create PR if Bitbucket integration is enabled
+            ticket_title = updated_fm.title or ""
+            ticket_body = ticket_doc.body if ticket_doc else ""
+            branch_name = self._get_current_branch()
+            if branch_name:
+                pr_result = self._create_pr_for_ticket(
+                    str(current_path), ticket_title, ticket_body, branch_name
+                )
+                if pr_result and pr_result.success and pr_result.pr_url:
+                    state["last_pr_url"] = pr_result.pr_url
+
             state.pop("current_ticket", None)
             state.pop("ticket_turns", None)
             state.pop("last_agent_output", None)
@@ -931,7 +956,199 @@ class TicketRunner:
         fm, errors = lint_ticket_frontmatter(data)
         return fm, errors
 
-    def _checkpoint_git(self, *, turn: int, agent: str) -> Optional[str]:
+    def _extract_ticket_code(self, ticket_path: Optional[str]) -> str:
+        """Extract ticket code from ticket path.
+
+        Args:
+            ticket_path: Relative path like ".codex-autorunner/tickets/TICKET-001.md"
+
+        Returns:
+            Ticket code like "TICKET-001" or empty string if not extractable.
+        """
+        if not ticket_path:
+            return ""
+        from pathlib import Path
+
+        stem = Path(ticket_path).stem
+        if stem and stem.upper().startswith("TICKET-"):
+            return stem
+        return ""
+
+    def _slugify(self, text: str) -> str:
+        """Convert text to a slug suitable for branch names.
+
+        Args:
+            text: Text to slugify (e.g., "Add ticket_code var")
+
+        Returns:
+            Slug like "add-ticket-code-var"
+        """
+        text = text.lower().strip()
+        text = re.sub(r"[^a-z0-9\s-]", "", text)
+        text = re.sub(r"[\s_]+", "-", text)
+        text = re.sub(r"-+", "-", text)
+        text = text.strip("-")
+        return text[:50]
+
+    def _create_branch_for_ticket(
+        self, ticket_path: str, ticket_title: str
+    ) -> Optional[str]:
+        """Create a git branch for the ticket using branch_template.
+
+        Args:
+            ticket_path: Relative path like ".codex-autorunner/tickets/TICKET-001.md"
+            ticket_title: Title from ticket frontmatter
+
+        Returns:
+            Branch name if created, None if skipped or failed.
+        """
+        if not self._config.branch_template:
+            return None
+
+        ticket_code = self._extract_ticket_code(ticket_path)
+        title_slug = self._slugify(ticket_title)
+
+        try:
+            branch_name = self._config.branch_template.format(
+                ticket_code=ticket_code,
+                title_slug=title_slug,
+            )
+        except KeyError as e:
+            _logger.warning(
+                "Invalid branch_template variable: %s. Available: ticket_code, title_slug",
+                e,
+            )
+            return None
+
+        try:
+            current_branch_proc = run_git(
+                ["branch", "--show-current"],
+                cwd=self._workspace_root,
+                check=True,
+            )
+            current_branch = (current_branch_proc.stdout or "").strip()
+
+            if current_branch == branch_name:
+                _logger.debug("Already on branch %s, skipping creation", branch_name)
+                return branch_name
+
+            branch_list_proc = run_git(
+                ["branch", "--list", branch_name],
+                cwd=self._workspace_root,
+                check=True,
+            )
+            existing_branch = (branch_list_proc.stdout or "").strip()
+
+            if existing_branch:
+                _logger.debug("Branch %s already exists, checking it out", branch_name)
+                run_git(
+                    ["checkout", branch_name],
+                    cwd=self._workspace_root,
+                    check=True,
+                )
+            else:
+                _logger.info("Creating new branch: %s", branch_name)
+                run_git(
+                    ["checkout", "-b", branch_name],
+                    cwd=self._workspace_root,
+                    check=True,
+                )
+
+            return branch_name
+        except Exception as exc:
+            _logger.exception("Failed to create branch for ticket: %s", exc)
+            return None
+
+    def _get_current_branch(self) -> Optional[str]:
+        """Get the current git branch name.
+
+        Returns:
+            Current branch name or None if unable to determine.
+        """
+        try:
+            result = run_git(
+                ["branch", "--show-current"],
+                cwd=self._workspace_root,
+                check=True,
+            )
+            return (result.stdout or "").strip() or None
+        except Exception as exc:
+            _logger.warning("Failed to get current branch: %s", exc)
+            return None
+
+    def _create_pr_for_ticket(
+        self,
+        ticket_path: str,
+        ticket_title: str,
+        ticket_body: str,
+        branch_name: str,
+    ) -> Optional[PullRequestResult]:
+        """Create a Bitbucket PR for the completed ticket.
+
+        Args:
+            ticket_path: Relative path like ".codex-autorunner/tickets/TICKET-001.md"
+            ticket_title: Title from ticket frontmatter
+            ticket_body: Ticket body/description
+            branch_name: Current branch name (source for PR)
+
+        Returns:
+            PullRequestResult if Bitbucket is enabled, None otherwise.
+        """
+        bb_config = self._config.bitbucket
+        if not bb_config or not bb_config.enabled:
+            return None
+
+        if not bb_config.access_token:
+            _logger.warning(
+                "Bitbucket PR creation enabled but no access_token configured"
+            )
+            return None
+
+        try:
+            remote_proc = run_git(
+                ["remote", "get-url", "origin"],
+                cwd=self._workspace_root,
+                check=True,
+            )
+            git_url = (remote_proc.stdout or "").strip()
+        except Exception as exc:
+            _logger.warning("Failed to get git remote URL: %s", exc)
+            return None
+
+        if "bitbucket.org" not in git_url:
+            _logger.debug("Remote is not Bitbucket, skipping PR creation")
+            return None
+
+        ticket_code = self._extract_ticket_code(ticket_path)
+
+        pr_title = f"[{ticket_code}] {ticket_title}"
+        pr_description = f"## {ticket_title}\n\n{ticket_body}"
+
+        try:
+            with BitbucketPRClient() as client:
+                result: PullRequestResult = client.create_pull_request_from_git_url(
+                    git_url=git_url,
+                    title=pr_title,
+                    description=pr_description,
+                    source_branch=branch_name,
+                    dest_branch=bb_config.dest_branch,
+                    reviewers=bb_config.default_reviewers,
+                    close_source_branch=bb_config.close_source_branch,
+                )
+
+            if result.success:
+                _logger.info("Created Bitbucket PR: %s", result.pr_url)
+            else:
+                _logger.warning("Failed to create PR: %s", result.error)
+            return result
+
+        except Exception as exc:
+            _logger.exception("Error creating Bitbucket PR: %s", exc)
+            return PullRequestResult(success=False, error=str(exc))
+
+    def _checkpoint_git(
+        self, *, turn: int, agent: str, ticket_code: str = ""
+    ) -> Optional[str]:
         """Create a best-effort git commit checkpoint.
 
         Returns an error string if the checkpoint failed, else None.
@@ -948,6 +1165,7 @@ class TicketRunner:
                 run_id=self._run_id,
                 turn=turn,
                 agent=agent,
+                ticket_code=ticket_code,
             )
             run_git(["commit", "-m", msg], cwd=self._workspace_root, check=True)
             return None
