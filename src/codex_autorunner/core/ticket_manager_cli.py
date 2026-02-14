@@ -49,7 +49,16 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
-_TICKET_NAME_RE = re.compile(r"^TICKET-(\\d{3,})([^/]*)\\.md$", re.IGNORECASE)
+_DEFAULT_TICKET_PREFIX = "TICKET"
+
+def _make_ticket_name_re(prefix: str):
+    'Create regex for ticket names with given prefix.'
+    escaped = re.escape(prefix.upper())
+    return re.compile(rf"^{escaped}-(\d{{3,}})([^/]*)\.md$", re.IGNORECASE)
+
+_ticket_prefix = os.environ.get("CAR_TICKET_PREFIX", _DEFAULT_TICKET_PREFIX)
+_TICKET_NAME_RE = _make_ticket_name_re(_ticket_prefix)
+
 
 
 @dataclass
@@ -76,7 +85,7 @@ def _ticket_paths(ticket_dir: Path) -> Tuple[List[Path], List[str]]:
         m = _TICKET_NAME_RE.match(path.name)
         if not m:
             errors.append(
-                f"{path}: Invalid ticket filename; expected TICKET-<number>[suffix].md"
+                f"{path}: Invalid ticket filename; expected " + _ticket_prefix + "-<number>[suffix].md"
             )
             continue
         try:
@@ -178,7 +187,7 @@ def _pad_width(indices: Sequence[int]) -> int:
 
 
 def _fmt_name(index: int, suffix: str, width: int) -> str:
-    return f"TICKET-{index:0{width}d}{suffix}.md"
+    return f"{_ticket_prefix}-{index:0{width}d}{suffix}.md"
 
 
 def _safe_renames(mapping: Sequence[tuple[Path, Path]]) -> None:

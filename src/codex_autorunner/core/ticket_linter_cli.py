@@ -36,7 +36,16 @@ _SCRIPT = dedent(
         sys.exit(2)
 
 
-    _TICKET_NAME_RE = re.compile(r"^TICKET-(\\d{3,})(?:[^/]*)\\.md$", re.IGNORECASE)
+_DEFAULT_TICKET_PREFIX = "TICKET"
+
+def _make_ticket_name_re(prefix: str):
+    'Create regex for ticket names with given prefix.'
+    escaped = re.escape(prefix.upper())
+    return re.compile(rf"^{escaped}-(\d{{3,}})(?:[^/]*)\.md$", re.IGNORECASE)
+
+_ticket_prefix = os.environ.get("CAR_TICKET_PREFIX", _DEFAULT_TICKET_PREFIX)
+_TICKET_NAME_RE = _make_ticket_name_re(_ticket_prefix)
+
 
 
     def _ticket_paths(tickets_dir: Path) -> Tuple[List[Path], List[str]]:
@@ -53,7 +62,7 @@ _SCRIPT = dedent(
             match = _TICKET_NAME_RE.match(path.name)
             if not match:
                 errors.append(
-                    f\"{path}: Invalid ticket filename; expected TICKET-<number>[suffix].md (e.g. TICKET-001-foo.md)\"
+                    f\"{path}: Invalid ticket filename; expected " + _ticket_prefix + "-<number>[suffix].md (e.g. " + _ticket_prefix + "-001-foo.md)\"
                 )
                 continue
             try:

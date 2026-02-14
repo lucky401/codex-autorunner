@@ -1,5 +1,6 @@
 """Bitbucket API client."""
 
+import base64
 import os
 from typing import Any, Optional
 
@@ -11,25 +12,42 @@ class BitbucketClient:
 
     API_BASE = "https://api.bitbucket.org/2.0"
 
-    def __init__(self, access_token: Optional[str] = None):
+    def __init__(
+        self,
+        access_token: Optional[str] = None,
+        user_email: Optional[str] = None,
+    ):
         """
         Initialize Bitbucket client.
 
         Args:
-            access_token: Bitbucket access token. If not provided, will look for
+            access_token: Bitbucket API token. If not provided, will look for
                           BITBUCKET_ACCESS_TOKEN environment variable.
+            user_email: Atlassian account email for Basic auth. If not provided,
+                        will look for BITBUCKET_USER_EMAIL environment variable.
         """
         self.access_token = access_token or os.environ.get("BITBUCKET_ACCESS_TOKEN")
+        self.user_email = user_email or os.environ.get("BITBUCKET_USER_EMAIL")
+
         if not self.access_token:
             raise ValueError(
                 "Bitbucket access token required. Set BITBUCKET_ACCESS_TOKEN "
                 "environment variable or pass access_token parameter."
             )
 
+        # Atlassian API tokens require Basic auth with email:token
+        if self.user_email:
+            credentials = f"{self.user_email}:{self.access_token}"
+            encoded = base64.b64encode(credentials.encode()).decode()
+            auth_header = f"Basic {encoded}"
+        else:
+            # Fallback to Bearer for repository access tokens
+            auth_header = f"Bearer {self.access_token}"
+
         self.client = httpx.Client(
             base_url=self.API_BASE,
             headers={
-                "Authorization": f"Bearer {self.access_token}",
+                "Authorization": auth_header,
                 "Content-Type": "application/json",
             },
             timeout=30.0,

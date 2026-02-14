@@ -254,9 +254,7 @@ def _fetch_template_with_scan(template: str, ctx: RuntimeContext, hub: Optional[
         hub_root = hub_config_path.parent.parent.resolve()
 
     try:
-        fetched = fetch_template(
-            repo=repo_cfg, hub_root=hub_root, template_ref=template
-        )
+        fetched = fetch_template(repo=repo_cfg, hub_root=hub_root, template_ref=template)
     except NetworkUnavailableError as exc:
         _raise_exit(
             f"{str(exc)}\n"
@@ -277,9 +275,7 @@ def _fetch_template_with_scan(template: str, ctx: RuntimeContext, hub: Optional[
             scan_record = get_scan_record(hub_root, fetched.blob_sha)
             if scan_record is None:
                 try:
-                    scan_record = asyncio.run(
-                        run_template_scan(ctx=ctx, template=fetched)
-                    )
+                    scan_record = asyncio.run(run_template_scan(ctx=ctx, template=fetched))
                 except TemplateScanRejectedError as exc:
                     _raise_exit(str(exc), cause=exc)
                 except TemplateScanError as exc:
@@ -354,9 +350,7 @@ def _apply_agent_override(content: str, agent: str) -> str:
     return f"---\n{rendered}\n---{body}"
 
 
-def _build_server_url(
-    config, path: str, *, base_path_override: Optional[str] = None
-) -> str:
+def _build_server_url(config, path: str, *, base_path_override: Optional[str] = None) -> str:
     base_path = (
         _normalize_base_path(base_path_override)
         if base_path_override is not None
@@ -367,9 +361,7 @@ def _build_server_url(
     return f"http://{config.server_host}:{config.server_port}{base_path}{path}"
 
 
-def _resolve_hub_config_path_for_cli(
-    repo_root: Path, hub: Optional[Path]
-) -> Optional[Path]:
+def _resolve_hub_config_path_for_cli(repo_root: Path, hub: Optional[Path]) -> Optional[Path]:
     if hub:
         candidate = hub
         if candidate.is_dir():
@@ -518,9 +510,7 @@ def _enforce_bind_auth(host: str, token_env: str) -> None:
         return
     if _resolve_auth_token(token_env):
         return
-    _raise_exit(
-        "Refusing to bind to a non-loopback host without server.auth_token_env set."
-    )
+    _raise_exit("Refusing to bind to a non-loopback host without server.auth_token_env set.")
 
 
 def _request_json(
@@ -641,9 +631,7 @@ def _parse_duration(value: str) -> timedelta:
         _raise_exit("Duration must not be empty.")
     matches = list(_DURATION_PART_RE.finditer(raw))
     if not matches or "".join(m.group(0) for m in matches) != raw:
-        _raise_exit(
-            f"Invalid duration {value!r}. Use forms like 30m, 2h, 7d, or combined 1h30m."
-        )
+        _raise_exit(f"Invalid duration {value!r}. Use forms like 30m, 2h, 7d, or combined 1h30m.")
     total_seconds = 0
     multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
     for match in matches:
@@ -698,11 +686,7 @@ def _find_hub_server_process(port: Optional[int]) -> Optional[dict[str, Any]]:
 
     for candidate in candidates:
         command = str(candidate.get("command") or "")
-        if (
-            f"--port {port}" in command
-            or f"--port={port}" in command
-            or f":{port}" in command
-        ):
+        if f"--port {port}" in command or f"--port={port}" in command or f":{port}" in command:
             return candidate
 
     # Some common startup paths rely on config defaults and do not pass --port
@@ -892,9 +876,7 @@ def init(
             except GitError as exc:
                 _raise_exit(f"git init failed: {exc}")
             if proc.returncode != 0:
-                detail = (
-                    proc.stderr or proc.stdout or ""
-                ).strip() or f"exit {proc.returncode}"
+                detail = (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
                 _raise_exit(f"git init failed: {detail}")
         else:
             _raise_exit("No .git directory found; rerun with --git-init to create one")
@@ -933,19 +915,13 @@ def status(
     )
     opencode_session_id = state.repo_to_session.get(f"{repo_key}:opencode")
     session_record = state.sessions.get(session_id) if session_id else None
-    opencode_record = (
-        state.sessions.get(opencode_session_id) if opencode_session_id else None
-    )
+    opencode_record = state.sessions.get(opencode_session_id) if opencode_session_id else None
 
     if output_json:
         hub_config_path = _resolve_hub_config_path_for_cli(engine.repo_root, hub)
         payload = {
             "repo": str(engine.repo_root),
-            "hub": (
-                str(hub_config_path.parent.parent.resolve())
-                if hub_config_path
-                else None
-            ),
+            "hub": (str(hub_config_path.parent.parent.resolve()) if hub_config_path else None),
             "status": state.status,
             "last_run_id": state.last_run_id,
             "last_exit_code": state.last_exit_code,
@@ -1003,12 +979,8 @@ def status(
 
 @templates_app.command("fetch")
 def templates_fetch(
-    template: str = typer.Argument(
-        ..., help="Template ref formatted as REPO_ID:PATH[@REF]"
-    ),
-    out: Optional[Path] = typer.Option(
-        None, "--out", help="Write template content to a file"
-    ),
+    template: str = typer.Argument(..., help="Template ref formatted as REPO_ID:PATH[@REF]"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Write template content to a file"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
@@ -1043,9 +1015,7 @@ def templates_fetch(
 
 @templates_app.command("apply")
 def templates_apply(
-    template: str = typer.Argument(
-        ..., help="Template ref formatted as REPO_ID:PATH[@REF]"
-    ),
+    template: str = typer.Argument(..., help="Template ref formatted as REPO_ID:PATH[@REF]"),
     ticket_dir: Optional[Path] = typer.Option(
         None,
         "--ticket-dir",
@@ -1058,9 +1028,7 @@ def templates_apply(
     suffix: Optional[str] = typer.Option(
         None, "--suffix", help="Optional filename suffix (e.g. -foo)"
     ),
-    set_agent: Optional[str] = typer.Option(
-        None, "--set-agent", help="Override frontmatter agent"
-    ),
+    set_agent: Optional[str] = typer.Option(None, "--set-agent", help="Override frontmatter agent"),
     provenance: bool = typer.Option(
         False,
         "--provenance/--no-provenance",
@@ -1094,9 +1062,7 @@ def templates_apply(
     else:
         index = at
         if index in existing_indices:
-            _raise_exit(
-                f"Ticket index {index} already exists. Choose another index or open a gap."
-            )
+            _raise_exit(f"Ticket index {index} already exists. Choose another index or open a gap.")
 
     normalized_suffix = _normalize_ticket_suffix(suffix)
     width = max(3, max([len(str(i)) for i in existing_indices + [index]]))
@@ -1285,9 +1251,7 @@ def sessions(
         httpx.TimeoutException,
         OSError,
     ) as exc:
-        logger.debug(
-            "Failed to fetch sessions from server, falling back to state: %s", exc
-        )
+        logger.debug("Failed to fetch sessions from server, falling back to state: %s", exc)
         state = load_state(engine.state_path)
         payload = {
             "sessions": [
@@ -1331,9 +1295,7 @@ def sessions(
 def stop_session(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    session_id: Optional[str] = typer.Option(
-        None, "--session", help="Session id to stop"
-    ),
+    session_id: Optional[str] = typer.Option(None, "--session", help="Session id to stop"),
 ):
     """Stop a terminal session by id or repo path."""
     engine = _require_repo_config(repo, hub)
@@ -1347,9 +1309,7 @@ def stop_session(
     path = _resolve_repo_api_path(engine.repo_root, hub, "/api/sessions/stop")
     url = _build_server_url(config, path)
     try:
-        response = _request_json(
-            "POST", url, payload, token_env=config.server_auth_token_env
-        )
+        response = _request_json("POST", url, payload, token_env=config.server_auth_token_env)
         stopped_id = response.get("session_id", payload.get("session_id", ""))
         typer.echo(f"Stopped session {stopped_id}")
         return
@@ -1359,9 +1319,7 @@ def stop_session(
         httpx.TimeoutException,
         OSError,
     ) as exc:
-        logger.debug(
-            "Failed to stop session via server, falling back to state: %s", exc
-        )
+        logger.debug("Failed to stop session via server, falling back to state: %s", exc)
 
     with state_lock(engine.state_path):
         state = load_state(engine.state_path)
@@ -1378,9 +1336,7 @@ def stop_session(
             _raise_exit("Session not found (server unavailable)")
         state.sessions.pop(target_id, None)
         state.repo_to_session = {
-            repo_key: sid
-            for repo_key, sid in state.repo_to_session.items()
-            if sid != target_id
+            repo_key: sid for repo_key, sid in state.repo_to_session.items() if sid != target_id
         }
         save_state(engine.state_path, state)
     typer.echo(f"Stopped session {target_id} (state only)")
@@ -1388,9 +1344,7 @@ def stop_session(
 
 @app.command()
 def usage(
-    repo: Optional[Path] = typer.Option(
-        None, "--repo", help="Repo or hub path; defaults to CWD"
-    ),
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo or hub path; defaults to CWD"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     codex_home: Optional[Path] = typer.Option(
         None, "--codex-home", help="Override CODEX_HOME (defaults to env or ~/.codex)"
@@ -1400,9 +1354,7 @@ def usage(
         "--since",
         help="ISO timestamp filter, e.g. 2025-12-01 or 2025-12-01T12:00Z",
     ),
-    until: Optional[str] = typer.Option(
-        None, "--until", help="Upper bound ISO timestamp filter"
-    ),
+    until: Optional[str] = typer.Option(None, "--until", help="Upper bound ISO timestamp filter"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
 ):
     """Show Codex/OpenCode token usage for a repo or hub by reading local session logs."""
@@ -1442,9 +1394,7 @@ def usage(
                 "codex_home": str(codex_root),
                 "since": since,
                 "until": until,
-                "repos": {
-                    repo_id: summary.to_dict() for repo_id, summary in per_repo.items()
-                },
+                "repos": {repo_id: summary.to_dict() for repo_id, summary in per_repo.items()},
                 "unmatched": unmatched.to_dict(),
             }
             typer.echo(json.dumps(payload, indent=2))
@@ -1639,9 +1589,7 @@ def doctor_cmd(
         except RepoNotFoundError:
             repo_config = None
 
-        telegram_checks = telegram_doctor_checks(
-            repo_config or hub_config, repo_root=repo_root
-        )
+        telegram_checks = telegram_doctor_checks(repo_config or hub_config, repo_root=repo_root)
         pma_checks = pma_doctor_checks(hub_config, repo_root=repo_root)
         hub_worktree_checks = hub_worktree_doctor_checks(hub_config)
 
@@ -1740,9 +1688,7 @@ def serve(
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
     host: Optional[str] = typer.Option(None, "--host", help="Host to bind"),
     port: Optional[int] = typer.Option(None, "--port", help="Port to bind"),
-    base_path: Optional[str] = typer.Option(
-        None, "--base-path", help="Base path for the server"
-    ),
+    base_path: Optional[str] = typer.Option(None, "--base-path", help="Base path for the server"),
 ):
     """Start the hub web server and UI API."""
     try:
@@ -1752,9 +1698,7 @@ def serve(
     bind_host = host or config.server_host
     bind_port = port or config.server_port
     normalized_base = (
-        _normalize_base_path(base_path)
-        if base_path is not None
-        else config.server_base_path
+        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
     )
     _enforce_bind_auth(bind_host, config.server_auth_token_env)
     typer.echo(f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}")
@@ -1794,9 +1738,7 @@ def hub_create(
         agent_id_validator=validate_agent_id,
     )
     try:
-        snapshot = supervisor.create_repo(
-            repo_id, repo_path, git_init=git_init, force=force
-        )
+        snapshot = supervisor.create_repo(repo_id, repo_path, git_init=git_init, force=force)
     except Exception as exc:
         _raise_exit(str(exc), cause=exc)
     typer.echo(f"Created repo {snapshot.id} at {snapshot.path}")
@@ -1804,9 +1746,7 @@ def hub_create(
 
 @hub_app.command("clone")
 def hub_clone(
-    git_url: str = typer.Option(
-        ..., "--git-url", help="Git URL or local path to clone"
-    ),
+    git_url: str = typer.Option(..., "--git-url", help="Git URL or local path to clone"),
     repo_id: Optional[str] = typer.Option(
         None, "--id", help="Repo id to register (defaults from git URL)"
     ),
@@ -1832,9 +1772,7 @@ def hub_clone(
         )
     except Exception as exc:
         _raise_exit(str(exc), cause=exc)
-    typer.echo(
-        f"Cloned repo {snapshot.id} at {snapshot.path} (status={snapshot.status.value})"
-    )
+    typer.echo(f"Cloned repo {snapshot.id} at {snapshot.path} (status={snapshot.status.value})")
 
 
 def _worktree_snapshot_payload(snapshot) -> dict:
@@ -1879,9 +1817,7 @@ def hub_worktree_create(
         )
     except Exception as exc:
         _raise_exit(str(exc), cause=exc)
-    typer.echo(
-        f"Created worktree {snapshot.id} (branch={snapshot.branch}) at {snapshot.path}"
-    )
+    typer.echo(f"Created worktree {snapshot.id} (branch={snapshot.branch}) at {snapshot.path}")
 
 
 @worktree_app.command("list")
@@ -1952,15 +1888,9 @@ def hub_worktree_scan(
 def hub_worktree_cleanup(
     worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to remove"),
     hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
-    delete_branch: bool = typer.Option(
-        False, "--delete-branch", help="Delete the local branch"
-    ),
-    delete_remote: bool = typer.Option(
-        False, "--delete-remote", help="Delete the remote branch"
-    ),
-    archive: bool = typer.Option(
-        True, "--archive/--no-archive", help="Archive worktree snapshot"
-    ),
+    delete_branch: bool = typer.Option(False, "--delete-branch", help="Delete the local branch"),
+    delete_remote: bool = typer.Option(False, "--delete-remote", help="Delete the remote branch"),
+    archive: bool = typer.Option(True, "--archive/--no-archive", help="Archive worktree snapshot"),
     force_archive: bool = typer.Option(
         False, "--force-archive", help="Continue cleanup if archive fails"
     ),
@@ -1995,12 +1925,8 @@ def hub_worktree_cleanup(
 def hub_worktree_archive(
     worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to archive"),
     hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
-    delete_branch: bool = typer.Option(
-        False, "--delete-branch", help="Delete the local branch"
-    ),
-    delete_remote: bool = typer.Option(
-        False, "--delete-remote", help="Delete the remote branch"
-    ),
+    delete_branch: bool = typer.Option(False, "--delete-branch", help="Delete the local branch"),
+    delete_remote: bool = typer.Option(False, "--delete-remote", help="Delete the remote branch"),
     force_archive: bool = typer.Option(
         False, "--force-archive", help="Continue cleanup if archive fails"
     ),
@@ -2036,16 +1962,12 @@ def hub_serve(
     path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
     host: Optional[str] = typer.Option(None, "--host", help="Host to bind"),
     port: Optional[int] = typer.Option(None, "--port", help="Port to bind"),
-    base_path: Optional[str] = typer.Option(
-        None, "--base-path", help="Base path for the server"
-    ),
+    base_path: Optional[str] = typer.Option(None, "--base-path", help="Base path for the server"),
 ):
     """Start the hub supervisor server."""
     config = _require_hub_config(path)
     normalized_base = (
-        _normalize_base_path(base_path)
-        if base_path is not None
-        else config.server_base_path
+        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
     )
     bind_host = host or config.server_host
     bind_port = port or config.server_port
@@ -2092,14 +2014,10 @@ def hub_snapshot(
     """Return a compact hub snapshot (repos + inbox items)."""
     config = _require_hub_config(path)
     repos_url = _build_server_url(config, "/hub/repos", base_path_override=base_path)
-    messages_url = _build_server_url(
-        config, "/hub/messages?limit=50", base_path_override=base_path
-    )
+    messages_url = _build_server_url(config, "/hub/messages?limit=50", base_path_override=base_path)
 
     try:
-        repos_response = _request_json(
-            "GET", repos_url, token_env=config.server_auth_token_env
-        )
+        repos_response = _request_json("GET", repos_url, token_env=config.server_auth_token_env)
         messages_response = _request_json(
             "GET", messages_url, token_env=config.server_auth_token_env
         )
@@ -2122,27 +2040,19 @@ def hub_snapshot(
     messages_payload = messages_response if isinstance(messages_response, dict) else {}
 
     repos = repos_payload.get("repos", []) if isinstance(repos_payload, dict) else []
-    messages_items = (
-        messages_payload.get("items", []) if isinstance(messages_payload, dict) else []
-    )
+    messages_items = messages_payload.get("items", []) if isinstance(messages_payload, dict) else []
 
     def _summarize_repo(repo: dict) -> dict:
         if not isinstance(repo, dict):
             return {}
-        ticket_flow = (
-            repo.get("ticket_flow") if isinstance(repo.get("ticket_flow"), dict) else {}
-        )
+        ticket_flow = repo.get("ticket_flow") if isinstance(repo.get("ticket_flow"), dict) else {}
         failure = ticket_flow.get("failure") if isinstance(ticket_flow, dict) else None
         failure_summary = (
-            ticket_flow.get("failure_summary")
-            if isinstance(ticket_flow, dict)
-            else None
+            ticket_flow.get("failure_summary") if isinstance(ticket_flow, dict) else None
         )
         pr_url = ticket_flow.get("pr_url") if isinstance(ticket_flow, dict) else None
         final_review_status = (
-            ticket_flow.get("final_review_status")
-            if isinstance(ticket_flow, dict)
-            else None
+            ticket_flow.get("final_review_status") if isinstance(ticket_flow, dict) else None
         )
         run_state = repo.get("run_state")
         if not isinstance(run_state, dict):
@@ -2196,9 +2106,7 @@ def hub_snapshot(
                 "body": truncated_body,
                 "is_handoff": dispatch.get("is_handoff"),
             },
-            "files_count": (
-                len(msg.get("files", [])) if isinstance(msg.get("files"), list) else 0
-            ),
+            "files_count": (len(msg.get("files", [])) if isinstance(msg.get("files"), list) else 0),
             "reason": msg.get("reason"),
             "run_state": {
                 "state": run_state.get("state"),
@@ -2211,9 +2119,7 @@ def hub_snapshot(
 
     snapshot = {
         "last_scan_at": (
-            repos_payload.get("last_scan_at")
-            if isinstance(repos_payload, dict)
-            else None
+            repos_payload.get("last_scan_at") if isinstance(repos_payload, dict) else None
         ),
         "repos": [_summarize_repo(repo) for repo in repos],
         "inbox_items": [_summarize_message(msg) for msg in messages_items],
@@ -2226,9 +2132,7 @@ def hub_snapshot(
         for repo in snapshot["repos"]:
             pr_url = repo.get("pr_url")
             final_review_status = repo.get("final_review_status")
-            run_state = (
-                repo.get("run_state") if isinstance(repo.get("run_state"), dict) else {}
-            )
+            run_state = repo.get("run_state") if isinstance(repo.get("run_state"), dict) else {}
             typer.echo(
                 f"- {repo.get('id')}: status={repo.get('status')}, "
                 f"initialized={repo.get('initialized')}, exists={repo.get('exists_on_disk')}, "
@@ -2238,13 +2142,9 @@ def hub_snapshot(
             if run_state.get("blocking_reason"):
                 typer.echo(f"  blocking_reason: {run_state.get('blocking_reason')}")
             if run_state.get("recommended_action"):
-                typer.echo(
-                    f"  recommended_action: {run_state.get('recommended_action')}"
-                )
+                typer.echo(f"  recommended_action: {run_state.get('recommended_action')}")
         for msg in snapshot["inbox_items"]:
-            run_state = (
-                msg.get("run_state") if isinstance(msg.get("run_state"), dict) else {}
-            )
+            run_state = msg.get("run_state") if isinstance(msg.get("run_state"), dict) else {}
             typer.echo(
                 f"- Inbox: repo={msg.get('repo_id')}, run_id={msg.get('run_id')}, "
                 f"title={msg.get('dispatch', {}).get('title')}, state={run_state.get('state')}"
@@ -2252,9 +2152,7 @@ def hub_snapshot(
             if run_state.get("blocking_reason"):
                 typer.echo(f"  blocking_reason: {run_state.get('blocking_reason')}")
             if run_state.get("recommended_action"):
-                typer.echo(
-                    f"  recommended_action: {run_state.get('recommended_action')}"
-                )
+                typer.echo(f"  recommended_action: {run_state.get('recommended_action')}")
         return
 
     indent = 2 if pretty else None
@@ -2323,9 +2221,7 @@ def hub_inbox_resolve(
     if reason:
         payload["reason"] = reason
 
-    resolve_url = _build_server_url(
-        config, "/hub/messages/resolve", base_path_override=base_path
-    )
+    resolve_url = _build_server_url(config, "/hub/messages/resolve", base_path_override=base_path)
     try:
         resolved = _request_json(
             "POST",
@@ -2344,9 +2240,7 @@ def hub_inbox_resolve(
     if output_json:
         typer.echo(json.dumps(resolved, indent=2 if pretty else None))
         return
-    resolved_payload = (
-        resolved.get("resolved", {}) if isinstance(resolved, dict) else {}
-    )
+    resolved_payload = resolved.get("resolved", {}) if isinstance(resolved, dict) else {}
     typer.echo(
         "Resolved inbox item: "
         f"repo={resolved_payload.get('repo_id')} run={resolved_payload.get('run_id')} "
@@ -2356,9 +2250,7 @@ def hub_inbox_resolve(
 
 @inbox_app.command("clear")
 def hub_inbox_clear(
-    stale: bool = typer.Option(
-        False, "--stale", help="Clear stale non-dispatch attention items"
-    ),
+    stale: bool = typer.Option(False, "--stale", help="Clear stale non-dispatch attention items"),
     repo_id: Optional[str] = typer.Option(None, "--repo-id", help="Hub repo id"),
     run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run id"),
     seq: Optional[int] = typer.Option(None, "--seq", help="Dispatch sequence number"),
@@ -2381,14 +2273,10 @@ def hub_inbox_clear(
     list_url = _build_server_url(
         config, f"/hub/messages?limit={message_limit}", base_path_override=base_path
     )
-    resolve_url = _build_server_url(
-        config, "/hub/messages/resolve", base_path_override=base_path
-    )
+    resolve_url = _build_server_url(config, "/hub/messages/resolve", base_path_override=base_path)
 
     try:
-        messages_payload = _request_json(
-            "GET", list_url, token_env=config.server_auth_token_env
-        )
+        messages_payload = _request_json("GET", list_url, token_env=config.server_auth_token_env)
     except (
         httpx.HTTPError,
         httpx.ConnectError,
@@ -2397,9 +2285,7 @@ def hub_inbox_clear(
     ) as exc:
         _raise_exit("Failed to list hub inbox items.", cause=exc)
 
-    items = (
-        messages_payload.get("items", []) if isinstance(messages_payload, dict) else []
-    )
+    items = messages_payload.get("items", []) if isinstance(messages_payload, dict) else []
     selected = _filter_inbox_items_for_clear(
         items if isinstance(items, list) else [],
         stale=stale,
@@ -2492,9 +2378,7 @@ def _flow_timestamp(record: FlowRunRecord) -> Optional[datetime]:
 def _resolve_run_paths(record: FlowRunRecord, repo_root: Path):
     workspace_root = Path(record.input_data.get("workspace_root") or repo_root)
     runs_dir = Path(record.input_data.get("runs_dir") or ".codex-autorunner/runs")
-    return resolve_outbox_paths(
-        workspace_root=workspace_root, runs_dir=runs_dir, run_id=record.id
-    )
+    return resolve_outbox_paths(workspace_root=workspace_root, runs_dir=runs_dir, run_id=record.id)
 
 
 def _archive_flow_run_artifacts(
@@ -2508,9 +2392,7 @@ def _archive_flow_run_artifacts(
 ) -> dict[str, Any]:
     status = record.status
     terminal = status.is_terminal()
-    if not terminal and not (
-        force and status in {FlowRunStatus.PAUSED, FlowRunStatus.STOPPING}
-    ):
+    if not terminal and not (force and status in {FlowRunStatus.PAUSED, FlowRunStatus.STOPPING}):
         raise ValueError(
             "Can only archive completed/stopped/failed runs (use --force for paused/stopping)."
         )
@@ -2561,9 +2443,7 @@ def hub_runs_cleanup(
     delete_run: str = typer.Option(
         "true", "--delete-run", help="Delete flow run record after archive (true|false)"
     ),
-    force: bool = typer.Option(
-        False, "--force", help="Allow archiving paused/stopping runs"
-    ),
+    force: bool = typer.Option(False, "--force", help="Allow archiving paused/stopping runs"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
     output_json: bool = typer.Option(
         True, "--json/--no-json", help="Emit JSON output (default: true)"
@@ -2614,8 +2494,7 @@ def hub_runs_cleanup(
                 if record.status in {FlowRunStatus.RUNNING, FlowRunStatus.PENDING}:
                     continue
                 if record.status not in stale_statuses and not (
-                    force
-                    and record.status in {FlowRunStatus.PAUSED, FlowRunStatus.STOPPING}
+                    force and record.status in {FlowRunStatus.PAUSED, FlowRunStatus.STOPPING}
                 ):
                     continue
                 if cutoff is not None:
@@ -2661,9 +2540,7 @@ def hub_runs_cleanup(
             raise typer.Exit(code=1)
         return
 
-    typer.echo(
-        f"Hub runs cleanup candidates={len(results)} errors={len(errors)} dry_run={dry_run}"
-    )
+    typer.echo(f"Hub runs cleanup candidates={len(results)} errors={len(errors)} dry_run={dry_run}")
     if errors:
         _raise_exit("hub runs cleanup encountered errors.")
 
@@ -3027,9 +2904,7 @@ def hub_tickets_fmt(
 @hub_tickets_app.command("doctor")
 def hub_tickets_doctor(
     repo_id: str = typer.Option(..., "--repo", help="Hub repo id"),
-    fix: bool = typer.Option(
-        False, "--fix", help="Apply auto-fixes for common frontmatter issues"
-    ),
+    fix: bool = typer.Option(False, "--fix", help="Apply auto-fixes for common frontmatter issues"),
     default_agent: str = typer.Option(
         "codex", "--default-agent", help="Fallback agent for missing agent key"
     ),
@@ -3108,17 +2983,13 @@ def hub_tickets_setup_pack(
     final_review_agent: str = typer.Option(
         "codex", "--final-review-agent", help="Agent for final review ticket (legacy)"
     ),
-    pr_agent: str = typer.Option(
-        "codex", "--pr-agent", help="Agent for open PR ticket (legacy)"
-    ),
+    pr_agent: str = typer.Option("codex", "--pr-agent", help="Agent for open PR ticket (legacy)"),
     start_point: Optional[str] = typer.Option(
         None,
         "--start-point",
         help="Optional git ref for worktree branch (legacy, default: origin/<default-branch>)",
     ),
-    force: bool = typer.Option(
-        False, "--force", help="Allow existing worktree path (legacy)"
-    ),
+    force: bool = typer.Option(False, "--force", help="Allow existing worktree path (legacy)"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
 ):
@@ -3162,9 +3033,7 @@ def hub_tickets_setup_pack(
                 "Cannot combine new mode flags (--from/--assign) with legacy setup-pack flags."
             )
         if reconcile_depends_on != "auto":
-            _raise_exit(
-                "Cannot use --reconcile-depends-on in new mode; depends_on is preserved."
-            )
+            _raise_exit("Cannot use --reconcile-depends-on in new mode; depends_on is preserved.")
         if final_review_agent != "codex" or pr_agent != "codex":
             _raise_exit("Cannot use --final-review-agent/--pr-agent in new mode.")
 
@@ -3320,9 +3189,7 @@ def hub_tickets_setup_pack(
     if output_json:
         typer.echo(json.dumps(payload, indent=2))
     else:
-        typer.echo(
-            f"Setup pack: repo={repo_id} branch={branch} base={base_repo_id} zip={zip_path}"
-        )
+        typer.echo(f"Setup pack: repo={repo_id} branch={branch} base={base_repo_id} zip={zip_path}")
         _print_ticket_import_report(import_report)
         if final_tickets:
             typer.echo("Final tickets:")
@@ -3395,18 +3262,14 @@ def hub_dispatch_reply(
         f"/repos/{repo_id}/api/flows/{run_id}/resume",
         base_path_override=base_path,
     )
-    inbox_url = _build_server_url(
-        config, "/hub/messages?limit=200", base_path_override=base_path
-    )
+    inbox_url = _build_server_url(config, "/hub/messages?limit=200", base_path_override=base_path)
 
     marker = None
     if idempotency_key:
         marker = f"<!-- car-idempotency-key:{idempotency_key.strip()} -->"
 
     try:
-        thread = _request_json(
-            "GET", thread_url, token_env=config.server_auth_token_env
-        )
+        thread = _request_json("GET", thread_url, token_env=config.server_auth_token_env)
     except (
         httpx.HTTPError,
         httpx.ConnectError,
@@ -3421,15 +3284,11 @@ def hub_dispatch_reply(
             cause=exc,
         )
 
-    run_status = ((thread.get("run") or {}) if isinstance(thread, dict) else {}).get(
-        "status"
-    )
+    run_status = ((thread.get("run") or {}) if isinstance(thread, dict) else {}).get("status")
     if run_status != "paused":
         fallback_status = None
         try:
-            inbox = _request_json(
-                "GET", inbox_url, token_env=config.server_auth_token_env
-            )
+            inbox = _request_json("GET", inbox_url, token_env=config.server_auth_token_env)
             items = inbox.get("items", []) if isinstance(inbox, dict) else []
             for item in items if isinstance(items, list) else []:
                 if not isinstance(item, dict):
@@ -3715,7 +3574,7 @@ def _print_preflight_report(report: PreflightReport) -> None:
             typer.echo(f"    Fix: {check.fix}")
 
 
-def _ticket_lint_details(ticket_dir: Path) -> dict[str, list[str]]:
+def _ticket_lint_details(ticket_dir: Path, ticket_prefix: str = "TICKET") -> dict[str, list[str]]:
     details = {
         "invalid_filenames": [],
         "duplicate_indices": [],
@@ -3730,33 +3589,31 @@ def _ticket_lint_details(ticket_dir: Path) -> dict[str, list[str]]:
             continue
         if path.name == "AGENTS.md":
             continue
-        if parse_ticket_index(path.name) is None:
+        if parse_ticket_index(path.name, ticket_prefix) is None:
             rel_path = safe_relpath(path, ticket_root)
             details["invalid_filenames"].append(
-                f"{rel_path}: Invalid ticket filename; expected TICKET-<number>[suffix].md (e.g. TICKET-001-foo.md)"
+                f"{rel_path}: Invalid ticket filename; expected {ticket_prefix}-<number>[suffix].md (e.g. {ticket_prefix}-001-foo.md)"
             )
 
     details["duplicate_indices"].extend(lint_ticket_directory(ticket_dir))
 
-    ticket_paths = list_ticket_paths(ticket_dir)
+    ticket_paths = list_ticket_paths(ticket_dir, ticket_prefix)
     for path in ticket_paths:
-        _, ticket_errors = read_ticket(path)
+        _, ticket_errors = read_ticket(path, ticket_prefix)
         for err in ticket_errors:
-            details["frontmatter"].append(
-                f"{path.relative_to(path.parent.parent)}: {err}"
-            )
+            details["frontmatter"].append(f"{path.relative_to(path.parent.parent)}: {err}")
 
     return details
 
 
-def _validate_tickets(ticket_dir: Path) -> list[str]:
+def _validate_tickets(ticket_dir: Path, ticket_prefix: str = "TICKET") -> list[str]:
     """Validate all tickets in the directory and return a list of error messages."""
     errors: list[str] = []
 
     if not ticket_dir.exists():
         return errors
 
-    details = _ticket_lint_details(ticket_dir)
+    details = _ticket_lint_details(ticket_dir, ticket_prefix)
     errors.extend(details["invalid_filenames"])
     errors.extend(details["duplicate_indices"])
     errors.extend(details["frontmatter"])
@@ -3767,6 +3624,9 @@ def _validate_tickets(ticket_dir: Path) -> list[str]:
 def _ticket_flow_preflight(engine: RuntimeContext, ticket_dir: Path) -> PreflightReport:
     checks: list[PreflightCheck] = []
 
+    ticket_prefix = os.environ.get("CAR_TICKET_PREFIX") or (engine.config.ticket_flow or {}).get(
+        "ticket_prefix", "TICKET"
+    )
     state_root = engine.repo_root / ".codex-autorunner"
     if state_root.exists():
         checks.append(
@@ -3804,7 +3664,7 @@ def _ticket_flow_preflight(engine: RuntimeContext, ticket_dir: Path) -> Prefligh
             )
         )
 
-    ticket_paths = list_ticket_paths(ticket_dir)
+    ticket_paths = list_ticket_paths(ticket_dir, ticket_prefix)
     if ticket_paths:
         checks.append(
             PreflightCheck(
@@ -3823,7 +3683,7 @@ def _ticket_flow_preflight(engine: RuntimeContext, ticket_dir: Path) -> Prefligh
             )
         )
 
-    lint_details = _ticket_lint_details(ticket_dir)
+    lint_details = _ticket_lint_details(ticket_dir, ticket_prefix)
     if lint_details["invalid_filenames"]:
         checks.append(
             PreflightCheck(
@@ -3883,7 +3743,7 @@ def _ticket_flow_preflight(engine: RuntimeContext, ticket_dir: Path) -> Prefligh
 
     ticket_docs = []
     for path in ticket_paths:
-        doc, errors = read_ticket(path)
+        doc, errors = read_ticket(path, ticket_prefix)
         if doc is not None and not errors:
             ticket_docs.append(doc)
 
@@ -3906,15 +3766,11 @@ def _ticket_flow_preflight(engine: RuntimeContext, ticket_dir: Path) -> Prefligh
                 opencode_binary = resolve_executable(opencode_cmd[0])
             if not opencode_binary:
                 try:
-                    opencode_binary = resolve_executable(
-                        engine.config.agent_binary("opencode")
-                    )
+                    opencode_binary = resolve_executable(engine.config.agent_binary("opencode"))
                 except ConfigError:
                     opencode_binary = None
             if not opencode_binary:
-                agent_errors.append(
-                    "opencode: backend unavailable (missing binary/serve command)."
-                )
+                agent_errors.append("opencode: backend unavailable (missing binary/serve command).")
 
         for agent in agents:
             if agent in ("codex", "opencode", "user"):
@@ -4040,9 +3896,7 @@ def _print_ticket_flow_status(payload: dict) -> None:
     typer.echo(f"Created at: {payload.get('created_at')}")
     typer.echo(f"Started at: {payload.get('started_at')}")
     typer.echo(f"Finished at: {payload.get('finished_at')}")
-    typer.echo(
-        f"Last event: {payload.get('last_event_at')} (seq={payload.get('last_event_seq')})"
-    )
+    typer.echo(f"Last event: {payload.get('last_event_at')} (seq={payload.get('last_event_seq')})")
     worker = payload.get("worker") or {}
     status = payload.get("status") or ""
     # Only show worker details for non-terminal states
@@ -4072,9 +3926,7 @@ def _print_ticket_flow_status(payload: dict) -> None:
                 typer.echo(f"Worker stderr tail: {stderr_tail.strip()}")
 
 
-def _start_ticket_flow_worker(
-    repo_root: Path, run_id: str, is_terminal: bool = False
-) -> None:
+def _start_ticket_flow_worker(repo_root: Path, run_id: str, is_terminal: bool = False) -> None:
     result = ensure_worker(repo_root, run_id, is_terminal=is_terminal)
     if result["status"] == "reused":
         return
@@ -4116,9 +3968,7 @@ def _ticket_flow_controller(
 def flow_worker(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    run_id: Optional[str] = typer.Option(
-        None, "--run-id", help="Flow run ID (required)"
-    ),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run ID (required)"),
 ):
     """Start a flow worker process for an existing run."""
     engine = _require_repo_config(repo, hub)
@@ -4195,20 +4045,14 @@ def flow_worker(
             FlowRunStatus.STOPPED,
             FlowRunStatus.FAILED,
         }:
-            typer.echo(
-                f"Flow run {normalized_run_id} already completed (status={record.status})"
-            )
+            typer.echo(f"Flow run {normalized_run_id} already completed (status={record.status})")
             return
 
         action = "Resuming" if record.status != FlowRunStatus.PENDING else "Starting"
-        typer.echo(
-            f"{action} flow run {normalized_run_id} from step: {record.current_step}"
-        )
+        typer.echo(f"{action} flow run {normalized_run_id} from step: {record.current_step}")
         try:
             final_record = await controller.run_flow(normalized_run_id)
-            typer.echo(
-                f"Flow run {normalized_run_id} finished with status {final_record.status}"
-            )
+            typer.echo(f"Flow run {normalized_run_id} finished with status {final_record.status}")
         except Exception as exc:
             last_event = None
             try:
@@ -4247,9 +4091,7 @@ def flow_worker(
 def ticket_flow_bootstrap(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    force_new: bool = typer.Option(
-        False, "--force-new", help="Always create a new run"
-    ),
+    force_new: bool = typer.Option(False, "--force-new", help="Always create a new run"),
 ):
     """Bootstrap ticket_flow (seed TICKET-001 if needed) and start a run.
 
@@ -4267,19 +4109,15 @@ def ticket_flow_bootstrap(
             records = store.list_flow_runs(flow_type="ticket_flow")
             existing_run, reason = _resumable_run(records)
             if existing_run and reason == "active":
-                _start_ticket_flow_worker(
-                    engine.repo_root, existing_run.id, is_terminal=False
-                )
+                _start_ticket_flow_worker(engine.repo_root, existing_run.id, is_terminal=False)
                 typer.echo(f"Reused active run: {existing_run.id}")
                 typer.echo(
                     f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
                 )
                 return
             elif existing_run and reason == "completed_pending":
-                existing_tickets = list_ticket_paths(ticket_dir)
-                pending_count = len(
-                    [t for t in existing_tickets if not ticket_is_done(t)]
-                )
+                existing_tickets = list_ticket_paths(ticket_dir, ticket_prefix)
+                pending_count = len([t for t in existing_tickets if not ticket_is_done(t)])
                 if pending_count > 0:
                     typer.echo(
                         f"Warning: Latest run {existing_run.id} is COMPLETED with {pending_count} pending ticket(s)."
@@ -4291,7 +4129,7 @@ def ticket_flow_bootstrap(
     finally:
         store.close()
 
-    existing_tickets = list_ticket_paths(ticket_dir)
+    existing_tickets = list_ticket_paths(ticket_dir, ticket_prefix)
     seeded = False
     if not existing_tickets and not ticket_path.exists():
         template = """---
@@ -4341,9 +4179,7 @@ You are the first ticket in a new ticket_flow run.
         asyncio.run(agent_pool.close())
 
     typer.echo(f"Started ticket_flow run: {run_id}")
-    typer.echo(
-        f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {run_id}"
-    )
+    typer.echo(f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {run_id}")
 
 
 @ticket_flow_app.command("preflight")
@@ -4375,9 +4211,7 @@ def ticket_flow_preflight(
 def ticket_flow_start(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    force_new: bool = typer.Option(
-        False, "--force-new", help="Always create a new run"
-    ),
+    force_new: bool = typer.Option(False, "--force-new", help="Always create a new run"),
 ):
     """Start or resume the latest ticket_flow run.
 
@@ -4399,19 +4233,15 @@ def ticket_flow_start(
                     typer.echo("Ticket flow preflight failed:", err=True)
                     _print_preflight_report(report)
                     _raise_exit("Fix the above errors before starting the ticket flow.")
-                _start_ticket_flow_worker(
-                    engine.repo_root, existing_run.id, is_terminal=False
-                )
+                _start_ticket_flow_worker(engine.repo_root, existing_run.id, is_terminal=False)
                 typer.echo(f"Reused active run: {existing_run.id}")
                 typer.echo(
                     f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
                 )
                 return
             elif existing_run and reason == "completed_pending":
-                existing_tickets = list_ticket_paths(ticket_dir)
-                pending_count = len(
-                    [t for t in existing_tickets if not ticket_is_done(t)]
-                )
+                existing_tickets = list_ticket_paths(ticket_dir, ticket_prefix)
+                pending_count = len([t for t in existing_tickets if not ticket_is_done(t)])
                 if pending_count > 0:
                     typer.echo(
                         f"Warning: Latest run {existing_run.id} is COMPLETED with {pending_count} pending ticket(s)."
@@ -4434,18 +4264,14 @@ def ticket_flow_start(
     try:
         run_id = str(uuid.uuid4())
         input_data = {"workspace_root": str(engine.repo_root)}
-        record = asyncio.run(
-            controller.start_flow(input_data=input_data, run_id=run_id)
-        )
+        record = asyncio.run(controller.start_flow(input_data=input_data, run_id=run_id))
         _start_ticket_flow_worker(engine.repo_root, record.id, is_terminal=False)
     finally:
         controller.shutdown()
         asyncio.run(agent_pool.close())
 
     typer.echo(f"Started ticket_flow run: {run_id}")
-    typer.echo(
-        f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {run_id}"
-    )
+    typer.echo(f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {run_id}")
 
 
 @ticket_flow_app.command("status")
@@ -4519,9 +4345,7 @@ def ticket_flow_resume(
     controller, agent_pool = _ticket_flow_controller(engine)
     try:
         try:
-            updated = asyncio.run(
-                controller.resume_flow(normalized_run_id, force=force)
-            )
+            updated = asyncio.run(controller.resume_flow(normalized_run_id, force=force))
         except ValueError as exc:
             _raise_exit(str(exc), cause=exc)
         _start_ticket_flow_worker(engine.repo_root, normalized_run_id)
@@ -4530,9 +4354,7 @@ def ticket_flow_resume(
         asyncio.run(agent_pool.close())
 
     typer.echo(f"Resumed ticket_flow run: {updated.id}")
-    typer.echo(
-        f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {updated.id}"
-    )
+    typer.echo(f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {updated.id}")
 
 
 @ticket_flow_app.command("stop")
@@ -4575,9 +4397,7 @@ def ticket_flow_archive(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     run_id: Optional[str] = typer.Option(None, "--run-id", help="Flow run ID"),
-    force: bool = typer.Option(
-        False, "--force", help="Allow archiving paused/stopping runs"
-    ),
+    force: bool = typer.Option(False, "--force", help="Allow archiving paused/stopping runs"),
     delete_run: str = typer.Option(
         "true", "--delete-run", help="Delete flow run record after archive (true|false)"
     ),
