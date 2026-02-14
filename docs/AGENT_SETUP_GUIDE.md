@@ -153,6 +153,11 @@ CAR's philosophy is that the file system is the source of truth. Tickets, contex
 ### "Agent not found"
 Make sure the agent is installed and available in your PATH. Run `codex --version` or `opencode --version` to verify.
 
+Inside app-server-backed CAR sessions (web terminal/PMA and Telegram), `car` is
+resolved from each workspace shim path (`<workspace>/.codex-autorunner/bin`, plus
+`<workspace>` when a root `car` shim exists), so runtime resolution does not depend
+on a global `car` installation.
+
 ### "No pending tickets"
 Create a ticket file in `<repo>/.codex-autorunner/tickets/` with `status: pending`, or use the web UI to create one.
 

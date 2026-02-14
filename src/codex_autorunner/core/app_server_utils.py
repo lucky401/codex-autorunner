@@ -11,13 +11,34 @@ from .logging_utils import log_event
 from .utils import resolve_executable, subprocess_env
 
 
+def _workspace_car_path_prefixes(workspace_root: Path) -> list[str]:
+    prefixes: list[str] = []
+    workspace_bin = workspace_root / ".codex-autorunner" / "bin"
+    if workspace_bin.is_dir():
+        prefixes.append(str(workspace_bin))
+    if (workspace_root / "car").exists():
+        prefixes.append(str(workspace_root))
+    return prefixes
+
+
+def _prepend_path_entries(entries: Sequence[str], path: str) -> str:
+    merged: list[str] = []
+    for value in entries:
+        if value and value not in merged:
+            merged.append(value)
+    for value in path.split(os.pathsep):
+        if value and value not in merged:
+            merged.append(value)
+    return os.pathsep.join(merged)
+
+
 def app_server_env(
     command: Sequence[str],
     cwd: Path,
     *,
     base_env: Optional[dict[str, str]] = None,
 ) -> dict[str, str]:
-    extra_paths: list[str] = []
+    extra_paths = _workspace_car_path_prefixes(cwd)
     if command:
         binary = command[0]
         resolved = resolve_executable(binary, env=base_env)
@@ -28,7 +49,10 @@ def app_server_env(
                 candidate = (cwd / candidate).resolve()
         if candidate.exists():
             extra_paths.append(str(candidate.parent))
-    return subprocess_env(extra_paths=extra_paths, base_env=base_env)
+    env = subprocess_env(base_env=base_env)
+    if extra_paths:
+        env["PATH"] = _prepend_path_entries(extra_paths, env.get("PATH", ""))
+    return env
 
 
 def seed_codex_home(

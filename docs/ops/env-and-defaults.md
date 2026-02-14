@@ -60,6 +60,17 @@ Telegram auth envs (names configurable via `telegram_bot.*_env`):
 - `CAR_TELEGRAM_CHAT_ID`
 - `CAR_TELEGRAM_THREAD_ID` (optional, for topic/thread routing)
 
+## App-server workspace PATH
+
+For app-server-backed agent runtimes (web terminal/PMA and Telegram), CAR prepends
+workspace-local paths to `PATH` when starting each workspace client:
+
+- `<workspace>/.codex-autorunner/bin`
+- `<workspace>` (only when `<workspace>/car` exists)
+
+This makes `car` resolve to the workspace shim/runtime for that workspace without
+requiring a global shell install.
+
 ## Voice input
 
 Env vars override `voice.*` config values:
