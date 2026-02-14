@@ -77,6 +77,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         )
         branch_template = input_data.get("branch_template")
         checkpoint_message_template = input_data.get("checkpoint_message_template")
+        ticket_prefix = input_data.get("ticket_prefix") or "TICKET"
 
         bitbucket_enabled = bool(
             input_data.get("bitbucket_enabled")
@@ -117,6 +118,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 include_previous_ticket_context=include_previous_ticket_context,
                 branch_template=branch_template,
                 checkpoint_message_template=checkpoint_message_template,
+                ticket_prefix=ticket_prefix,
                 bitbucket=bitbucket_config,
             ),
             agent_pool=agent_pool,
@@ -158,6 +160,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 "include_previous_ticket_context": {"type": "boolean"},
                 "branch_template": {"type": "string"},
                 "checkpoint_message_template": {"type": "string"},
+                "ticket_prefix": {"type": "string"},
                 "bitbucket_enabled": {"type": "boolean"},
                 "bitbucket_access_token": {"type": "string"},
                 "bitbucket_default_reviewers": {

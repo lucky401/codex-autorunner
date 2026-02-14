@@ -4,9 +4,9 @@ from pathlib import Path
 
 from codex_autorunner.tickets.files import (
     list_ticket_paths,
-    parse_ticket_index,
     read_ticket,
 )
+from codex_autorunner.tickets.lint import parse_ticket_index
 
 
 def test_parse_ticket_index_accepts_suffix() -> None:

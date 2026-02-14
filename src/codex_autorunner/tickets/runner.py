@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..contextspace.paths import contextspace_doc_path
-from ..integrations.bitbucket import BitbucketPRClient, PullRequestResult
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats, run_git
+from ..integrations.bitbucket import BitbucketPRClient, PullRequestResult
 from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
@@ -275,7 +275,9 @@ class TicketRunner:
                     reason_code="needs_user_fix",
                 )
 
-        ticket_paths = list_ticket_paths(ticket_dir)
+        ticket_paths = list_ticket_paths(
+            ticket_dir, ticket_prefix=self._config.ticket_prefix
+        )
         if not ticket_paths:
             return self._pause(
                 state,
@@ -287,7 +289,9 @@ class TicketRunner:
             )
 
         # Check for duplicate ticket indices before proceeding.
-        dir_lint_errors = lint_ticket_directory(ticket_dir)
+        dir_lint_errors = lint_ticket_directory(
+            ticket_dir, ticket_prefix=self._config.ticket_prefix
+        )
         if dir_lint_errors:
             return self._pause(
                 state,
@@ -428,18 +432,21 @@ class TicketRunner:
                         reason_code="needs_user_fix",
                     )
 
-            ticket_doc = type(
+            ticket_doc: Any = type(
                 "_TicketDocForLintRetry",
                 (),
                 {
                     "frontmatter": TicketFrontmatter(
                         agent=agent_id,
                         done=False,
-                    )
+                    ),
+                    "body": "",
                 },
             )()
         else:
-            ticket_doc, ticket_errors = read_ticket(current_path)
+            ticket_doc, ticket_errors = read_ticket(
+                current_path, ticket_prefix=self._config.ticket_prefix
+            )
             if ticket_errors or ticket_doc is None:
                 return self._pause(
                     state,
@@ -975,7 +982,8 @@ class TicketRunner:
         from pathlib import Path
 
         stem = Path(ticket_path).stem
-        if stem and stem.upper().startswith("TICKET-"):
+        prefix = self._config.ticket_prefix.upper()
+        if stem and stem.upper().startswith(f"{prefix}-"):
             return stem
         return ""
 

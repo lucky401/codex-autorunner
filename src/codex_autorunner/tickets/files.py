@@ -4,18 +4,21 @@ from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from .frontmatter import parse_markdown_frontmatter
-from .lint import lint_ticket_frontmatter, parse_ticket_index
+from .lint import lint_ticket_frontmatter
+from .lint import parse_ticket_index as _parse_ticket_index_default
 from .models import TicketDoc, TicketFrontmatter
 
 
-def list_ticket_paths(ticket_dir: Path) -> list[Path]:
+def list_ticket_paths(
+    ticket_dir: Path, ticket_prefix: Optional[str] = None
+) -> list[Path]:
     if not ticket_dir.exists() or not ticket_dir.is_dir():
         return []
     tickets: list[tuple[int, Path]] = []
     for path in ticket_dir.iterdir():
         if not path.is_file():
             continue
-        idx = parse_ticket_index(path.name)
+        idx = _parse_ticket_index_default(path.name, ticket_prefix=ticket_prefix)
         if idx is None:
             continue
         tickets.append((idx, path))
@@ -23,7 +26,9 @@ def list_ticket_paths(ticket_dir: Path) -> list[Path]:
     return [p for _, p in tickets]
 
 
-def read_ticket(path: Path) -> tuple[Optional[TicketDoc], list[str]]:
+def read_ticket(
+    path: Path, ticket_prefix: Optional[str] = None
+) -> tuple[Optional[TicketDoc], list[str]]:
     """Read and validate a ticket file.
 
     Returns (ticket_doc, lint_errors). When lint errors are present, ticket_doc will
@@ -36,10 +41,11 @@ def read_ticket(path: Path) -> tuple[Optional[TicketDoc], list[str]]:
         return None, [f"Failed to read ticket: {exc}"]
 
     data, body = parse_markdown_frontmatter(raw)
-    idx = parse_ticket_index(path.name)
+    idx = _parse_ticket_index_default(path.name, ticket_prefix=ticket_prefix)
     if idx is None:
+        prefix = ticket_prefix or "TICKET"
         return None, [
-            "Invalid ticket filename; expected TICKET-<number>[suffix].md (e.g. TICKET-001-foo.md)"
+            f"Invalid ticket filename; expected {prefix}-<number>[suffix].md (e.g. {prefix}-001-foo.md)"
         ]
 
     frontmatter, errors = lint_ticket_frontmatter(data)

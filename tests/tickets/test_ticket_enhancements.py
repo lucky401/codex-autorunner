@@ -2,11 +2,10 @@
 Tests for ticket runner enhancements: ticket_code and branch_template.
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
 from pathlib import Path
+from unittest.mock import Mock
 
-from codex_autorunner.tickets.models import TicketRunConfig, BitbucketConfig
+from codex_autorunner.tickets.models import BitbucketConfig, TicketRunConfig
 
 
 class TestTicketRunConfig:
@@ -15,6 +14,8 @@ class TestTicketRunConfig:
     def test_config_with_branch_template(self):
         """Test config with branch_template field."""
         config = TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
             checkpoint_message_template="[DONE][{ticket_code}] {message}",
             branch_template="helios/{ticket_code}-{title_slug}",
         )
@@ -23,6 +24,8 @@ class TestTicketRunConfig:
     def test_config_without_branch_template(self):
         """Test config without branch_template field."""
         config = TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
             checkpoint_message_template="[DONE] {message}",
         )
         assert config.branch_template is None
@@ -36,6 +39,8 @@ class TestTicketRunConfig:
             close_source_branch=True,
         )
         config = TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
             checkpoint_message_template="[DONE] {message}",
             bitbucket=bitbucket,
         )
@@ -46,6 +51,8 @@ class TestTicketRunConfig:
     def test_config_without_bitbucket(self):
         """Test config without Bitbucket config."""
         config = TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
             checkpoint_message_template="[DONE] {message}",
         )
         assert config.bitbucket is None
@@ -58,7 +65,7 @@ class TestBitbucketConfig:
         """Test default values for Bitbucket config."""
         config = BitbucketConfig()
         assert config.enabled is False
-        assert config.access_token == ""
+        assert config.access_token is None
         assert config.default_reviewers == []
         assert config.close_source_branch is True
 
@@ -84,8 +91,8 @@ class TestTicketCodeExtraction:
         from codex_autorunner.tickets.runner import TicketRunner
 
         runner = Mock(spec=TicketRunner)
-        runner._extract_ticket_code = (
-            lambda path: path.stem
+        runner._extract_ticket_code = lambda path: (
+            path.stem
             if hasattr(path, "stem")
             else path.split("/")[-1].replace(".md", "")
         )
@@ -99,8 +106,8 @@ class TestTicketCodeExtraction:
         from codex_autorunner.tickets.runner import TicketRunner
 
         runner = Mock(spec=TicketRunner)
-        runner._extract_ticket_code = (
-            lambda path: path.stem
+        runner._extract_ticket_code = lambda path: (
+            path.stem
             if hasattr(path, "stem")
             else path.split("/")[-1].replace(".md", "")
         )
@@ -179,3 +186,79 @@ class TestCheckpointMessageTemplate:
             ticket_code="TICKET-001", turn=3, message="Progress update"
         )
         assert result == "[checkpoint][TICKET-001][turn-3] Progress update"
+
+
+class TestTicketPrefix:
+    """Test configurable ticket prefix."""
+
+    def test_config_default_ticket_prefix(self):
+        """Test default ticket_prefix is TICKET."""
+        config = TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            checkpoint_message_template="[DONE] {message}",
+        )
+        assert config.ticket_prefix == "TICKET"
+
+    def test_config_with_qc_prefix(self):
+        """Test config with QC prefix."""
+        config = TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            checkpoint_message_template="[DONE] {message}",
+            ticket_prefix="QC",
+        )
+        assert config.ticket_prefix == "QC"
+
+    def test_config_with_jira_prefix(self):
+        """Test config with JIRA prefix."""
+        config = TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            checkpoint_message_template="[DONE] {message}",
+            ticket_prefix="JIRA",
+        )
+        assert config.ticket_prefix == "JIRA"
+
+    def test_parse_ticket_index_default_prefix(self):
+        """Test parse_ticket_index with default TICKET prefix."""
+        from codex_autorunner.tickets.lint import parse_ticket_index
+
+        assert parse_ticket_index("TICKET-001.md") == 1
+        assert parse_ticket_index("TICKET-042-slug.md") == 42
+        assert parse_ticket_index("QC-001.md") is None
+
+    def test_parse_ticket_index_with_qc_prefix(self):
+        """Test parse_ticket_index with QC prefix."""
+        from codex_autorunner.tickets.lint import parse_ticket_index
+
+        assert parse_ticket_index("QC-001.md", ticket_prefix="QC") == 1
+        assert parse_ticket_index("QC-042-my-feature.md", ticket_prefix="QC") == 42
+        assert parse_ticket_index("TICKET-001.md", ticket_prefix="QC") is None
+
+    def test_parse_ticket_index_with_jira_prefix(self):
+        """Test parse_ticket_index with JIRA prefix."""
+        from codex_autorunner.tickets.lint import parse_ticket_index
+
+        assert parse_ticket_index("JIRA-123.md", ticket_prefix="JIRA") == 123
+        assert (
+            parse_ticket_index("JIRA-999-complex-task.md", ticket_prefix="JIRA") == 999
+        )
+
+    def test_branch_template_with_qc_prefix(self):
+        """Test branch template with QC ticket code."""
+        import re
+
+        template = "helios/{ticket_code}-{title_slug}"
+        ticket_code = "QC-001"
+        title = "Add Configurable Prefix"
+        title_slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+        branch_name = template.format(ticket_code=ticket_code, title_slug=title_slug)
+
+        assert branch_name == "helios/QC-001-add-configurable-prefix"
+
+    def test_checkpoint_message_with_qc_prefix(self):
+        """Test checkpoint message template with QC ticket code."""
+        template = "[DONE][{ticket_code}] {message}"
+        result = template.format(ticket_code="QC-001", message="Implemented feature")
+        assert result == "[DONE][QC-001] Implemented feature"

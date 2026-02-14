@@ -104,10 +104,20 @@ def _depends_on_note(value: Any) -> Optional[str]:
     return rendered or None
 
 
-_TICKET_REF_RE = re.compile(r"^TICKET-(\d{1,})$", re.IGNORECASE)
+_DEFAULT_TICKET_PREFIX = "TICKET"
 
 
-def _parse_depends_on_refs(value: Any) -> tuple[list[int], list[str]]:
+def _make_ticket_ref_re(prefix: str) -> re.Pattern:
+    escaped = re.escape(prefix.upper())
+    return re.compile(rf"^{escaped}-(\d{{1,}})$", re.IGNORECASE)
+
+
+_TICKET_REF_RE = _make_ticket_ref_re(_DEFAULT_TICKET_PREFIX)
+
+
+def _parse_depends_on_refs(
+    value: Any, ticket_prefix: str = _DEFAULT_TICKET_PREFIX
+) -> tuple[list[int], list[str]]:
     refs: list[int] = []
     unsupported: list[str] = []
     raw_values: list[Any]
@@ -116,6 +126,11 @@ def _parse_depends_on_refs(value: Any) -> tuple[list[int], list[str]]:
     else:
         raw_values = [value]
 
+    pattern = (
+        _TICKET_REF_RE
+        if ticket_prefix == _DEFAULT_TICKET_PREFIX
+        else _make_ticket_ref_re(ticket_prefix)
+    )
     for item in raw_values:
         if isinstance(item, int):
             if item >= 1:
@@ -130,7 +145,7 @@ def _parse_depends_on_refs(value: Any) -> tuple[list[int], list[str]]:
             if text.isdigit():
                 refs.append(int(text))
                 continue
-            m = _TICKET_REF_RE.match(text)
+            m = pattern.match(text)
             if m:
                 refs.append(int(m.group(1)))
                 continue
@@ -142,6 +157,7 @@ def _parse_depends_on_refs(value: Any) -> tuple[list[int], list[str]]:
 
 def _build_depends_summary(
     entries: list[tuple[str, int, str]],
+    ticket_prefix: str = _DEFAULT_TICKET_PREFIX,
 ) -> tuple[dict[str, Any], Optional[list[int]]]:
     summary: dict[str, Any] = {
         "tickets_with_depends_on": 0,
@@ -165,11 +181,13 @@ def _build_depends_summary(
             continue
         summary["tickets_with_depends_on"] = int(summary["tickets_with_depends_on"]) + 1
         summary["has_depends_on"] = True
-        refs, unsupported = _parse_depends_on_refs(data.get("depends_on"))
+        refs, unsupported = _parse_depends_on_refs(
+            data.get("depends_on"), ticket_prefix=ticket_prefix
+        )
         if unsupported:
             for item in unsupported:
                 summary["ambiguous_reasons"].append(
-                    f"TICKET-{original_index:03d}: unsupported depends_on reference '{item}'."
+                    f"{ticket_prefix}-{original_index:03d}: unsupported depends_on reference '{item}'."
                 )
         if refs:
             depends_map[pos] = refs
@@ -180,7 +198,7 @@ def _build_depends_summary(
     for idx, positions in index_to_positions.items():
         if len(positions) > 1:
             summary["ambiguous_reasons"].append(
-                f"Duplicate ticket index TICKET-{idx:03d} in import pack; depends_on references are ambiguous."
+                f"Duplicate ticket index {ticket_prefix}-{idx:03d} in import pack; depends_on references are ambiguous."
             )
 
     adjacency: dict[int, set[int]] = {pos: set() for pos in range(len(entries))}
@@ -192,18 +210,18 @@ def _build_depends_summary(
             targets = index_to_positions.get(dep_idx)
             if not targets:
                 summary["ambiguous_reasons"].append(
-                    f"TICKET-{source_idx:03d} depends_on TICKET-{dep_idx:03d}, but that ticket is not in the pack."
+                    f"{ticket_prefix}-{source_idx:03d} depends_on {ticket_prefix}-{dep_idx:03d}, but that ticket is not in the pack."
                 )
                 continue
             if len(targets) != 1:
                 summary["ambiguous_reasons"].append(
-                    f"TICKET-{source_idx:03d} depends_on TICKET-{dep_idx:03d}, but multiple matching tickets exist."
+                    f"{ticket_prefix}-{source_idx:03d} depends_on {ticket_prefix}-{dep_idx:03d}, but multiple matching tickets exist."
                 )
                 continue
             dep_pos = targets[0]
             if dep_pos == pos:
                 summary["ambiguous_reasons"].append(
-                    f"TICKET-{source_idx:03d} depends_on itself."
+                    f"{ticket_prefix}-{source_idx:03d} depends_on itself."
                 )
                 continue
             if pos not in adjacency[dep_pos]:
@@ -221,7 +239,7 @@ def _build_depends_summary(
             dep_idx = entries[dep_pos][1]
             target_idx = entries[target_pos][1]
             conflicts.append(
-                f"TICKET-{target_idx:03d} depends_on TICKET-{dep_idx:03d}, but appears earlier by filename index."
+                f"{ticket_prefix}-{target_idx:03d} depends_on {ticket_prefix}-{dep_idx:03d}, but appears earlier by filename index."
             )
     summary["ordering_conflicts"] = conflicts
 
@@ -270,7 +288,9 @@ def _render_ticket(frontmatter: dict[str, Any], body: str) -> str:
     return f"---\n{fm_yaml}\n---{body}"
 
 
-def _collect_zip_tickets(zip_path: Path) -> list[tuple[str, int, str]]:
+def _collect_zip_tickets(
+    zip_path: Path, ticket_prefix: str = _DEFAULT_TICKET_PREFIX
+) -> list[tuple[str, int, str]]:
     entries: list[tuple[str, int, str]] = []
     with zipfile.ZipFile(zip_path) as zf:
         for info in zf.infolist():
@@ -278,7 +298,7 @@ def _collect_zip_tickets(zip_path: Path) -> list[tuple[str, int, str]]:
                 continue
             posix = PurePosixPath(info.filename)
             name = posix.name
-            idx = parse_ticket_index(name)
+            idx = parse_ticket_index(name, ticket_prefix=ticket_prefix)
             if idx is None:
                 continue
             try:
@@ -292,7 +312,9 @@ def _collect_zip_tickets(zip_path: Path) -> list[tuple[str, int, str]]:
     return entries
 
 
-def _lint_ticket_dir(ticket_dir: Path) -> list[str]:
+def _lint_ticket_dir(
+    ticket_dir: Path, ticket_prefix: str = _DEFAULT_TICKET_PREFIX
+) -> list[str]:
     errors: list[str] = []
     if not ticket_dir.exists() or not ticket_dir.is_dir():
         return errors
@@ -303,17 +325,17 @@ def _lint_ticket_dir(ticket_dir: Path) -> list[str]:
             continue
         if path.name == "AGENTS.md":
             continue
-        if parse_ticket_index(path.name) is None:
+        if parse_ticket_index(path.name, ticket_prefix=ticket_prefix) is None:
             rel_path = safe_relpath(path, ticket_root)
             errors.append(
-                f"{rel_path}: Invalid ticket filename; expected TICKET-<number>[suffix].md (e.g. TICKET-001-foo.md)"
+                f"{rel_path}: Invalid ticket filename; expected {ticket_prefix}-<number>[suffix].md (e.g. {ticket_prefix}-001-foo.md)"
             )
 
-    errors.extend(lint_ticket_directory(ticket_dir))
+    errors.extend(lint_ticket_directory(ticket_dir, ticket_prefix=ticket_prefix))
 
-    ticket_paths = list_ticket_paths(ticket_dir)
+    ticket_paths = list_ticket_paths(ticket_dir, ticket_prefix=ticket_prefix)
     for path in ticket_paths:
-        _, ticket_errors = read_ticket(path)
+        _, ticket_errors = read_ticket(path, ticket_prefix=ticket_prefix)
         for err in ticket_errors:
             errors.append(f"{path.relative_to(path.parent.parent)}: {err}")
 
@@ -335,29 +357,34 @@ def import_ticket_pack(
     dry_run: bool = False,
     strip_depends_on: bool = True,
     reconcile_depends_on: str = "warn",
+    ticket_prefix: str = _DEFAULT_TICKET_PREFIX,
 ) -> TicketImportReport:
     items: list[TicketImportItem] = []
     errors: list[str] = []
     lint_errors: list[str] = []
 
     if lint and ticket_dir.exists():
-        lint_errors.extend(_lint_ticket_dir(ticket_dir))
+        lint_errors.extend(_lint_ticket_dir(ticket_dir, ticket_prefix=ticket_prefix))
 
     try:
-        entries = _collect_zip_tickets(zip_path)
+        entries = _collect_zip_tickets(zip_path, ticket_prefix=ticket_prefix)
     except (OSError, zipfile.BadZipFile, TicketPackImportError) as exc:
         errors.append(str(exc))
         entries = []
 
     if not entries:
-        errors.append("No ticket files found in zip (expected TICKET-###.md).")
+        errors.append(
+            f"No ticket files found in zip (expected {ticket_prefix}-###.md)."
+        )
 
     if reconcile_depends_on not in {"off", "warn", "auto"}:
         errors.append(
             "Invalid reconcile_depends_on mode; expected one of: off, warn, auto."
         )
 
-    depends_on_summary, proposed_order = _build_depends_summary(entries)
+    depends_on_summary, proposed_order = _build_depends_summary(
+        entries, ticket_prefix=ticket_prefix
+    )
     depends_on_summary["reconcile_mode"] = reconcile_depends_on
 
     ordered_entries = entries
@@ -391,7 +418,7 @@ def import_ticket_pack(
         for path in ticket_dir.iterdir():
             if not path.is_file():
                 continue
-            idx = parse_ticket_index(path.name)
+            idx = parse_ticket_index(path.name, ticket_prefix=ticket_prefix)
             if idx is not None:
                 existing_indices.add(idx)
 
@@ -400,7 +427,7 @@ def import_ticket_pack(
         if conflicts:
             conflict_list = ", ".join([f"{idx:03d}" for idx in conflicts])
             errors.append(
-                "Ticket indices already exist in destination: " f"{conflict_list}."
+                f"Ticket indices already exist in destination: {conflict_list}."
             )
 
     width = 3
@@ -468,7 +495,7 @@ def import_ticket_pack(
             else:
                 body = f"\n\n{note}{body}"
         rendered = _render_ticket(merged, body)
-        filename = f"TICKET-{target_index:0{width}d}.md"
+        filename = f"{ticket_prefix}-{target_index:0{width}d}.md"
         target_path = ticket_dir / filename
         item.target = safe_relpath(target_path, repo_root)
         item.status = "ready"

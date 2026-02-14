@@ -96,6 +96,7 @@ class TicketRunConfig:
     include_previous_ticket_context: bool = False
     branch_template: Optional[str] = None
     bitbucket: Optional[BitbucketConfig] = None
+    ticket_prefix: str = "TICKET"
 
 
 @dataclass(frozen=True)

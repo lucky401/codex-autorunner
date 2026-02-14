@@ -22,11 +22,13 @@ def _ticket_dir(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "tickets"
 
 
-def _ticket_path(repo_root: Path, index: int) -> Path:
-    return _ticket_dir(repo_root) / f"TICKET-{index:03d}.md"
+def _ticket_path(repo_root: Path, index: int, ticket_prefix: str = "TICKET") -> Path:
+    return _ticket_dir(repo_root) / f"{ticket_prefix}-{index:03d}.md"
 
 
-def ingest_workspace_spec_to_tickets(repo_root: Path) -> SpecIngestTicketsResult:
+def ingest_workspace_spec_to_tickets(
+    repo_root: Path, ticket_prefix: str = "TICKET"
+) -> SpecIngestTicketsResult:
     """Generate initial tickets from `.codex-autorunner/contextspace/spec.md`.
 
     Behavior is intentionally conservative:
@@ -42,14 +44,14 @@ def ingest_workspace_spec_to_tickets(repo_root: Path) -> SpecIngestTicketsResult
         )
 
     ticket_dir = _ticket_dir(repo_root)
-    existing = list_ticket_paths(ticket_dir)
+    existing = list_ticket_paths(ticket_dir, ticket_prefix=ticket_prefix)
     if existing:
         raise SpecIngestTicketsError(
             "Tickets already exist; refusing to generate tickets from spec."
         )
 
     ticket_dir.mkdir(parents=True, exist_ok=True)
-    ticket_path = _ticket_path(repo_root, 1)
+    ticket_path = _ticket_path(repo_root, 1, ticket_prefix=ticket_prefix)
 
     rel_spec = safe_relpath(spec_path, repo_root)
     template = f"""---
@@ -62,7 +64,7 @@ goal: Read contextspace spec and create follow-up tickets
 You are the first ticket in a contextspace-driven workflow.
 
 - Read `{rel_spec}`.
-- Break the work into additional `TICKET-00X.md` files under `.codex-autorunner/tickets/`.
+- Break the work into additional `{ticket_prefix}-00X.md` files under `.codex-autorunner/tickets/`.
 - Keep this ticket open until the follow-up tickets exist and are coherent.
 - Keep tickets small and single-purpose; prefer many small tickets over one big one.
 

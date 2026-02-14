@@ -8,12 +8,23 @@ from typing import Any, Optional, Tuple
 from ..agents.registry import validate_agent_id
 from .models import TicketFrontmatter
 
-# Accept TICKET-###.md or TICKET-###<suffix>.md (suffix optional), case-insensitive.
-_TICKET_NAME_RE = re.compile(r"^TICKET-(\d{3,})(?:[^/]*)\.md$", re.IGNORECASE)
+_DEFAULT_TICKET_PREFIX = "TICKET"
 
 
-def parse_ticket_index(name: str) -> Optional[int]:
-    match = _TICKET_NAME_RE.match(name)
+def _make_ticket_name_re(prefix: str) -> re.Pattern:
+    escaped = re.escape(prefix.upper())
+    return re.compile(rf"^{escaped}-(\d{{3,}})(?:[^/]*)\.md$", re.IGNORECASE)
+
+
+_DEFAULT_TICKET_NAME_RE = _make_ticket_name_re(_DEFAULT_TICKET_PREFIX)
+
+
+def parse_ticket_index(name: str, ticket_prefix: Optional[str] = None) -> Optional[int]:
+    if ticket_prefix is None or ticket_prefix == _DEFAULT_TICKET_PREFIX:
+        pattern = _DEFAULT_TICKET_NAME_RE
+    else:
+        pattern = _make_ticket_name_re(ticket_prefix)
+    match = pattern.match(name)
     if not match:
         return None
     try:
@@ -118,7 +129,9 @@ def lint_dispatch_frontmatter(
     return normalized, errors
 
 
-def lint_ticket_directory(ticket_dir: Path) -> list[str]:
+def lint_ticket_directory(
+    ticket_dir: Path, ticket_prefix: Optional[str] = None
+) -> list[str]:
     """Validate ticket directory for duplicate indices.
 
     Returns a list of error messages (empty if valid).
@@ -136,7 +149,7 @@ def lint_ticket_directory(ticket_dir: Path) -> list[str]:
     for path in ticket_dir.iterdir():
         if not path.is_file():
             continue
-        idx = parse_ticket_index(path.name)
+        idx = parse_ticket_index(path.name, ticket_prefix=ticket_prefix)
         if idx is None:
             continue
         index_to_paths[idx].append(path.name)

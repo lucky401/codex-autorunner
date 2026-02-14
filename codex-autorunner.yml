@@ -61,6 +61,10 @@ repo_defaults:
     reuse_session: false
 
   ticket_flow:
+    # Configurable prefix for ticket filenames (QC, JIRA, TICKET, etc.)
+    # Example: ticket_prefix: QC → QC-001.md, QC-002.md
+    # Default: TICKET → TICKET-001.md, TICKET-002.md
+    ticket_prefix: TICKET
     # Keep ticket_flow deterministic by default; surfaces can tighten this.
     default_approval_decision: accept
     # Include previous ticket content in prompts (disabled by default to keep tickets isolated).

@@ -49,12 +49,15 @@ from ....tickets import AgentPool
 from ....tickets.bulk import bulk_clear_model_pin, bulk_set_agent
 from ....tickets.files import (
     list_ticket_paths,
-    parse_ticket_index,
     read_ticket,
     safe_relpath,
 )
 from ....tickets.frontmatter import parse_markdown_frontmatter
-from ....tickets.lint import lint_ticket_directory, lint_ticket_frontmatter
+from ....tickets.lint import (
+    lint_ticket_directory,
+    lint_ticket_frontmatter,
+    parse_ticket_index,
+)
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..schemas import (
     TicketBulkClearModelRequest,
