@@ -7,6 +7,7 @@ markdown tickets with YAML frontmatter.
 from .agent_pool import AgentPool, AgentTurnRequest, AgentTurnResult
 from .models import (
     DEFAULT_MAX_TOTAL_TURNS,
+    BitbucketConfig,
     TicketDoc,
     TicketFrontmatter,
     TicketResult,
@@ -19,6 +20,7 @@ __all__ = [
     "AgentPool",
     "AgentTurnRequest",
     "AgentTurnResult",
+    "BitbucketConfig",
     "TicketDoc",
     "TicketFrontmatter",
     "TicketResult",

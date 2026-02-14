@@ -10,6 +10,7 @@ from ...manifest import ManifestError, load_manifest
 from ...tickets import (
     DEFAULT_MAX_TOTAL_TURNS,
     AgentPool,
+    BitbucketConfig,
     TicketRunConfig,
     TicketRunner,
 )
@@ -74,6 +75,31 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
             if "include_previous_ticket_context" in input_data
             else False
         )
+        branch_template = input_data.get("branch_template")
+
+        bitbucket_enabled = bool(
+            input_data.get("bitbucket_enabled")
+            if "bitbucket_enabled" in input_data
+            else False
+        )
+        bitbucket_access_token = input_data.get("bitbucket_access_token")
+        bitbucket_default_reviewers = (
+            input_data.get("bitbucket_default_reviewers") or []
+        )
+        bitbucket_close_source_branch = bool(
+            input_data.get("bitbucket_close_source_branch")
+            if "bitbucket_close_source_branch" in input_data
+            else True
+        )
+
+        bitbucket_config = None
+        if bitbucket_enabled:
+            bitbucket_config = BitbucketConfig(
+                enabled=True,
+                access_token=bitbucket_access_token,
+                default_reviewers=bitbucket_default_reviewers,
+                close_source_branch=bitbucket_close_source_branch,
+            )
 
         repo_id = _resolve_ticket_flow_repo_id(workspace_root)
         runner = TicketRunner(
@@ -88,6 +114,8 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 max_network_retries=max_network_retries,
                 auto_commit=auto_commit,
                 include_previous_ticket_context=include_previous_ticket_context,
+                branch_template=branch_template,
+                bitbucket=bitbucket_config,
             ),
             agent_pool=agent_pool,
             repo_id=repo_id,
@@ -126,6 +154,14 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 "max_network_retries": {"type": "integer"},
                 "auto_commit": {"type": "boolean"},
                 "include_previous_ticket_context": {"type": "boolean"},
+                "branch_template": {"type": "string"},
+                "bitbucket_enabled": {"type": "boolean"},
+                "bitbucket_access_token": {"type": "string"},
+                "bitbucket_default_reviewers": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "bitbucket_close_source_branch": {"type": "boolean"},
             },
         },
         steps={"ticket_turn": _ticket_turn_step},
