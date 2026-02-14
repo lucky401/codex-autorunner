@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_MAX_TOTAL_TURNS = 50
+DEFAULT_CHECKPOINT_MESSAGE = (
+    "CAR checkpoint: run={run_id} turn={turn} agent={agent} ticket_code={ticket_code}"
+)
 
 
 @dataclass(frozen=True)

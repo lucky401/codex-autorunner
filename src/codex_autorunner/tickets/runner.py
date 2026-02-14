@@ -13,7 +13,12 @@ from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_directory, lint_ticket_frontmatter
-from .models import TicketFrontmatter, TicketResult, TicketRunConfig
+from .models import (
+    DEFAULT_CHECKPOINT_MESSAGE,
+    TicketFrontmatter,
+    TicketResult,
+    TicketRunConfig,
+)
 from .outbox import (
     archive_dispatch,
     create_turn_summary,
@@ -1161,7 +1166,9 @@ class TicketRunner:
             if not (status_proc.stdout or "").strip():
                 return None
             run_git(["add", "-A"], cwd=self._workspace_root, check=True)
-            msg = self._config.checkpoint_message_template.format(
+            msg = (
+                self._config.checkpoint_message_template or DEFAULT_CHECKPOINT_MESSAGE
+            ).format(
                 run_id=self._run_id,
                 turn=turn,
                 agent=agent,
